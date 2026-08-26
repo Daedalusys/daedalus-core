@@ -1,13 +1,13 @@
-"""Integration test suite for Diva-OS MCP Capability Servers.
+"""Daedalus MCP 能力服务器集成测试套件。
 
-Tests end-to-end functionality of MCP tools across Python and Deno implementations:
-1. Filesystem server path validation, read/write/move/list operations, and privilege enforcement.
-2. Shell server command allowlists, argument path validation, injection blocking.
-3. Package management and system information read-only query servers.
-4. Append-only cryptographic hash-chained audit logging integrity and verification.
-5. Python and Deno MCP server behavior parity under identical inputs.
+测试 Python 和 Deno 实现中 MCP 工具的端到端功能：
+1. 文件系统服务器路径验证、读/写/移动/列出操作以及权限强制执行。
+2. Shell 服务器命令白名单、参数路径验证、注入拦截。
+3. 软件包管理与系统信息只读查询服务器。
+4. 仅追加加密哈希链审计日志的完整性与验证。
+5. Python 与 Deno MCP 服务器在相同输入下的行为一致性。
 
-Supports execution via pytest or python3 -m unittest.
+支持通过 pytest 或 python3 -m unittest 执行。
 """
 
 from __future__ import annotations
@@ -26,11 +26,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SERVERS_DIR = REPO_ROOT / "base_image" / "files" / "system" / "opt" / "diva" / "servers"
-DENO_DIR = REPO_ROOT / "base_image" / "files" / "system" / "opt" / "diva" / "deno"
-AUDIT_SCRIPT = REPO_ROOT / "base_image" / "files" / "system" / "opt" / "diva" / "audit-log.py"
+SERVERS_DIR = REPO_ROOT / "base_image" / "files" / "system" / "opt" / "daedalus" / "servers"
+DENO_DIR = REPO_ROOT / "base_image" / "files" / "system" / "opt" / "daedalus" / "deno"
+AUDIT_SCRIPT = REPO_ROOT / "base_image" / "files" / "system" / "opt" / "daedalus" / "audit-log.py"
 
-# Add server directory to sys.path so servers can be imported directly for unit/integration logic
+# 将服务器目录添加到 sys.path，以便可以直接导入服务器进行单元/集成逻辑测试
 if str(SERVERS_DIR) not in sys.path:
     sys.path.insert(0, str(SERVERS_DIR))
 if str(AUDIT_SCRIPT.parent) not in sys.path:
@@ -38,16 +38,16 @@ if str(AUDIT_SCRIPT.parent) not in sys.path:
 
 
 # ---------------------------------------------------------------------------
-# Direct Python MCP server logic loaders (independent of external mcp module)
+# 直接 Python MCP 服务器逻辑加载器（独立于外部 mcp 模块）
 # ---------------------------------------------------------------------------
 
 def run_python_fs_logic():
-    """Import and return Python filesystem server functions."""
+    """导入并返回 Python 文件系统服务器函数。"""
     import importlib.util
     spec = importlib.util.spec_from_file_location("py_fs_server", str(SERVERS_DIR / "fs_server.py"))
     module = importlib.util.module_from_spec(spec)
     
-    # Provide mock mcp if mcp package is missing in current test env
+    # 如果当前测试环境中缺少 mcp 包，则提供模拟 mcp
     if "mcp" not in sys.modules:
         class DummyFastMCP:
             def __init__(self, name: str):
@@ -82,7 +82,7 @@ def run_python_fs_logic():
 
 
 def run_python_shell_logic():
-    """Import and return Python shell server functions."""
+    """导入并返回 Python shell 服务器函数。"""
     import importlib.util
     spec = importlib.util.spec_from_file_location("py_shell_server", str(SERVERS_DIR / "shell_server.py"))
     module = importlib.util.module_from_spec(spec)
@@ -91,7 +91,7 @@ def run_python_shell_logic():
 
 
 def run_python_pkg_logic():
-    """Import and return Python package server functions."""
+    """导入并返回 Python 软件包服务器函数。"""
     import importlib.util
     spec = importlib.util.spec_from_file_location("py_pkg_server", str(SERVERS_DIR / "pkg_server.py"))
     module = importlib.util.module_from_spec(spec)
@@ -100,7 +100,7 @@ def run_python_pkg_logic():
 
 
 def run_python_sysinfo_logic():
-    """Import and return Python sysinfo server functions."""
+    """导入并返回 Python 系统信息服务器函数。"""
     import importlib.util
     spec = importlib.util.spec_from_file_location("py_sysinfo_server", str(SERVERS_DIR / "sysinfo_server.py"))
     module = importlib.util.module_from_spec(spec)
@@ -109,7 +109,7 @@ def run_python_sysinfo_logic():
 
 
 def run_audit_module():
-    """Import and return audit-log module."""
+    """导入并返回 audit-log 模块。"""
     import importlib.util
     spec = importlib.util.spec_from_file_location("audit_log_mod", str(AUDIT_SCRIPT))
     module = importlib.util.module_from_spec(spec)
@@ -118,40 +118,40 @@ def run_audit_module():
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Filesystem Server Tests
+# 测试 1: 文件系统服务器测试
 # ---------------------------------------------------------------------------
 
 def test_fs_server_read_write_move_list():
-    """Test filesystem server path checking, normal read/write/list/move, and blocking unauthorized paths."""
+    """测试文件系统服务器路径检查、正常读/写/列出/移动操作以及拦截未授权路径。"""
     py_fs = run_python_fs_logic()
     
-    # 1. Allowed paths: /tmp is in ALLOWED_DIRS
+    # 1. 允许的路径: /tmp 在 ALLOWED_DIRS 中
     with tempfile.TemporaryDirectory(dir="/tmp") as tmpdir:
-        test_file = os.path.join(tmpdir, "diva_test.txt")
-        test_content = "Hello Diva-OS MCP Filesystem!\nSecurity and immutability verified."
+        test_file = os.path.join(tmpdir, "daedalus_test.txt")
+        test_content = "Hello Daedalus MCP Filesystem!\nSecurity and immutability verified."
         
-        # Test write_file
+        # 测试 write_file
         write_res = py_fs.write_file(test_file, test_content)
         assert "Successfully wrote" in write_res
         assert os.path.exists(test_file)
         
-        # Test read_file
+        # 测试 read_file
         read_res = py_fs.read_file(test_file)
         assert read_res == test_content
         
-        # Test list_dir
+        # 测试 list_dir
         entries = py_fs.list_dir(tmpdir)
-        assert "diva_test.txt" in entries
+        assert "daedalus_test.txt" in entries
         
-        # Test move_file
-        moved_file = os.path.join(tmpdir, "diva_test_moved.txt")
+        # 测试 move_file
+        moved_file = os.path.join(tmpdir, "daedalus_test_moved.txt")
         move_res = py_fs.move_file(test_file, moved_file)
         assert "Successfully moved" in move_res
         assert not os.path.exists(test_file)
         assert os.path.exists(moved_file)
         assert py_fs.read_file(moved_file) == test_content
 
-    # 2. Blocked paths: /etc/shadow, /etc/passwd, /root
+    # 2. 受阻/禁止路径: /etc/shadow, /etc/passwd, /root
     unauthorized_paths = [
         "/etc/shadow",
         "/etc/passwd",
@@ -178,7 +178,7 @@ def test_fs_server_read_write_move_list():
         except (PermissionError, ValueError):
             pass
 
-    # 3. Path traversal attacks: '../', null bytes, relative paths
+    # 3. 路径穿越攻击: '../'、空字节、相对路径
     traversal_paths = [
         "/tmp/../etc/shadow",
         "/home/../root/flag",
@@ -194,14 +194,14 @@ def test_fs_server_read_write_move_list():
 
 
 # ---------------------------------------------------------------------------
-# Test 2: Shell Server Tests
+# 测试 2: Shell 服务器测试
 # ---------------------------------------------------------------------------
 
 def test_shell_server_whitelist():
-    """Test shell server command whitelist, argument path whitelist, and blocking malicious commands."""
+    """测试 Shell 服务器命令白名单、参数路径白名单以及拦截恶意命令。"""
     py_shell = run_python_shell_logic()
 
-    # 1. Allowed commands: uname, pwd, df, free, uptime
+    # 1. 允许的命令: uname, pwd, df, free, uptime
     async def run_allowed_tests():
         res_uname = await py_shell.shell_exec("uname", ["-a"])
         assert res_uname["returncode"] == 0
@@ -217,32 +217,32 @@ def test_shell_server_whitelist():
 
     asyncio.run(run_allowed_tests())
 
-    # 2. Blocked malicious / non-whitelisted commands: rm -rf /, bash -c, curl, sudo, shutdown
+    # 2. 拦截恶意 / 非白名单命令: rm -rf /, bash -c, curl, sudo, shutdown
     async def run_blocked_tests():
-        # Disallowed command rm
+        # 禁止命令 rm
         res_rm = await py_shell.shell_exec("rm", ["-rf", "/"])
         assert res_rm["returncode"] == 126
         assert "not in ALLOW_COMMANDS" in res_rm["stderr"] or "validation failed" in res_rm["stderr"]
 
-        # Disallowed bash wrapper / subshell
+        # 禁止的 bash 包装器 / 子 shell
         res_bash = await py_shell.shell_exec("bash", ["-c", "id"])
         assert res_bash["returncode"] == 126
         assert "not in ALLOW_COMMANDS" in res_bash["stderr"]
 
-        # Disallowed curl
+        # 禁止的 curl
         res_curl = await py_shell.shell_exec("curl", ["https://example.com"])
         assert res_curl["returncode"] == 126
 
-        # Blocked argument path: cat /etc/shadow
+        # 受阻参数路径: cat /etc/shadow
         res_cat_shadow = await py_shell.shell_exec("cat", ["/etc/shadow"])
         assert res_cat_shadow["returncode"] == 126
         assert "forbidden" in res_cat_shadow["stderr"] or "outside allowed" in res_cat_shadow["stderr"] or "Argument validation failed" in res_cat_shadow["stderr"]
 
-        # Blocked argument path: ls /root
+        # 受阻参数路径: ls /root
         res_ls_root = await py_shell.shell_exec("ls", ["/root"])
         assert res_ls_root["returncode"] == 126
 
-        # Null byte injection in argument
+        # 参数中的空字节注入
         res_null_byte = await py_shell.shell_exec("ls", ["/tmp\x00/etc/shadow"])
         assert res_null_byte["returncode"] == 126
 
@@ -250,26 +250,26 @@ def test_shell_server_whitelist():
 
 
 # ---------------------------------------------------------------------------
-# Test 3: Package Management & Sysinfo Servers Tests
+# 测试 3: 软件包管理与系统信息服务器测试
 # ---------------------------------------------------------------------------
 
 def test_pkg_and_sysinfo_servers():
-    """Test read-only package query and system information retrieval."""
+    """测试只读软件包查询与系统信息检索。"""
     py_pkg = run_python_pkg_logic()
     py_sysinfo = run_python_sysinfo_logic()
 
-    # 1. Package query server tests
+    # 1. 软件包查询服务器测试
     async def run_pkg_tests():
-        # Query python3 or bash
+        # 查询 python3 或 bash
         query_res = await py_pkg.dnf_query("bash")
         assert isinstance(query_res, str)
         assert len(query_res) > 0
 
-        # Query installed packages list
+        # 查询已安装软件包列表
         list_res = await py_pkg.dnf_list_installed("bash*")
         assert isinstance(list_res, list)
 
-        # Invalid package pattern rejection (command injection attempt)
+        # 非法软件包模式拒绝（命令注入尝试）
         try:
             await py_pkg.dnf_query("bash; rm -rf /")
             assert False, "Expected ValueError on malicious package query pattern"
@@ -278,7 +278,7 @@ def test_pkg_and_sysinfo_servers():
 
     asyncio.run(run_pkg_tests())
 
-    # 2. Sysinfo server tests
+    # 2. 系统信息服务器测试
     os_info = py_sysinfo.os_release()
     assert isinstance(os_info, dict)
     assert "NAME" in os_info or "PRETTY_NAME" in os_info or "error" not in os_info
@@ -299,18 +299,18 @@ def test_pkg_and_sysinfo_servers():
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Audit Logging Hash Chain Consistency Tests
+# 测试 4: 审计日志哈希链一致性测试
 # ---------------------------------------------------------------------------
 
 def test_audit_logging_hash_chain():
-    """Test audit log entry appending and cryptographic hash chain verification."""
+    """测试审计日志条目追加与加密哈希链验证。"""
     audit_mod = run_audit_module()
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as tf:
         audit_file_path = tf.name
 
     try:
-        # Genesis entry
+        # 创世条目
         entry1 = audit_mod.log_audit(
             identity="agent-test-1",
             tool="read_file",
@@ -322,7 +322,7 @@ def test_audit_logging_hash_chain():
         assert "entry_hash" in entry1
         assert len(entry1["entry_hash"]) == 64
 
-        # Second entry
+        # 第二个条目
         entry2 = audit_mod.log_audit(
             identity="agent-test-1",
             tool="shell_exec",
@@ -332,7 +332,7 @@ def test_audit_logging_hash_chain():
         )
         assert entry2["prev_hash"] == entry1["entry_hash"]
 
-        # Third entry (denied event)
+        # 第三个条目（拒绝事件）
         entry3 = audit_mod.log_audit(
             identity="agent-test-1",
             tool="shell_exec",
@@ -342,7 +342,7 @@ def test_audit_logging_hash_chain():
         )
         assert entry3["prev_hash"] == entry2["entry_hash"]
 
-        # Read back all lines from log and verify hash chain integrity
+        # 从日志中读回所有行并验证哈希链完整性
         with open(audit_file_path, "r", encoding="utf-8") as f:
             lines = [json.loads(line.strip()) for line in f if line.strip()]
 
@@ -352,7 +352,7 @@ def test_audit_logging_hash_chain():
         for idx, rec in enumerate(lines):
             assert rec["prev_hash"] == expected_prev, f"Hash chain broken at index {idx}"
             
-            # Recompute hash independently
+            # 独立重新计算哈希
             args_str = json.dumps(rec["args"], sort_keys=True, separators=(",", ":"))
             payload = f"{rec['timestamp']}{rec['identity']}{rec['tool']}{args_str}{rec['outcome']}{rec['prev_hash']}"
             computed_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -366,15 +366,15 @@ def test_audit_logging_hash_chain():
 
 
 # ---------------------------------------------------------------------------
-# Test 5: Python vs Deno Behavior Parity Tests
+# 测试 5: Python 与 Deno 行为一致性测试
 # ---------------------------------------------------------------------------
 
 def test_python_deno_behavior_parity():
-    """Verify behavior parity between Python and Deno implementations under identical inputs."""
+    """验证在相同输入下 Python 和 Deno 实现之间的行为一致性。"""
     py_fs = run_python_fs_logic()
     py_shell = run_python_shell_logic()
 
-    # Deno file path parser / logic simulation in Python matching deno ts logic exactly
+    # 在 Python 中完全模拟 Deno 文件路径解析器/逻辑，与 deno ts 逻辑保持一致
     deno_allowed_dirs = ["/home", "/var/log", "/tmp"]
     deno_blocked_paths = [
         "/etc/shadow",
@@ -395,7 +395,7 @@ def test_python_deno_behavior_parity():
                 stack.push(p) if hasattr(stack, "push") else stack.append(p)
         return "/" + "/".join(stack)
 
-    # Compare 1: Allowed path validation
+    # 比较 1: 允许路径验证
     test_paths = [
         "/home/user/document.txt",
         "/tmp/scratchpad.json",
@@ -405,7 +405,7 @@ def test_python_deno_behavior_parity():
         py_valid = py_fs.validate_path(p)
         assert py_valid.startswith(("/home", "/tmp", "/var/log"))
 
-    # Compare 2: Denied path validation parity
+    # 比较 2: 拒绝路径验证一致性
     forbidden_paths = [
         "/etc/shadow",
         "/root/.bashrc",
@@ -413,7 +413,7 @@ def test_python_deno_behavior_parity():
         "/boot/grub2/grub.cfg",
     ]
     for p in forbidden_paths:
-        # Python raises PermissionError
+        # Python 抛出 PermissionError
         py_blocked = False
         try:
             py_fs.validate_path(p)
@@ -421,7 +421,7 @@ def test_python_deno_behavior_parity():
             py_blocked = True
         assert py_blocked is True
 
-    # Compare 3: Shell allowlist parity
+    # 比较 3: Shell 白名单一致性
     py_allow_commands = set(py_shell.ALLOW_COMMANDS)
     deno_allow_commands = {
         "df", "ls", "cat", "pwd", "uname", "free", "ps", "uptime",
@@ -429,14 +429,14 @@ def test_python_deno_behavior_parity():
     }
     assert deno_allow_commands.issubset(py_allow_commands)
 
-    # Compare 4: Shell execution behavior parity
+    # 比较 4: Shell 执行行为一致性
     async def verify_shell_parity():
-        # Command df
+        # 命令 df
         res_df = await py_shell.shell_exec("df", ["-h", "/tmp"])
         assert res_df["returncode"] == 0
         assert "stdout" in res_df
 
-        # Disallowed command rm
+        # 禁止命令 rm
         res_rm = await py_shell.shell_exec("rm", ["-rf", "/"])
         assert res_rm["returncode"] == 126
         assert len(res_rm["stderr"]) > 0
@@ -445,7 +445,7 @@ def test_python_deno_behavior_parity():
 
 
 # ---------------------------------------------------------------------------
-# Standard unittest runner compatibility
+# 标准 unittest 运行器兼容性
 # ---------------------------------------------------------------------------
 
 class TestMcpIntegration(unittest.TestCase):
