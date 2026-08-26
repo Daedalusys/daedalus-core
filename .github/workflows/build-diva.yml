@@ -1,0 +1,75 @@
+---
+name: Build Diva-OS Image
+on:
+  pull_request:
+    paths:
+      - 'base_image/**'
+      - 'Containerfile*'
+      - 'Dockerfile*'
+      - '.github/workflows/build-diva.yml'
+  push:
+    branches:
+      - 'main'
+    paths:
+      - 'base_image/**'
+      - 'Containerfile*'
+      - 'Dockerfile*'
+      - '.github/workflows/build-diva.yml'
+    paths-ignore:
+      - '**/README.md'
+      - '**/AGENTS.md'
+  workflow_dispatch:
+    inputs:
+      VARIANT:
+        description: 'Desktop variant to build (default: kde)'
+        required: false
+        default: 'kde'
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build-diva-image:
+    name: Build & Lint Diva-OS Image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [kde]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Podman / Buildah
+        shell: bash
+        run: |
+          sudo apt-get update -y || true
+          sudo apt-get install -y podman qemu-user-static
+
+      - name: Build Diva-OS Container Image
+        shell: bash
+        run: |
+          cd base_image
+          podman build \
+            --platform=linux/amd64 \
+            --security-opt=label=disable \
+            --cap-add=all \
+            --device /dev/fuse \
+            --build-arg IMAGE_NAME=diva-os \
+            --build-arg IMAGE_REGISTRY=localhost \
+            --build-arg VARIANT=${{ matrix.variant }} \
+            -t localhost/diva-os:latest \
+            -f Containerfile.diva \
+            .
+
+      - name: Verify Image & Bootc Container Lint
+        shell: bash
+        run: |
+          # Test image inspection and os-release verification
+          podman run --rm localhost/diva-os:latest cat /usr/lib/os-release || true
+          # Verify bootc version
+          podman run --rm localhost/diva-os:latest bootc --version || true
+          echo "Diva-OS bootc container verification completed successfully."

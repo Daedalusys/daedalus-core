@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json.schemastore.org/mcp-settings.json",
+  "mcpServers": {
+    "diva-fs": {
+      "command": "/opt/diva/venv/bin/python",
+      "args": ["/opt/diva/servers/fs_server.py"],
+      "description": "Diva OS Filesystem Capability Server (Restricted to /home, /var/log, /tmp)"
+    },
+    "diva-shell": {
+      "command": "/opt/diva/venv/bin/python",
+      "args": ["/opt/diva/servers/shell_server.py"],
+      "env": {
+        "ALLOW_COMMANDS": "df,ls,cat,pwd,uname,free,ps,uptime,whoami,ip,arch,hostname,date,ping,systemctl"
+      },
+      "description": "Diva OS Shell Capability Server (Read-only/diagnostic allowlisted commands)"
+    },
+    "diva-pkg": {
+      "command": "/opt/diva/venv/bin/python",
+      "args": ["/opt/diva/servers/pkg_server.py"],
+      "description": "Diva OS Package Management Capability Server (Read-only RPM/DNF queries)"
+    },
+    "diva-sysinfo": {
+      "command": "/opt/diva/venv/bin/python",
+      "args": ["/opt/diva/servers/sysinfo_server.py"],
+      "description": "Diva OS System Information Capability Server (Read-only hardware, os-release, network)"
+    },
+    "diva-fs-deno": {
+      "command": "deno",
+      "args": [
+        "run",
+        "--allow-read=/home,/var/log,/tmp",
+        "--allow-write=/home,/tmp",
+        "/opt/diva/deno/fs_server.ts"
+      ],
+      "description": "Diva OS Filesystem Capability Server (Deno runtime sandbox with granular permissions)"
+    },
+    "diva-shell-deno": {
+      "command": "deno",
+      "args": [
+        "run",
+        "--allow-run=/usr/bin/df,/usr/bin/ls,/usr/bin/cat,/usr/bin/pwd,/usr/bin/uname,/usr/bin/free,/usr/bin/ps,/usr/bin/uptime,/usr/bin/whoami,/usr/bin/ip,/usr/bin/arch,/usr/bin/hostname,/usr/bin/date,/usr/bin/ping,/usr/bin/systemctl,/bin/df,/bin/ls,/bin/cat,/bin/pwd,/bin/uname,/bin/free,/bin/ps,/bin/uptime,/bin/whoami,/bin/ip,/bin/arch,/bin/hostname,/bin/date,/bin/ping,/bin/systemctl",
+        "--allow-read=/var/log/diva",
+        "--allow-write=/var/log/diva",
+        "/opt/diva/deno/shell_server.ts"
+      ],
+      "description": "Diva OS Shell Capability Server (Deno runtime sandbox with granular --allow-run permissions)"
+    }
+  }
+}

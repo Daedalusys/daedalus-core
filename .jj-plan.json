@@ -1,0 +1,17 @@
+{
+  "batches": [
+    {
+      "message": "feat: 初始化 Diva-OS 镜像构建、CI 工作流与 MCP 集成测试",
+      "paths": [
+        ".github/workflows/build-diva.yml",
+        ".gitignore",
+        "AGENTS.md",
+        "Containerfile",
+        "Containerfile.diva",
+        "Dockerfile.diva",
+        "examples/mcp_client_config.json",
+        "tests/test_mcp_integration.py"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+base_image/
+
+.omo/
+
+.pytest_cache/
+
+**/__pycache__/**
+
+.codegraph/
