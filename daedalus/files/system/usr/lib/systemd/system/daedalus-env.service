@@ -1,0 +1,11 @@
+[Unit]
+Description=Daedalus OS Environment and Credential Initialization
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bash -c 'mkdir -p /etc/credstore && touch /etc/credstore/daedalus_token && chmod 0600 /etc/credstore/daedalus_token'
+
+[Install]
+WantedBy=multi-user.target

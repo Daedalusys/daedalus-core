@@ -1,0 +1,13 @@
+#!/bin/sh
+# Daedalus Copilot CLI 沙箱包装脚本。
+# 预先声明最小化的 Deno 运行时权限（路径范围 allowlist），
+# 避免用户运行时看到逐类权限弹窗；生产路径统一为 /opt/daedalus。
+# --allow-run 同时放行 /opt/daedalus/venv/bin/python（虚拟环境）与
+# /usr/bin/python3（虚拟环境缺失时 audit.ts 回退到系统 python3）。
+exec /usr/local/bin/deno run \
+  --allow-env \
+  --allow-net \
+  --allow-read=/opt/daedalus,/home,/var/log,/tmp,/proc,/sys,/etc/os-release,/usr/lib/os-release,/etc/fedora-release,/etc/almalinux-release,"$HOME"/.config/daedalus \
+  --allow-write=/var/log/daedalus,/tmp,"$HOME"/.local/share/daedalus \
+  --allow-run=/usr/local/bin/deno,/opt/daedalus/venv/bin/python,/usr/bin/python3 \
+  /opt/daedalus/deno/copilot/main.ts "$@"

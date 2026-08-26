@@ -1,0 +1,11 @@
+[Unit]
+Description=Daedalus OS Audit Log Initialization Service
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bash -c 'mkdir -p /var/log/daedalus && touch /var/log/daedalus/audit.jsonl && chmod 0640 /var/log/daedalus/audit.jsonl && (chattr +a /var/log/daedalus/audit.jsonl || true)'
+
+[Install]
+WantedBy=multi-user.target

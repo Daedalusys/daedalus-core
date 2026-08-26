@@ -1,0 +1,22 @@
+[Unit]
+Description=Daedalus OS Deno Filesystem MCP Sandbox Profile
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/deno run --allow-read=/home,/var/log,/tmp --allow-write=/home,/tmp /opt/daedalus/deno/fs_server.ts
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
