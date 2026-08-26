@@ -7,3 +7,5 @@ base_image/
 **/__pycache__/**
 
 .codegraph/
+
+.jj-*.json
