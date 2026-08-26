@@ -1,4 +1,7 @@
-base_image/
+base_image/*
+base_image/**/*
+!base_image/**/
+!base_image/**/AGENTS.md
 
 .omo/
 

@@ -1,20 +1,26 @@
 ---
-name: Build Diva-OS Image
+name: Build Daedalus Image
 on:
   pull_request:
     paths:
       - 'base_image/**'
+      - 'daedalus/**'
       - 'Containerfile*'
       - 'Dockerfile*'
-      - '.github/workflows/build-diva.yml'
+      - 'justfile'
+      - 'sync-daedalus.sh'
+      - '.github/workflows/build-daedalus.yml'
   push:
     branches:
       - 'main'
     paths:
       - 'base_image/**'
+      - 'daedalus/**'
       - 'Containerfile*'
       - 'Dockerfile*'
-      - '.github/workflows/build-diva.yml'
+      - 'justfile'
+      - 'sync-daedalus.sh'
+      - '.github/workflows/build-daedalus.yml'
     paths-ignore:
       - '**/README.md'
       - '**/AGENTS.md'
@@ -31,8 +37,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-diva-image:
-    name: Build & Lint Diva-OS Image
+  build-daedalus-image:
+    name: Build & Lint Daedalus Image
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -47,29 +53,18 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update -y || true
-          sudo apt-get install -y podman qemu-user-static
+          sudo apt-get install -y podman qemu-user-static just
 
-      - name: Build Diva-OS Container Image
+      - name: Build Daedalus Container Image
         shell: bash
         run: |
-          cd base_image
-          podman build \
-            --platform=linux/amd64 \
-            --security-opt=label=disable \
-            --cap-add=all \
-            --device /dev/fuse \
-            --build-arg IMAGE_NAME=diva-os \
-            --build-arg IMAGE_REGISTRY=localhost \
-            --build-arg VARIANT=${{ matrix.variant }} \
-            -t localhost/diva-os:latest \
-            -f Containerfile.diva \
-            .
+          just build
 
       - name: Verify Image & Bootc Container Lint
         shell: bash
         run: |
           # Test image inspection and os-release verification
-          podman run --rm localhost/diva-os:latest cat /usr/lib/os-release || true
+          podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release || true
           # Verify bootc version
-          podman run --rm localhost/diva-os:latest bootc --version || true
-          echo "Diva-OS bootc container verification completed successfully."
+          podman run --rm localhost/daedalus-os:latest bootc --version || true
+          echo "Daedalus bootc container verification completed successfully."
