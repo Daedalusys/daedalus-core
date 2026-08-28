@@ -1,13 +1,66 @@
 #!/bin/sh
-# Daedalus Copilot CLI 沙箱包装脚本。
-# 预先声明最小化的 Deno 运行时权限（路径范围 allowlist），
-# 避免用户运行时看到逐类权限弹窗；生产路径统一为 /opt/daedalus。
-# --allow-run 同时放行 /opt/daedalus/venv/bin/python（虚拟环境）与
-# /usr/bin/python3（虚拟环境缺失时 audit.ts 回退到系统 python3）。
-exec /usr/local/bin/deno run \
-  --allow-env \
-  --allow-net \
-  --allow-read=/opt/daedalus,/home,/var/log,/tmp,/proc,/sys,/etc/os-release,/usr/lib/os-release,/etc/fedora-release,/etc/almalinux-release,"$HOME"/.config/daedalus \
-  --allow-write=/var/log/daedalus,/tmp,"$HOME"/.local/share/daedalus \
-  --allow-run=/usr/local/bin/deno,/opt/daedalus/venv/bin/python,/usr/bin/python3 \
-  /opt/daedalus/deno/copilot/main.ts "$@"
+# Daedalus Copilot CLI 包装脚本(计划 todo 8:改走插件宿主)。
+#
+# 本脚本不再自己声明 Deno 权限:启动命令改由 daedalus-host 依据已安装插件的
+# manifest(daedalus.copilot,runtime=deno)构造并**打印**,本脚本只负责 exec。
+# 宿主自身不是进程父进程(计划决策 16),沙箱语义完全来自 manifest 的 entrypoint
+# 旗标,与旧版逐项一致(--allow-env / --allow-net / --allow-read / --allow-write /
+# --allow-run=deno,daedalus-audit,daedalus-shell)。
+#
+# $HOME 占位展开:manifest 是构建期常量,不能内嵌具体用户的家目录,因此
+# entrypoint 里以字面量 `$HOME` 出现两处路径($HOME/.config/daedalus 读、
+# $HOME/.local/share/daedalus 写)。宿主按 POSIX 引法规则把这类含 `$` 的
+# token 单引号包裹输出(所以 systemd ExecStart 不会误展开),真正的展开
+# 发生在下面:我们把宿主输出安全切成 argv,再把 token 内的 `$HOME` 文本
+# 替换为运行时 HOME 值,替换结果始终是单个 argv 元素(不受词分割影响)。
+#
+# CLI 契约保持不变:-y/-v/-i/--dry-run/-V/--help 与自由文本 query 全部原样透传。
+
+# 宿主二进制:镜像内固定路径,可用 DAEDALUS_HOST_BIN 覆盖(开发态/测试)。
+HOST_BIN=${DAEDALUS_HOST_BIN:-/usr/local/bin/daedalus-host}
+# 插件目录:与宿主默认值一致(镜像 /opt/daedalus/plugins),开发态可覆盖。
+PLUGIN_DIR=${DAEDALUS_PLUGIN_DIR:-/opt/daedalus/plugins}
+# manifest 中待展开的家目录占位文本(与 entrypoint 字面量一致)。
+HOME_TOKEN='$HOME'
+
+# 宿主缺失时给出可读错误(sh 的 "没有那个文件或目录" 会被误读成 copilot 自身故障)。
+if [ ! -x "$HOST_BIN" ]; then
+  echo "daedalus: 找不到插件宿主可执行文件: $HOST_BIN(镜像需先执行 just plugin-pack 接线)" >&2
+  exit 127
+fi
+
+# 取宿主构造的启动命令:stdout 只有一行纯命令文本(stderr 是"宿主非父进程"提示)。
+# 插件缺失或 degraded 时宿主打印原因并以非零码退出,这里原样透传其退出码。
+argv=$("$HOST_BIN" run-plugin daedalus.copilot -dir "$PLUGIN_DIR" -- "$@")
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  exit "$rc"
+fi
+
+# eval 只做一次词法切分:token 的引号是宿主 shellQuote 的产物(只对含元字符的
+# token 加单引号,不含命令替换),因此这里展开是安全的参数还原。
+# shellcheck disable=SC2086
+eval "set -- $argv"
+
+# 逐 token 把 $HOME 文本换成真实家目录:从队首取、队尾放回,argc 轮后顺序不变。
+# HOME 未设置时回退 /root(与 copilot 内 Deno.env.get("HOME") || "/root" 同语义)。
+argc=$#
+i=0
+while [ "$i" -lt "$argc" ]; do
+  tok=$1
+  shift
+  case $tok in
+    *"$HOME_TOKEN"*)
+      # 同一 token 内可能出现多处占位(逗号分隔的权限路径列表)→ 循环替换到底。
+      while :; do
+        pre=${tok%%"$HOME_TOKEN"*}
+        [ "$pre" = "$tok" ] && break
+        tok="$pre${HOME:-/root}${tok#*"$HOME_TOKEN"}"
+      done
+      ;;
+  esac
+  set -- "$@" "$tok"
+  i=$((i + 1))
+done
+
+exec "$@"

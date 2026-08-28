@@ -3,7 +3,9 @@ Description=Daedalus OS Sysinfo MCP Sandbox Profile
 
 [Service]
 Type=simple
-ExecStart=/opt/daedalus/venv/bin/python /opt/daedalus/servers/sysinfo_server.py
+# ExecStart 内容由插件 manifest(daedalus.sysinfo)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性(计划 todo 9,决策 16/22);手工漂移将导致构建失败。
+ExecStart=/opt/daedalus/plugins/daedalus.sysinfo/bin/daedalus-sysinfo
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=read-only

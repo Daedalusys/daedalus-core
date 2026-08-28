@@ -3,7 +3,14 @@ Description=Daedalus OS Shell MCP Sandbox Profile
 
 [Service]
 Type=simple
-ExecStart=/opt/daedalus/venv/bin/python /opt/daedalus/servers/shell_server.py
+# ExecStart 内容由插件 manifest(daedalus.shell)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性(计划 todo 9,决策 16/22);手工漂移将导致构建失败。
+# 策略消费约定(计划 todo 13):命令白名单/路径规则/净化环境的单一事实源是
+# /opt/daedalus/shared/policy.toml,本服务启动时运行时读取;单元刻意**不注入**
+# Environment=ALLOW_COMMANDS(该变量为 REPLACE 覆盖语义)。若未来在单元加回此覆盖,
+# 其值必须与 [shell].allowed_commands 逐字一致,构建期 76 脚本强制校验,漂移即构建失败。
+# ProtectSystem=strict 仅将 /opt 挂为只读、不拦截读取,DynamicUser 依赖 0644/o+r 读策略。
+ExecStart=/opt/daedalus/plugins/daedalus.shell/bin/daedalus-shell
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=read-only

@@ -1,0 +1,44 @@
+# =============================================================================
+# Daedalus 能力策略单一事实源(single source of truth)
+#
+# 本文件定义 shell / fs 能力服务器运行时强制执行的白名单、路径规则、
+# 执行环境与超时。Go 侧由 internal/policy 在服务器启动时读取
+# (解析优先级:DAEDALUS_POLICY_PATH 环境变量 > 本文件生产路径
+# /opt/daedalus/shared/policy.toml > 仓库内开发态回溯路径);
+# 文件缺失时各服务器回退到 internal/policy.Default() 的内嵌默认值,
+# 保证"无 policy 也能启动"。
+#
+# 任何值变更都必须与 internal/shellpolicy、internal/pathguard 的
+# 一致性钉死测试以及 copilot 冻结副本(daedalus/plugin/copilot/policy.ts)
+# 同步评审。
+#
+# ALLOW_COMMANDS 环境变量语义为整体替换(REPLACE,非并集):
+# 存在且非空时,逗号分隔的命令集合整体取代 [shell].allowed_commands。
+# =============================================================================
+
+[shell]
+# 命令基名白名单(15 项只读/诊断命令,逐字对齐 internal/shellpolicy.DefaultAllowCommands)。
+allowed_commands = ["df", "ls", "cat", "pwd", "uname", "free", "ps", "uptime", "whoami", "ip", "arch", "hostname", "date", "ping", "systemctl"]
+
+# 允许命令所在的二进制目录(带 '/' 前缀的命令路径 realpath 后必须落于其中之一)。
+binary_dirs = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+
+# 路径型参数允许的前缀白名单(9 项,逐字对齐 internal/shellpolicy.AllowedPathPrefixes)。
+allowed_path_prefixes = ["/home", "/var/log", "/tmp", "/proc", "/sys", "/etc/os-release", "/usr/lib/os-release", "/etc/fedora-release", "/etc/almalinux-release"]
+
+# 显式禁止的敏感路径(5 项,前缀匹配带 '/' 边界,优先于允许前缀)。
+blocked_paths = ["/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/sudoers.d", "/root"]
+
+# 子进程净化执行环境(键值对整体替换,零继承宿主环境变量)。
+clean_env = { PATH = "/usr/bin:/bin:/usr/sbin:/sbin", LANG = "C.UTF-8" }
+
+# 命令执行超时(毫秒;到期对整个进程组 SIGKILL,回传退出码 124)。
+timeout_ms = 30000
+
+[fs]
+# 文件系统能力服务器可访问的目录白名单(3 项,逐字对齐 internal/pathguard.AllowedDirs)。
+allowed_dirs = ["/home", "/var/log", "/tmp"]
+
+[audit]
+# 哈希链审计日志路径(运行时仍可被 DAEDALUS_AUDIT_LOG_PATH 环境变量覆盖)。
+log_path = "/var/log/daedalus/audit.jsonl"

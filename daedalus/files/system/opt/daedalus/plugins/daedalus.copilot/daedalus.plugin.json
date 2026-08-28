@@ -1,0 +1,48 @@
+{
+  "id": "daedalus.copilot",
+  "name": "Daedalus Copilot",
+  "version": "1.0.0",
+  "type": "copilot",
+  "runtime": "deno",
+  "executable": "main.ts",
+  "entrypoint": [
+    "--allow-env",
+    "--allow-net",
+    "--allow-read=/opt/daedalus,/home,/var/log,/tmp,/proc,/sys,/etc/os-release,/usr/lib/os-release,/etc/fedora-release,/etc/almalinux-release,$HOME/.config/daedalus",
+    "--allow-write=/var/log/daedalus,/tmp,$HOME/.local/share/daedalus",
+    "--allow-run=/usr/local/bin/deno,/usr/local/bin/daedalus-audit,/usr/local/bin/daedalus-shell"
+  ],
+  "permissions": {
+    "read": [
+      "/opt/daedalus",
+      "/home",
+      "/var/log",
+      "/tmp",
+      "/proc",
+      "/sys",
+      "/etc/os-release",
+      "/usr/lib/os-release",
+      "/etc/fedora-release",
+      "/etc/almalinux-release",
+      "$HOME/.config/daedalus"
+    ],
+    "write": [
+      "/var/log/daedalus",
+      "/tmp",
+      "$HOME/.local/share/daedalus"
+    ],
+    "run": [
+      "/usr/local/bin/deno",
+      "/usr/local/bin/daedalus-audit",
+      "/usr/local/bin/daedalus-shell"
+    ]
+  },
+  "checksums": {
+    "audit.ts": "sha256:48bd7f6791b56ef0d438cd04a01fdff48e3b68e1d472cf4b0c582ad796c378ba",
+    "daedalus.plugin.json": "sha256:0dd0e35825ca0ae28c84cccd4a5c82ac25ac28db2f717046781b4dedb6780533",
+    "exec.ts": "sha256:57d955a2911be2cee64ce64a0b03b6f3a200ac43f8d86421b8f0fb0ae7d6a43c",
+    "llm.ts": "sha256:be6bca5d93c11ebafbcc3b50d865f82b9e207f283da5bb666fe251bd6e6fc89f",
+    "main.ts": "sha256:ff888b00c4a06b3e15bfd864b5e7b7f496e061310c2e6620a5ebd0d9d4fb0570",
+    "policy.ts": "sha256:f0deb0376de3b214f4b944798237ed76ab66c90b2814935195a07fead5748e15"
+  }
+}

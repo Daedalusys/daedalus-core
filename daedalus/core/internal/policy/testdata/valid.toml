@@ -1,0 +1,15 @@
+# internal/policy 测试夹具:结构完整但取值刻意偏离默认值的合法策略,
+# 用于证明 Load 逐字段透传(而不是偷偷回退 Default)。
+[shell]
+allowed_commands = ["echo", "date"]
+binary_dirs = ["/usr/bin", "/bin"]
+allowed_path_prefixes = ["/tmp"]
+blocked_paths = ["/root"]
+clean_env = { PATH = "/usr/bin:/bin", LANG = "C" }
+timeout_ms = 5000
+
+[fs]
+allowed_dirs = ["/tmp"]
+
+[audit]
+log_path = "/tmp/daedalus-policy-test-audit.jsonl"

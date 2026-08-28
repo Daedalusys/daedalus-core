@@ -3,7 +3,12 @@ Description=Daedalus OS Filesystem MCP Sandbox Profile
 
 [Service]
 Type=simple
-ExecStart=/opt/daedalus/venv/bin/python /opt/daedalus/servers/fs_server.py
+# ExecStart 内容由插件 manifest(daedalus.fs)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性(计划 todo 9,决策 16/22);手工漂移将导致构建失败。
+# 策略消费约定(计划 todo 13):目录白名单的单一事实源是 /opt/daedalus/shared/policy.toml
+# 的 [fs].allowed_dirs,本服务启动时运行时读取;单元不得注入 DAEDALUS_POLICY_PATH 改指策略,
+# 构建期 76 脚本校验策略可读性(0644/o+r,ProtectSystem=strict 只读不拦读)。
+ExecStart=/opt/daedalus/plugins/daedalus.fs/bin/daedalus-fs
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=read-only

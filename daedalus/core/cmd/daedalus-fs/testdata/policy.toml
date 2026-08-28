@@ -1,0 +1,15 @@
+# daedalus-fs 注入测试夹具:白名单收缩为仅 /tmp,
+# 证明 [fs].allowed_dirs 逐字进入 pathguard(其余键满足 fail-closed 校验)。
+[shell]
+allowed_commands = ["ls"]
+binary_dirs = ["/usr/bin"]
+allowed_path_prefixes = ["/tmp"]
+blocked_paths = ["/root"]
+clean_env = { PATH = "/usr/bin:/bin", LANG = "C" }
+timeout_ms = 1000
+
+[fs]
+allowed_dirs = ["/tmp"]
+
+[audit]
+log_path = "/tmp/daedalus-fs-policy-test-audit.jsonl"

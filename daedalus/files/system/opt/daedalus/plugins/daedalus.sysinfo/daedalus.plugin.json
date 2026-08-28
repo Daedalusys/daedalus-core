@@ -1,0 +1,29 @@
+{
+  "id": "daedalus.sysinfo",
+  "name": "Daedalus System Information",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": "native",
+  "executable": "bin/daedalus-sysinfo",
+  "permissions": {
+    "read": [
+      "/etc/os-release",
+      "/usr/lib/os-release",
+      "/proc",
+      "/sys"
+    ],
+    "write": [],
+    "run": [
+      "/usr/bin/ip"
+    ]
+  },
+  "tools": [
+    "os_release",
+    "hardware_info",
+    "network_status"
+  ],
+  "checksums": {
+    "bin/daedalus-sysinfo": "sha256:f34e11cf3fc4a05be0beed0c815669b505ff8c8bbbacc99ac51af5fe8f038dfc",
+    "daedalus.plugin.json": "sha256:6d594dbd098a0a9d9cbf0b182b64388b4f43d41ccb93cb6e8c556a448deb2198"
+  }
+}

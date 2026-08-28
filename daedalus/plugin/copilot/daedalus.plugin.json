@@ -1,0 +1,41 @@
+{
+  "id": "daedalus.copilot",
+  "name": "Daedalus Copilot",
+  "version": "1.0.0",
+  "type": "copilot",
+  "runtime": "deno",
+  "executable": "main.ts",
+  "entrypoint": [
+    "--allow-env",
+    "--allow-net",
+    "--allow-read=/opt/daedalus,/home,/var/log,/tmp,/proc,/sys,/etc/os-release,/usr/lib/os-release,/etc/fedora-release,/etc/almalinux-release,$HOME/.config/daedalus",
+    "--allow-write=/var/log/daedalus,/tmp,$HOME/.local/share/daedalus",
+    "--allow-run=/usr/local/bin/deno,/usr/local/bin/daedalus-audit,/usr/local/bin/daedalus-shell"
+  ],
+  "permissions": {
+    "read": [
+      "/opt/daedalus",
+      "/home",
+      "/var/log",
+      "/tmp",
+      "/proc",
+      "/sys",
+      "/etc/os-release",
+      "/usr/lib/os-release",
+      "/etc/fedora-release",
+      "/etc/almalinux-release",
+      "$HOME/.config/daedalus"
+    ],
+    "write": [
+      "/var/log/daedalus",
+      "/tmp",
+      "$HOME/.local/share/daedalus"
+    ],
+    "run": [
+      "/usr/local/bin/deno",
+      "/usr/local/bin/daedalus-audit",
+      "/usr/local/bin/daedalus-shell"
+    ]
+  },
+  "tools": []
+}

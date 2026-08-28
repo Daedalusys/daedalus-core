@@ -55,10 +55,47 @@ jobs:
           sudo apt-get update -y || true
           sudo apt-get install -y podman qemu-user-static just
 
+      - name: Set Up Go Toolchain
+        # daedalus/core/go.mod pins `go 1.25.0`; the runner image may ship an older
+        # Go, so pin 1.25.x explicitly. setup-go caches modules based on
+        # daedalus/core/go.sum; deps are NOT vendored (vendor/ gitignored) so each
+        # fresh build downloads from the Go module proxy on first miss.
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: daedalus/core/go.sum
+
+      - name: Set Up Deno Runtime
+        # Runs the copilot test suite (tests/deno/) in the `just test` gate below.
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Build Daedalus Container Image
         shell: bash
         run: |
           just build
+
+      - name: Go Build & Test Gate
+        shell: bash
+        run: |
+          # Full Go module compile (static binaries) + unit tests (plan todo 15)
+          just go-build
+          just go-test
+
+      - name: Full Test Suite Gate
+        shell: bash
+        run: |
+          # `just test` = go test ./... + deno test --allow-all tests/deno/
+          just test
+
+      - name: Verify Image Zero-Residue
+        shell: bash
+        run: |
+          # Assert no source/test/module residue leaked into the image rootfs
+          # (Python servers and Deno servers were replaced by Go plugins).
+          # Same predicate as `just verify-image`.
+          podman run --rm localhost/daedalus-os:latest sh -c 'test -z "$(find /opt -name "*.py" -o -name "*.pyc" -o -name "__pycache__" -o -name "*.test.ts" -o -name "go.mod" -o -type d -name vendor 2>/dev/null)"' || { echo "ERROR: residue found in image /opt"; exit 1; }
 
       - name: Verify Image & Bootc Container Lint
         shell: bash

@@ -1,0 +1,13 @@
+{
+  "id": "daedalus.fs",
+  "name": "Daedalus Filesystem",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": "native",
+  "executable": "bin/daedalus-fs",
+  "tools": ["read_file", "write_file", "list_dir", "move_file"],
+  "permissions": {
+    "read": ["/home", "/var/log", "/tmp"],
+    "write": ["/home", "/var/log", "/tmp"]
+  }
+}

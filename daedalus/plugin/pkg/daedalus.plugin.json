@@ -1,0 +1,14 @@
+{
+  "id": "daedalus.pkg",
+  "name": "Daedalus Package",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": "native",
+  "executable": "bin/daedalus-pkg",
+  "tools": ["dnf_query", "dnf_list_installed"],
+  "permissions": {
+    "read": ["/var/lib/rpm", "/etc/yum.repos.d"],
+    "write": [],
+    "run": ["/usr/bin/rpm", "/usr/bin/dnf"]
+  }
+}

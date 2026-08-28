@@ -1,14 +1,69 @@
-base_image/*
-base_image/**/*
-!base_image/**/
+# ===== VCS 本地状态 =====
+# 上游 vendor fork（gitignored；sync-daedalus.sh 同步）
+# 例外：保留 3 个上游 vendor 自带的 AGENTS.md（base_image/AGENTS.md、base_image/files/system/usr/lib/systemd/system/AGENTS.md、base_image/files/system/opt/daedalus/AGENTS.md）
+base_image/
 !base_image/**/AGENTS.md
 
+# Jujutsu 本地工作副本（repo/index/op_heads/working_copy/...）
+# jj 自身 colocation 会自动写入 .git/info/exclude，
+# 这里再列一次作为显式防御（.jj-*.json 只覆盖顶层快照，不覆盖目录）
+.jj/
+.jj-*.json
+
+# Orchestration / 索引缓存
+# OhMyOpenCode 工作区缓存
 .omo/
-
-.pytest_cache/
-
-**/__pycache__/**
-
+# CodeGraph 索引（symlink 目标，由 .git/info/exclude 兜底）
 .codegraph/
 
-.jj-*.json
+# ===== 构建产物 =====
+# Go 模块依赖: 仅入库 go.mod + go.sum;vendor/ 不入库,构建期 `go build` 从 module proxy
+# 下载到 GOMODCACHE(首次构建需联网);go mod verify 仍可校验 go.sum 完整性。
+daedalus/core/vendor/
+
+# Daedalus Go 核心工作区的本机构建产物(静态二进制与插件 zip 包,不进版本控制)
+daedalus/core/bin/
+
+# 能力插件源目录的构建期二进制(just plugin-pack 拷入用于打包;不入库)
+daedalus/plugin/*/bin/
+
+# 镜像安装态中的 Go 编译产物(just plugin-pack 生成;非源码,不入库;同 daedalus/core/bin/ 性质)
+# 包含 4 个能力插件安装态 (daedalus.fs/shell/pkg/sysinfo) 和 3 个 /usr/local/bin 工具
+daedalus/files/system/opt/daedalus/plugins/daedalus.*/bin/
+daedalus/files/system/usr/local/bin/daedalus-*
+
+# 通用构建/临时目录(当前无实例;防御性预置)
+build/
+dist/
+tmp/
+*.tmp
+*.cover
+coverage.out
+
+# Deno 锁文件（deno test 可能自动生成；本项目未使用 Deno 工作区，锁文件非约定）
+deno.lock
+deno.lockb
+
+# ===== 测试缓存 =====
+.pytest_cache/
+**/__pycache__/**
+
+# ===== 编辑器 / OS 杂项 =====
+# macOS
+.DS_Store
+# Windows
+Thumbs.db
+# 编辑器临时/备份
+*~
+*.bak
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+
+# ===== 本地环境 / 密钥（防御性） =====
+.env
+.env.*
+*.local

@@ -13,7 +13,7 @@ ARG IMAGE_REGISTRY=localhost
 ARG VARIANT=kde
 ARG TARGETARCH
 
-# Note: /opt is NOT mounted as tmpfs so /opt/daedalus/venv persists in the immutable rootfs
+# 注意：/opt 未挂载为 tmpfs，因此 /opt/daedalus（插件安装态 plugins/ 等）持久化于不可变 rootfs
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     /ctx/build_files/build.sh

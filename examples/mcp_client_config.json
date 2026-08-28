@@ -2,49 +2,27 @@
   "$schema": "https://json.schemastore.org/mcp-settings.json",
   "mcpServers": {
     "daedalus-fs": {
-      "command": "/opt/daedalus/venv/bin/python",
-      "args": ["/opt/daedalus/servers/fs_server.py"],
-      "description": "Daedalus OS Filesystem Capability Server (Restricted to /home, /var/log, /tmp)"
+      "command": "/opt/daedalus/plugins/daedalus.fs/bin/daedalus-fs",
+      "args": [],
+      "description": "Daedalus OS Filesystem Capability Server (Go binary; restricted to /home, /var/log, /tmp)"
     },
     "daedalus-shell": {
-      "command": "/opt/daedalus/venv/bin/python",
-      "args": ["/opt/daedalus/servers/shell_server.py"],
+      "command": "/opt/daedalus/plugins/daedalus.shell/bin/daedalus-shell",
+      "args": [],
       "env": {
         "ALLOW_COMMANDS": "df,ls,cat,pwd,uname,free,ps,uptime,whoami,ip,arch,hostname,date,ping,systemctl"
       },
-      "description": "Daedalus OS Shell Capability Server (Read-only/diagnostic allowlisted commands)"
+      "description": "Daedalus OS Shell Capability Server (Go binary; read-only/diagnostic allowlisted commands)"
     },
     "daedalus-pkg": {
-      "command": "/opt/daedalus/venv/bin/python",
-      "args": ["/opt/daedalus/servers/pkg_server.py"],
-      "description": "Daedalus OS Package Management Capability Server (Read-only RPM/DNF queries)"
+      "command": "/opt/daedalus/plugins/daedalus.pkg/bin/daedalus-pkg",
+      "args": [],
+      "description": "Daedalus OS Package Management Capability Server (Go binary; read-only RPM/DNF queries)"
     },
     "daedalus-sysinfo": {
-      "command": "/opt/daedalus/venv/bin/python",
-      "args": ["/opt/daedalus/servers/sysinfo_server.py"],
-      "description": "Daedalus OS System Information Capability Server (Read-only hardware, os-release, network)"
-    },
-    "daedalus-fs-deno": {
-      "command": "deno",
-      "args": [
-        "run",
-        "--allow-read=/home,/var/log,/tmp",
-        "--allow-write=/home,/tmp",
-        "/opt/daedalus/deno/fs_server.ts"
-      ],
-      "description": "Daedalus OS Filesystem Capability Server (Deno runtime sandbox with granular permissions)"
-    },
-    "daedalus-shell-deno": {
-      "command": "deno",
-      "args": [
-        "run",
-        "--allow-run=/usr/bin/df,/usr/bin/ls,/usr/bin/cat,/usr/bin/pwd,/usr/bin/uname,/usr/bin/free,/usr/bin/ps,/usr/bin/uptime,/usr/bin/whoami,/usr/bin/ip,/usr/bin/arch,/usr/bin/hostname,/usr/bin/date,/usr/bin/ping,/usr/bin/systemctl,/bin/df,/bin/ls,/bin/cat,/bin/pwd,/bin/uname,/bin/free,/bin/ps,/bin/uptime,/bin/whoami,/bin/ip,/bin/arch,/bin/hostname,/bin/date,/bin/ping,/bin/systemctl",
-        "--allow-read=/var/log/daedalus",
-        "--allow-write=/var/log/daedalus",
-        "--allow-env",
-        "/opt/daedalus/deno/shell_server.ts"
-      ],
-      "description": "Daedalus OS Shell Capability Server (Deno runtime sandbox with granular --allow-run permissions)"
+      "command": "/opt/daedalus/plugins/daedalus.sysinfo/bin/daedalus-sysinfo",
+      "args": [],
+      "description": "Daedalus OS System Information Capability Server (Go binary; read-only hardware, os-release, network)"
     }
   }
 }
