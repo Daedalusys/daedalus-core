@@ -20,6 +20,21 @@ EXCLUDES=(
 
 echo "=== Syncing Daedalusfiles into base_image ==="
 
+# 0. Bootstrap base_image/(CI runner 必需; 本地存在时跳过):
+#    上游 vendor 树不追踪进 git(repo .gitignore 第 4 行 base_image/), 但 sync 的目标必须是
+#    真实存在的目录, 否则 rsync rc=11 失败。CI 上从 AlmaLinux/atomic-desktop@main
+#    浅克隆补充, 本地仓库已有 base_image/(同步自有)时跳过以免重写开发环境工作副本。
+DAEDALUS_BASE_IMAGE_UPSTREAM="${DAEDALUS_BASE_IMAGE_UPSTREAM:-https://github.com/AlmaLinux/atomic-desktop.git}"
+DAEDALUS_BASE_IMAGE_BRANCH="${DAEDALUS_BASE_IMAGE_BRANCH:-main}"
+if [ ! -d base_image ] && [ "${DAEDALUS_SKIP_BASE_IMAGE_BOOTSTRAP:-0}" != "1" ]; then
+    if [ -n "${DRY_RUN_FLAG}" ]; then
+        echo "=== [DRY-RUN] Would bootstrap base_image from ${DAEDALUS_BASE_IMAGE_UPSTREAM}@${DAEDALUS_BASE_IMAGE_BRANCH} (shallow) ==="
+    else
+        echo "=== Bootstrapping base_image from ${DAEDALUS_BASE_IMAGE_UPSTREAM}@${DAEDALUS_BASE_IMAGE_BRANCH} (shallow) ==="
+        git clone --depth 1 --branch "${DAEDALUS_BASE_IMAGE_BRANCH}" "${DAEDALUS_BASE_IMAGE_UPSTREAM}" base_image
+    fi
+fi
+
 # 1. General copy
 rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" daedalus/files/system/ base_image/files/system/
 rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" daedalus/files/scripts/ base_image/files/scripts/

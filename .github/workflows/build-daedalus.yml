@@ -21,9 +21,6 @@ on:
       - 'justfile'
       - 'sync-daedalus.sh'
       - '.github/workflows/build-daedalus.yml'
-    paths-ignore:
-      - '**/README.md'
-      - '**/AGENTS.md'
   workflow_dispatch:
     inputs:
       VARIANT:
