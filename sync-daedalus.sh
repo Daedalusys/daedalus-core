@@ -35,6 +35,29 @@ if [ ! -d base_image ] && [ "${DAEDALUS_SKIP_BASE_IMAGE_BOOTSTRAP:-0}" != "1" ];
     fi
 fi
 
+# 0b. 上游 bug 补丁(todo 21 后置发现, CI 首次真实构建暴露):
+#     上游 20-desktop.sh 的 kde 分支在 AlmaLinux 10 上失效——`dnf install
+#     @"KDE Plasma Workspaces"` 在 EL10 当前仓库状态下未随组装出 sddm
+#     (EL10 的 KDE 组打包与 EL9 不同), 而脚本无条件 `systemctl enable sddm`
+#     → "Unit sddm.service does not exist" 构建硬失败。
+#     补丁: kde 分支显式安装 sddm(不依赖组传递依赖; 与 EL10 KDE 用户文档
+#     的通行做法一致), 使后续 enable 真正可用。
+#     补丁二(2026-08-29, CI 实测暴露的 EL10 第二层问题): sddm-wayland-plasma
+#     子包安装时已把 /etc/systemd/system/display-manager.service 软链指向
+#     plasmalogin.service(Plasma 6.6 的 Wayland 登录封装), 原 `systemctl
+#     enable sddm` 试图覆盖该软链被 systemd 拒绝 → exit 1。修复: display-
+#     manager.service 已存在(任一 DM 已配好, 即图形登录已就绪)时跳过 enable。
+#     补丁以精确锚点 sed 替换 + 自校验: 锚点失配(上游将来修好或再漂移)
+#     时不盲改, 打印提示跳过——上游修复后本段自动变为空转。
+KDE_PATCH_TARGET="base_image/files/scripts/20-desktop.sh"
+if [ -f "${KDE_PATCH_TARGET}" ] && grep -q 'systemctl enable sddm' "${KDE_PATCH_TARGET}"; then
+    if ! grep -q 'dnf install -y sddm' "${KDE_PATCH_TARGET}"; then
+        echo "=== Patching upstream 20-desktop.sh: kde 分支显式安装 sddm ==="
+        sed -i 's|^    systemctl enable sddm$|    # Daedalus 补丁: EL10 的 KDE 组未随组装出 sddm, 显式安装\n    dnf install -y sddm\n    # Daedalus 补丁 2: sddm-wayland-plasma 已配好 display-manager.service\n    # (软链 plasmalogin.service); 已存在则跳过 enable, 避免 systemd 拒绝覆盖软链\n    if [ ! -e /etc/systemd/system/display-manager.service ]; then\n        systemctl enable sddm\n    fi|' "${KDE_PATCH_TARGET}"
+        grep -q 'dnf install -y sddm' "${KDE_PATCH_TARGET}" || { echo "ERROR: kde sddm 补丁替换失败(锚点漂移?)" >&2; exit 1; }
+    fi
+fi
+
 # 1. General copy
 rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" daedalus/files/system/ base_image/files/system/
 rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" daedalus/files/scripts/ base_image/files/scripts/

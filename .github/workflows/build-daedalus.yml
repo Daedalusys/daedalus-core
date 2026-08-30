@@ -33,6 +33,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
   cancel-in-progress: true
 
+# ghcr.io 推送需要 packages:write(OCI 镜像发布主渠道, 免费无 2GiB 硬限);
+# qcow2 供本地 KVM 测试, 走 artifact(单工件上限 10GB, 保留期默认 90 天)。
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build-daedalus-image:
     name: Build & Lint Daedalus Image
@@ -68,6 +74,16 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Build Plugin Install-State (Go binaries + plugin packaging)
+        # 必须在 just build 之前: plugin-pack 把 Go 静态二进制与插件安装态
+        # 落到 daedalus/files/system/(usr/local/bin + opt/daedalus/plugins),
+        # 这些构建产物不入库(.gitignore), sync 后构成容器构建上下文。
+        # 76-daedalus-plugin-gen.sh 在容器内硬依赖 daedalus-host 二进制。
+        shell: bash
+        run: |
+          just go-build
+          just plugin-pack
+
       - name: Build Daedalus Container Image
         shell: bash
         run: |
@@ -102,3 +118,62 @@ jobs:
           # Verify bootc version
           podman run --rm localhost/daedalus-os:latest bootc --version || true
           echo "Daedalus bootc container verification completed successfully."
+
+      # ---- 发布: OCI 镜像 → ghcr.io (bootc 原生分发形态; 公开包免费无 2GiB 硬限) ----
+      - name: Log in to ghcr.io
+        # GITHUB_TOKEN 自动注入, 无需手动 secret
+        uses: redhat-actions/podman-login@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push OCI image to ghcr.io
+        shell: bash
+        env:
+          OWNER_LOWER: ${{ github.repository_owner }}
+        run: |
+          # repository_owner 可能含大写, ghcr 要求全小写路径
+          IMAGE="ghcr.io/${OWNER_LOWER,,}/daedalus-os"
+          podman tag localhost/daedalus-os:latest "${IMAGE}:latest"
+          podman tag localhost/daedalus-os:latest "${IMAGE}:${{ github.sha }}"
+          podman push "${IMAGE}:latest"
+          podman push "${IMAGE}:${{ github.sha }}"
+          echo "Pushed: ${IMAGE}:latest (+ sha tag)"
+
+      # ---- 发布: qcow2 → artifact (本地 KVM 测试用; bootc-image-builder 产出) ----
+      # 限额说明: GitHub Release 单文件硬限 2GiB, KDE qcow2 可能超; artifact 上限 10GB 更稳。
+      # 若未来要挂 Release, 先 gzip 或分卷。
+      - name: Export OCI archive (rootless → rootful handoff)
+        # bootc-image-builder 的 --local 模式硬性要求 rootful podman
+        # ("this command must be run in rootful"), 而 Actions 的构建在
+        # rootless 存储里。用 save/load 把镜像从用户存储转交 root 存储。
+        shell: bash
+        run: podman save --format oci-archive -o /tmp/daedalus-os.oci.tar localhost/daedalus-os:latest
+
+      - name: Build qcow2 disk image (bootc-image-builder, rootful)
+        shell: bash
+        run: |
+          sudo podman load -i /tmp/daedalus-os.oci.tar
+          mkdir -p output/qcow2
+          # rootful podman 的存储在 /var/lib/containers/storage(load 已导入),
+          # builder 容器内硬编码该路径找镜像 → 同名对同名挂载(root 存储进容器)
+          sudo podman run --rm \
+            --privileged \
+            --security-opt label=disable \
+            -v ${{ github.workspace }}/output/qcow2:/output \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            quay.io/centos-bootc/bootc-image-builder:latest \
+            --local --type qcow2 --output /output localhost/daedalus-os:latest
+          # builder 以 root 写产物, 归还属主给 runner 用户(artifact 上传需要)
+          sudo chown -R $(id -u):$(id -g) output/qcow2
+          ls -lh output/qcow2/
+
+      - name: Upload qcow2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daedalus-os-qcow2-${{ matrix.variant }}
+          path: output/qcow2/
+          # 默认保留 90 天; qcow2 预计 3-6GB, 远低于 artifact 10GB 上限
+          if-no-files-found: error
+          compression-level: 0
