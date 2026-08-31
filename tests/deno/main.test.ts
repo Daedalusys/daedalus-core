@@ -1,6 +1,17 @@
 import { expect } from "jsr:@std/expect@1";
 import { defaultReadStdinAll, runCopilot, parseArgs, VERSION } from "../../daedalus/plugin/copilot/main.ts";
 
+// 锁定 locale 为 en_US：本测试文件的断言基于 en_US 文案硬编码。
+// 如不锁定，在 zh_CN locale 的开发机上（LC_ALL/LANG 为 zh_CN.UTF-8）
+// runCopilot 内 initI18n() 会加载中文文案，断言会全部失配。
+// Deno.env 设置放在模块顶层（import 之后、任何 runCopilot 调用之前），
+// 因为 Deno 测试文件在执行任何 test body 前就已完成模块求值。
+if ((globalThis as any).Deno?.env?.set) {
+  Deno.env.set("LC_ALL", "en_US.UTF-8");
+} else {
+  process.env.LC_ALL = "en_US.UTF-8";
+}
+
 let stdoutChunks: string[] = [];
 let stderrChunks: string[] = [];
 let auditLogs: Array<{ tool: string; args: any; outcome: string }> = [];
@@ -48,28 +59,37 @@ Deno.test("Copilot Main - parseArgs parses short and long flags correctly", () =
   const parsed3 = parseArgs(["-h"]);
   expect(parsed3.help).toBe(true);
 
-  // 新语义：-v 为 verbose，版本号改用 -V / --version
+  // 新语义：-V / --version 是版本旗标,与 verbose 无关;
+  // parseArgs 默认 verbose=true,-v 是切换(toggle)语义。
   const parsed4 = parseArgs(["-V"]);
   expect(parsed4.version).toBe(true);
-  expect(parsed4.verbose).toBe(false);
+  expect(parsed4.verbose).toBe(true);
 
   const parsed5 = parseArgs(["-v", "-i", "--dry-run", "list", "files"]);
-  expect(parsed5.verbose).toBe(true);
+  // pivot 后语义:-v 是 toggle,默认 verbose=true,显式 -v 翻转为 false
+  expect(parsed5.verbose).toBe(false);
   expect(parsed5.interactive).toBe(true);
   expect(parsed5.dryRun).toBe(true);
   expect(parsed5.version).toBe(false);
   expect(parsed5.query).toBe("list files");
 
-  // --yes 保留为向后兼容别名（默认行为已是自动执行）
+  // --yes 保留为向后兼容别名;verbose 默认开(未传 -v)
   const parsed6 = parseArgs(["--yes"]);
   expect(parsed6.yes).toBe(true);
   expect(parsed6.interactive).toBe(false);
-  expect(parsed6.verbose).toBe(false);
+  expect(parsed6.verbose).toBe(true);
   expect(parsed6.dryRun).toBe(false);
 
   const parsed7 = parseArgs(["--verbose", "--interactive"]);
-  expect(parsed7.verbose).toBe(true);
+  // --verbose 与 -v 同为 toggle:默认 true → 翻转为 false
+  expect(parsed7.verbose).toBe(false);
   expect(parsed7.interactive).toBe(true);
+
+  // 默认(无任何 verbose 旗标)verbose=true;-v 双次切换回归 true
+  const parsed8 = parseArgs(["check disk"]);
+  expect(parsed8.verbose).toBe(true);
+  const parsed9 = parseArgs(["-v", "-v", "check disk"]);
+  expect(parsed9.verbose).toBe(true);
 });
 
 Deno.test("Copilot Main - parseArgs handles double-dash -- delimiter for queries", () => {
@@ -187,9 +207,16 @@ Deno.test("Copilot Main - translates query, shows proposal, confirms with 'y', a
   ).toBe(true);
 });
 
-Deno.test("Copilot Main - rejects non-allowlisted command from LLM with exit code 126 and denied audit", async () => {
+// pivot 后语义:白名单外命令走展示路径——banner + 手动提示,exit 0,绝无执行通道
+Deno.test("Copilot Main - non-allowlisted command from LLM goes to display path with exit 0, denied audit, no exec", async () => {
   setup();
-  let execCalled = false;
+  let readLineCalls = 0;
+  let execCalls = 0;
+
+  const mockStdinReader = async (_prompt?: string) => {
+    readLineCalls++;
+    return "y";
+  };
 
   const mockTranslate = async () => {
     return JSON.stringify({
@@ -200,7 +227,7 @@ Deno.test("Copilot Main - rejects non-allowlisted command from LLM with exit cod
   };
 
   const mockExec = async () => {
-    execCalled = true;
+    execCalls++;
     return { stdout: "", stderr: "", returncode: 0, error: null };
   };
 
@@ -209,6 +236,7 @@ Deno.test("Copilot Main - rejects non-allowlisted command from LLM with exit cod
     isTerminal: true,
     stdout: mockStdout,
     stderr: mockStderr,
+    stdinReader: mockStdinReader,
     translateFn: mockTranslate,
     execFn: mockExec,
     recordAuditFn: mockRecordAudit,
@@ -220,22 +248,46 @@ Deno.test("Copilot Main - rejects non-allowlisted command from LLM with exit cod
     }),
   });
 
-  expect(code).toBe(126);
-  expect(execCalled).toBe(false);
-  expect(stderrChunks.join("")).toContain("Security policy rejection:");
-  expect(stderrChunks.join("")).toContain("not in ALLOW_COMMANDS");
+  // pivot 后语义:L1/L2 走展示路径 exit 0,无 y/n 提示,无执行
+  expect(code).toBe(0);
+  expect(readLineCalls).toBe(0);
+  expect(execCalls).toBe(0);
 
-  // 验证审计记录
+  // 展示路径输出:rm -rf 命中 L2 → 🚨 banner + 命令行 + 原因行 + 手动提示
+  const allStdout = stdoutChunks.join("");
+  expect(allStdout).toContain("🚨");
+  expect(allStdout).toContain("→ rm -rf /tmp/files");
+  expect(allStdout).toContain("Delete files");
+  expect(allStdout).toContain("Please run this command in your terminal");
+  expect(allStdout).not.toContain("Proceed?");
+
+  // 审计:copilot_reject/denied,risk=danger,reason 为 i18n key(rm_rf)
   const rejectAudit = auditLogs.find((l) => l.tool === "copilot_reject");
   expect(rejectAudit).toBeDefined();
   expect(rejectAudit?.outcome).toBe("denied");
-  expect(rejectAudit?.args.query).toBe("delete temporary files");
-  expect(rejectAudit?.args.reason).toContain("not in ALLOW_COMMANDS");
+  expect(rejectAudit?.args.risk).toBe("danger");
+  expect(rejectAudit?.args.reason).toBe("risk.pattern.rm_rf");
+  expect(rejectAudit?.args.command).toBe("rm");
+  expect(rejectAudit?.args.args).toEqual(["-rf", "/tmp/files"]);
 });
 
-Deno.test("Copilot Main - rejects blocked paths from LLM with exit code 126", async () => {
+Deno.test("Copilot Main - blocked sensitive path proposal still routes through L0 y/n confirm (cat /etc/shadow)", async () => {
+  // 行为对齐说明:main.ts pivot 后主流程不再调用 validateProposal,
+  // 仅 classifyProposal 定级。cat 在 15 命令白名单且无 L2 模式命中,
+  // 故 cat /etc/shadow 分级 safe + L0 白名单内 → 走 TTY y/n 确认路径,
+  // 敏感路径防线由 daedalus-shell 沙箱网关承担(validateArg)。
+  // 本用例钉住该真实行为:读 stdin 一次,用户 "n" 拒绝 → 无执行,exit 0。
   setup();
-  let execCalled = false;
+  let readLineCalls = 0;
+  let execCalls = 0;
+
+  const prompts: string[] = [];
+  const inputs = ["n"];
+  const mockStdinReader = async (prompt?: string) => {
+    readLineCalls++;
+    prompts.push(prompt ?? "");
+    return inputs.shift() ?? null;
+  };
 
   const mockTranslate = async () => {
     return JSON.stringify({
@@ -246,8 +298,8 @@ Deno.test("Copilot Main - rejects blocked paths from LLM with exit code 126", as
   };
 
   const mockExec = async () => {
-    execCalled = true;
-    return { stdout: "", stderr: "", returncode: 0, error: null };
+    execCalls++;
+    return { stdout: "root:$6$...\n", stderr: "", returncode: 0, error: null };
   };
 
   const code = await runCopilot({
@@ -255,6 +307,7 @@ Deno.test("Copilot Main - rejects blocked paths from LLM with exit code 126", as
     isTerminal: true,
     stdout: mockStdout,
     stderr: mockStderr,
+    stdinReader: mockStdinReader,
     translateFn: mockTranslate,
     execFn: mockExec,
     recordAuditFn: mockRecordAudit,
@@ -266,9 +319,17 @@ Deno.test("Copilot Main - rejects blocked paths from LLM with exit code 126", as
     }),
   });
 
-  expect(code).toBe(126);
-  expect(execCalled).toBe(false);
-  expect(stderrChunks.join("")).toContain("Security policy rejection:");
+  // TTY 下先弹 y/n 确认;用户 "n" 后追加 feedback 提示(EOF)→ copilot_cancel,
+  // 无执行,exit 0。提示语经 stdinReader 参数注入(不回显 stdout),须捕获断言。
+  expect(code).toBe(0);
+  expect(readLineCalls).toBe(2);
+  expect(prompts[0]).toContain("Proceed?");
+  expect(prompts[1]).toContain("Feedback for revision:");
+  expect(execCalls).toBe(0);
+  expect(stdoutChunks.join("")).not.toContain("root:$6$");
+  expect(auditLogs.some((l) => l.tool === "copilot_cancel" && l.outcome === "denied")).toBe(true);
+  expect(auditLogs.some((l) => l.tool === "copilot_reject")).toBe(false);
+  expect(auditLogs.some((l) => l.tool === "copilot_translate" && l.args.risk_level === "safe")).toBe(true);
 });
 
 Deno.test("Copilot Main - handles invalid JSON from LLM with exit code 1 and copilot_reject denied audit", async () => {
@@ -306,8 +367,9 @@ Deno.test("Copilot Main - handles invalid JSON from LLM with exit code 1 and cop
   expect(auditLogs.some((l) => l.tool === "copilot_reject" && l.outcome === "denied")).toBe(true);
 });
 
-Deno.test("Copilot Main - handles LLM translation network error with exit code 1 and copilot_error audit", async () => {
+Deno.test("Copilot Main - translate fallback: error without kind renders raw msg and audits error_kind='unknown'", async () => {
   setup();
+  // 无 kind 属性的意外异常 → 兜底 t("error.translate", 原始 message) 原样透传
   const mockTranslate = async () => {
     throw new Error("OpenAI API error (500): Internal Server Error");
   };
@@ -329,7 +391,198 @@ Deno.test("Copilot Main - handles LLM translation network error with exit code 1
 
   expect(code).toBe(1);
   expect(stderrChunks.join("")).toContain("OpenAI API error (500): Internal Server Error");
-  expect(auditLogs.some((l) => l.tool === "copilot_error" && l.outcome === "error")).toBe(true);
+  const errLog = auditLogs.find((l) => l.tool === "copilot_error" && l.outcome === "error");
+  expect(errLog).toBeDefined();
+  expect(errLog?.args.query).toBe("show uptime");
+  expect(errLog?.args.error).toBe("OpenAI API error (500): Internal Server Error");
+  expect(errLog?.args.error_kind).toBe("unknown");
+  // 兜底无 fields:不得出现 endpoint/timeout_ms/status 键(条件展开,JSON 无 null 噪音)
+  expect("endpoint" in errLog?.args).toBe(false);
+  expect("timeout_ms" in errLog?.args).toBe(false);
+  expect("status" in errLog?.args).toBe(false);
+});
+
+Deno.test("Copilot Main - translate structured timeout error renders i18n text with seconds + audits endpoint/timeout_ms", async () => {
+  // W1 形状: Object.assign(new Error(msg), { kind, fields })(决策 7: Error+属性非子类)
+  const buildTimeoutError = (timeoutMs: number) =>
+    Object.assign(
+      new Error("The operation was aborted due to timeout"),
+      {
+        kind: "timeout",
+        fields: { endpoint: "http://x/v1/chat/completions", timeoutMs },
+      },
+    );
+
+  setup();
+  const mockTranslate = async () => {
+    throw buildTimeoutError(30000);
+  };
+
+  const baseOptions = {
+    query: "show uptime",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    translateFn: mockTranslate,
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => ({
+      provider: "openai" as const,
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+  };
+
+  const code = await runCopilot(baseOptions);
+
+  expect(code).toBe(1);
+  const stderr = stderrChunks.join("");
+  // en_US locale 文案:端点 + 秒数换算(30000ms → 30,不是原始毫秒)
+  expect(stderr).toContain("LLM request to http://x/v1/chat/completions did not respond within 30s");
+  const errLog = auditLogs.find((l) => l.tool === "copilot_error" && l.outcome === "error");
+  expect(errLog?.args.error_kind).toBe("timeout");
+  expect(errLog?.args.endpoint).toBe("http://x/v1/chat/completions");
+  expect(errLog?.args.timeout_ms).toBe(30000);
+  expect(errLog?.args.error).toContain("LLM request to");
+  expect("status" in (errLog?.args ?? {})).toBe(false);
+
+  // 秒数换算规则:1000ms → "1s"(防 "0.001" 类小数回归)
+  setup();
+  const mockTranslateFast = async () => {
+    throw buildTimeoutError(1000);
+  };
+  await runCopilot({ ...baseOptions, translateFn: mockTranslateFast });
+  expect(stderrChunks.join("")).toContain("did not respond within 1s");
+});
+
+Deno.test("Copilot Main - translate structured http/network errors render i18n text + audits kind-specific fields", async () => {
+  setup();
+  const mockTranslate = async () => {
+    throw Object.assign(
+      new Error("OpenAI API error (400): invalid api key"),
+      {
+        kind: "http",
+        fields: {
+          endpoint: "https://api.openai.com/v1/chat/completions",
+          status: 400,
+          body: "invalid api key",
+          timeoutMs: 30000,
+        },
+      },
+    );
+  };
+
+  const code = await runCopilot({
+    query: "show uptime",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    translateFn: mockTranslate,
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => ({
+      provider: "openai",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+  });
+
+  expect(code).toBe(1);
+  expect(stderrChunks.join("")).toContain(
+    "LLM endpoint https://api.openai.com/v1/chat/completions returned HTTP 400: invalid api key",
+  );
+  const httpLog = auditLogs.find((l) => l.tool === "copilot_error" && l.outcome === "error");
+  expect(httpLog?.args.error_kind).toBe("http");
+  expect(httpLog?.args.status).toBe(400);
+  expect(httpLog?.args.timeout_ms).toBe(30000); // http 场景亦上报 timeout_ms
+  expect(httpLog?.args.endpoint).toBe("https://api.openai.com/v1/chat/completions");
+
+  setup();
+  const mockTranslateNet = async () => {
+    throw Object.assign(
+      new Error("fetch failed"),
+      {
+        kind: "network",
+        fields: { endpoint: "https://api.openai.com/v1/chat/completions", err: "Connection refused" },
+      },
+    );
+  };
+
+  await runCopilot({
+    query: "show uptime",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    translateFn: mockTranslateNet,
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => ({
+      provider: "openai",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+  });
+
+  expect(stderrChunks.join("")).toContain(
+    "Failed to reach LLM endpoint https://api.openai.com/v1/chat/completions: Connection refused",
+  );
+  const netLog = auditLogs.find((l) => l.tool === "copilot_error" && l.outcome === "error");
+  expect(netLog?.args.error_kind).toBe("network");
+  expect(netLog?.args.endpoint).toBe("https://api.openai.com/v1/chat/completions");
+  // network 场景不报 timeout_ms/status(仅 timeout/http 条件展开)
+  expect("timeout_ms" in (netLog?.args ?? {})).toBe(false);
+  expect("status" in (netLog?.args ?? {})).toBe(false);
+});
+
+Deno.test("Copilot Main - revise path shares renderLLMError: structured timeout renders i18n text + audits error_kind", async () => {
+  setup();
+  const mockTranslate = async () => {
+    return JSON.stringify({
+      command: "free",
+      args: ["-h"],
+      explanation: "Show memory",
+    });
+  };
+
+  // revise 与 translate 同走 callProvider,抛同款结构化错误
+  const mockRevise = async () => {
+    throw Object.assign(
+      new Error("The operation was aborted due to timeout"),
+      { kind: "timeout", fields: { endpoint: "http://revise/v1/chat/completions", timeoutMs: 2500 } },
+    );
+  };
+
+  // 交互流程: 提议 'free -h' -> 'n' -> 反馈 -> revise 抛错
+  const inputs = ["n", "show in MB"];
+  const mockStdinReader = async () => inputs.shift() ?? null;
+
+  const code = await runCopilot({
+    query: "show memory",
+    isTerminal: true,
+    interactive: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: mockStdinReader,
+    translateFn: mockTranslate,
+    reviseFn: mockRevise,
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => ({
+      provider: "openai",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+  });
+
+  expect(code).toBe(1);
+  // 2500ms → Math.round = 3(展示走同一 helper,含秒换算)
+  expect(stderrChunks.join("")).toContain(
+    "LLM request to http://revise/v1/chat/completions did not respond within 3s",
+  );
+  const errLog = auditLogs.find((l) => l.tool === "copilot_error" && l.outcome === "error");
+  expect(errLog?.args.error_kind).toBe("timeout");
+  expect(errLog?.args.timeout_ms).toBe(2500);
+  expect(errLog?.args.endpoint).toBe("http://revise/v1/chat/completions");
 });
 
 Deno.test("Copilot Main - allows user to manually edit proposed command without invoking LLM, re-validates, and executes", async () => {
@@ -630,8 +883,8 @@ Deno.test("Copilot Main - handles EOF (Ctrl-D) gracefully by logging copilot_can
   expect(auditLogs.some((l) => l.tool === "copilot_cancel" && l.outcome === "denied")).toBe(true);
 });
 
-// 新语义：非 TTY 管道环境默认直接自动执行，不再强制要求 --yes
-Deno.test("Copilot Main - auto-executes in non-TTY environments without requiring --yes", async () => {
+// 新语义:非 TTY 管道环境下仅沙箱白名单内只读诊断直接运行,其余只展示;不要求 --yes
+Deno.test("Copilot Main - whitelisted read-only diagnostics run directly in non-TTY without requiring --yes", async () => {
   setup();
   let executedCommand = "";
   let executedArgs: string[] = [];
@@ -713,7 +966,7 @@ Deno.test("Copilot Main - fails with exit 1 in non-TTY when -i is requested, wit
   expect(translateCalled).toBe(false); // 在进入 LLM 转换之前就被拦截
   expect(execCalled).toBe(false);
   expect(stderrChunks.join("")).toContain(
-    "Interactive confirmation requested (-i) but stdin is not a TTY. Drop -i to auto-execute.",
+    "Interactive confirmation (-i) needs a terminal. In non-TTY contexts only whitelisted read-only diagnostics run; everything else is shown for manual execution.",
   );
 });
 
@@ -753,7 +1006,7 @@ Deno.test("Copilot Main - --dry-run prints the would-execute command without exe
 
   expect(code).toBe(0);
   expect(execCalled).toBe(false);
-  expect(stdoutChunks.join("")).toContain("[dry-run] Would execute: df -h");
+  expect(stdoutChunks.join("")).toContain("[dry-run] Proposed command (not run): df -h");
   expect(
     auditLogs.some(
       (l) => l.tool === "copilot_confirm" && l.outcome === "success" && l.args.mode === "dry-run",
@@ -761,15 +1014,17 @@ Deno.test("Copilot Main - --dry-run prints the would-execute command without exe
   ).toBe(true);
 });
 
-// 新语义：默认（TTY 无标志）立即自动执行，绝不读取 stdin 提示确认
-Deno.test("Copilot Main - auto-executes immediately in TTY by default without ever reading stdin", async () => {
+// pivot 后语义:TTY 默认 y/n 确认(读 stdin 一次);"n" 拒绝 → 无执行,exit 0
+Deno.test("Copilot Main - TTY default prompts y/n once; 'n' declines execution and exits 0", async () => {
   setup();
   let readLineCalls = 0;
-  let executedCommand = "";
-
-  const mockStdinReader = async (_prompt?: string) => {
+  let execCalls = 0;
+  const prompts: string[] = [];
+  const inputs = ["n"];
+  const mockStdinReader = async (prompt?: string) => {
     readLineCalls++;
-    return "y";
+    prompts.push(prompt ?? "");
+    return inputs.shift() ?? null;
   };
 
   const mockTranslate = async () => {
@@ -780,8 +1035,8 @@ Deno.test("Copilot Main - auto-executes immediately in TTY by default without ev
     });
   };
 
-  const mockExec = async (cmd: string) => {
-    executedCommand = cmd;
+  const mockExec = async (_cmd: string) => {
+    execCalls++;
     return { stdout: "fs-table\n", stderr: "", returncode: 0, error: null };
   };
 
@@ -803,25 +1058,27 @@ Deno.test("Copilot Main - auto-executes immediately in TTY by default without ev
   });
 
   expect(code).toBe(0);
-  expect(readLineCalls).toBe(0); // 默认路径从不弹出确认提示
-  expect(executedCommand).toBe("df");
-  expect(stdoutChunks.join("")).toContain("fs-table");
-  expect(stdoutChunks.join("")).not.toContain("Proceed?");
-  expect(
-    auditLogs.some(
-      (l) => l.tool === "copilot_confirm" && l.outcome === "success" && l.args.auto === true,
-    ),
-  ).toBe(true);
+  expect(readLineCalls).toBe(2); // y/n 一次 + "n" 后的 feedback 提示(EOF 取消)
+  expect(prompts[0]).toContain("Proceed?"); // 提示语经 stdinReader 参数注入,不回显 stdout
+  expect(prompts[1]).toContain("Feedback for revision:");
+  expect(execCalls).toBe(0); // "n" 拒绝 → 无执行
+  expect(stdoutChunks.join("")).not.toContain("fs-table");
+  // 拒绝路径落 copilot_cancel;confirm/translate 的 success 链仍完整
+  expect(auditLogs.some((l) => l.tool === "copilot_cancel" && l.outcome === "denied")).toBe(true);
+  expect(auditLogs.some((l) => l.tool === "copilot_translate" && l.outcome === "success" && l.args.risk_level === "safe")).toBe(true);
 });
 
-// 新语义：-v/--verbose 在执行前打印翻译结果，仍然自动执行
-Deno.test("Copilot Main - verbose prints translated command and explanation then auto-executes", async () => {
+// pivot 后语义:verbose 默认开启(先打印翻译预览),TTY 下读一次 stdin;
+// "y" 确认 → 执行
+Deno.test("Copilot Main - verbose prints translated command and explanation, prompts once, executes on 'y'", async () => {
   setup();
   let readLineCalls = 0;
   let executedCommand = "";
 
-  const mockStdinReader = async (_prompt?: string) => {
+  const prompts: string[] = [];
+  const mockStdinReader = async (prompt?: string) => {
     readLineCalls++;
+    prompts.push(prompt ?? "");
     return "y";
   };
 
@@ -839,7 +1096,7 @@ Deno.test("Copilot Main - verbose prints translated command and explanation then
   };
 
   const code = await runCopilot({
-    args: ["-v", "check disk"],
+    args: ["check disk"],
     isTerminal: true,
     stdout: mockStdout,
     stderr: mockStderr,
@@ -857,13 +1114,25 @@ Deno.test("Copilot Main - verbose prints translated command and explanation then
 
   expect(code).toBe(0);
   expect(executedCommand).toBe("df");
-  expect(readLineCalls).toBe(0); // verbose 不弹交互确认
+  expect(readLineCalls).toBe(1); // 默认(TTY 无旗标)读一次 stdin
+  expect(prompts[0]).toContain("Proceed?"); // 确认提示经 stdinReader 参数注入
   const allStdout = stdoutChunks.join("");
+  // verbose 默认开:执行前打印 → cmd + explanation
   expect(allStdout).toContain("→ df -h");
   expect(allStdout).toContain("Show disk usage");
   expect(allStdout).toContain("executed");
   // verbose 输出必须出现在执行结果之前
   expect(allStdout.indexOf("→ df -h")).toBeLessThan(allStdout.indexOf("executed"));
+  // "y" 显式确认 → auto:false,且带 pivot 新增 risk_level 审计字段
+  expect(
+    auditLogs.some(
+      (l) =>
+        l.tool === "copilot_confirm" &&
+        l.outcome === "success" &&
+        l.args.auto === false &&
+        l.args.risk_level === "safe",
+    ),
+  ).toBe(true);
 });
 
 Deno.test("Copilot Main - auto-confirms and executes when --yes is provided in non-TTY environment", async () => {
@@ -1084,6 +1353,209 @@ Deno.test("Copilot Main - runs REPL loop, resets revision counter independently 
 
   expect(code).toBe(0);
   expect(translateQueries).toEqual(["query1", "query2"]);
+});
+
+// 新增:L1/L2 展示路径断言(pivot 任务 5)
+// 展示路径契约:无 y/n 提示(readLineCalls===0)、无 exec、copilot_reject/denied
+// 携带 risk 档位,stdout 有分级 banner + 手动提示。
+Deno.test("Copilot Main - L1 (git push) display path: banner, no prompt, no exec, copilot_reject risk=caution", async () => {
+  setup();
+  let readLineCalls = 0;
+  let execCalls = 0;
+
+  const mockStdinReader = async (_prompt?: string) => {
+    readLineCalls++;
+    return "y";
+  };
+
+  const mockTranslate = async () => {
+    return JSON.stringify({
+      command: "git",
+      args: ["push", "origin", "main"],
+      explanation: "Push commits to remote",
+    });
+  };
+
+  const mockExec = async () => {
+    execCalls++;
+    return { stdout: "", stderr: "", returncode: 0, error: null };
+  };
+
+  const code = await runCopilot({
+    query: "push my commits",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: mockStdinReader,
+    translateFn: mockTranslate,
+    execFn: mockExec,
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => ({
+      provider: "openai",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+  });
+
+  // pivot 后语义:L1/L2 走展示路径 exit 0,无 y/n 提示,无执行
+  expect(code).toBe(0);
+  expect(readLineCalls).toBe(0);
+  expect(execCalls).toBe(0);
+
+  // ⚠ banner + 命令行 + 手动提示;无确认提示语
+  const allStdout = stdoutChunks.join("");
+  expect(allStdout).toContain("⚠");
+  expect(allStdout).toContain("→ git push origin main");
+  expect(allStdout).toContain("Push commits to remote");
+  expect(allStdout).toContain("Please run this command in your terminal");
+  expect(allStdout).not.toContain("Proceed?");
+
+  // 审计:copilot_reject/denied 携带 risk=caution 与 reason i18n key
+  const rejectAudit = auditLogs.find((l) => l.tool === "copilot_reject");
+  expect(rejectAudit).toBeDefined();
+  expect(rejectAudit?.outcome).toBe("denied");
+  expect(rejectAudit?.args.risk).toBe("caution");
+  expect(rejectAudit?.args.reason).toBe("risk.reason.caution_command");
+});
+
+Deno.test("Copilot Main - L2 (rm -rf) display path: danger banner + reason line, no prompt, no exec, copilot_reject risk=danger", async () => {
+  setup();
+  let readLineCalls = 0;
+  let execCalls = 0;
+
+  const mockStdinReader = async (_prompt?: string) => {
+    readLineCalls++;
+    return "y";
+  };
+
+  const mockTranslate = async () => {
+    return JSON.stringify({
+      command: "rm",
+      args: ["-rf", "/tmp/x"],
+      explanation: "Remove directory",
+    });
+  };
+
+  const mockExec = async () => {
+    execCalls++;
+    return { stdout: "", stderr: "", returncode: 0, error: null };
+  };
+
+  const code = await runCopilot({
+    query: "remove that directory",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: mockStdinReader,
+    translateFn: mockTranslate,
+    execFn: mockExec,
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => ({
+      provider: "openai",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+  });
+
+  expect(code).toBe(0);
+  expect(readLineCalls).toBe(0);
+  expect(execCalls).toBe(0);
+
+  // 🚨 banner + 独立原因行(danger reasonKey 渲染)+ 命令行 + 手动提示
+  const allStdout = stdoutChunks.join("");
+  expect(allStdout).toContain("🚨");
+  expect(allStdout).toContain("Reason:");
+  expect(allStdout).toContain("Recursive delete, possibly irreversible");
+  expect(allStdout).toContain("→ rm -rf /tmp/x");
+  expect(allStdout).toContain("Please run this command in your terminal");
+  expect(allStdout).not.toContain("Proceed?");
+
+  const rejectAudit = auditLogs.find((l) => l.tool === "copilot_reject");
+  expect(rejectAudit).toBeDefined();
+  expect(rejectAudit?.outcome).toBe("denied");
+  expect(rejectAudit?.args.risk).toBe("danger");
+  expect(rejectAudit?.args.reason).toBe("risk.pattern.rm_rf");
+
+  // 展示路径在 translate 审计前分流:return 前无 copilot_confirm/copilot_cancel
+  expect(auditLogs.some((l) => l.tool === "copilot_confirm" || l.tool === "copilot_cancel")).toBe(false);
+});
+
+Deno.test("Copilot Main - L0 translate audit carries risk_level='safe'; display path reject carries tiered risk", async () => {
+  // risk_level 审计字段(pivot 决策 11):L0 的 copilot_translate 与
+  // 两条 confirm 路径(auto / y-n)均携带 risk_level;展示路径的档位
+  // 由 copilot_reject 的 risk 字段承载(前两个用例已钉)。
+  setup();
+  const mockTranslate = async () => {
+    return JSON.stringify({
+      command: "uptime",
+      args: [],
+      explanation: "Show uptime",
+    });
+  };
+
+  const mockExec = async () => ({
+    stdout: " 14:00 up 1 day\n",
+    stderr: "",
+    returncode: 0,
+    error: null,
+  });
+
+  // 场景 A:非 TTY 白名单只读诊断直接运行
+  const codeA = await runCopilot({
+    query: "show uptime",
+    isTerminal: false,
+    yes: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    translateFn: mockTranslate,
+    execFn: mockExec,
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => ({
+      provider: "openai",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+  });
+
+  expect(codeA).toBe(0);
+  const translateA = auditLogs.find((l) => l.tool === "copilot_translate");
+  expect(translateA).toBeDefined();
+  expect(translateA?.args.risk_level).toBe("safe");
+  expect(translateA?.args.round).toBe(0);
+  const confirmA = auditLogs.find((l) => l.tool === "copilot_confirm");
+  expect(confirmA?.args.risk_level).toBe("safe");
+  expect(confirmA?.args.auto).toBe(true);
+
+  setup();
+
+  // 场景 B:TTY y/n 确认 "y" 后执行
+  const mockStdinReader = async (_prompt?: string) => "y";
+  const codeB = await runCopilot({
+    query: "show uptime",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: mockStdinReader,
+    translateFn: mockTranslate,
+    execFn: mockExec,
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => ({
+      provider: "openai",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+  });
+
+  expect(codeB).toBe(0);
+  const translateB = auditLogs.find((l) => l.tool === "copilot_translate");
+  expect(translateB?.args.risk_level).toBe("safe");
+  const confirmB = auditLogs.find((l) => l.tool === "copilot_confirm");
+  expect(confirmB?.args.risk_level).toBe("safe");
+  expect(confirmB?.args.auto).toBe(false);
 });
 
 Deno.test("Copilot Main - defaultReadStdinAll reads piped input via Deno.stdin.readable (Deno 2)", async () => {

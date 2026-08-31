@@ -37,12 +37,19 @@
       "/usr/local/bin/daedalus-shell"
     ]
   },
+  "i18n": [
+    "en_US",
+    "zh_CN"
+  ],
   "checksums": {
     "audit.ts": "sha256:48bd7f6791b56ef0d438cd04a01fdff48e3b68e1d472cf4b0c582ad796c378ba",
-    "daedalus.plugin.json": "sha256:0dd0e35825ca0ae28c84cccd4a5c82ac25ac28db2f717046781b4dedb6780533",
+    "daedalus.plugin.json": "sha256:4d9dd380ae231990a0744fb9aa64d1fbcd25bb125013ce18bfd30fb2147f51da",
     "exec.ts": "sha256:57d955a2911be2cee64ce64a0b03b6f3a200ac43f8d86421b8f0fb0ae7d6a43c",
-    "llm.ts": "sha256:be6bca5d93c11ebafbcc3b50d865f82b9e207f283da5bb666fe251bd6e6fc89f",
-    "main.ts": "sha256:ff888b00c4a06b3e15bfd864b5e7b7f496e061310c2e6620a5ebd0d9d4fb0570",
-    "policy.ts": "sha256:f0deb0376de3b214f4b944798237ed76ab66c90b2814935195a07fead5748e15"
+    "i18n.ts": "sha256:f4733b30d083dc2629afb0a615843eae0f745388a36d6b86f67065dd17c04862",
+    "i18n/en_US.json": "sha256:75343fb5770864dd58e79154a3e3f43ab42e0726e5d0e6ad794db1340e12190c",
+    "i18n/zh_CN.json": "sha256:8f2a1cdcfbdb6d8d87782cb6fb60d89d8ebda4b55584132f5d3e1d23b95fcaca",
+    "llm.ts": "sha256:9aa6d48bc93ec90093ec900bc53116f3a563536522caf889c0d9c55936792a10",
+    "main.ts": "sha256:928d2b53951c515fba4764b6ff79029a597ee9b07a052ddc6307b8dbc082c009",
+    "policy.ts": "sha256:81ec52d9822520ba6a7f622112cc2b78ca62478b12b6e7225853dfdf6156b34c"
   }
 }
