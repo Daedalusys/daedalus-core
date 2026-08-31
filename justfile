@@ -55,6 +55,93 @@ plugin-pack:
     install -Dm0755 "bin/daedalus-shell" "$root/daedalus/files/system/usr/local/bin/daedalus-shell"
     echo "plugin-pack: 4 个能力插件已安装 -> daedalus/files/system/opt/daedalus/plugins/; host/audit/shell 已安装 -> daedalus/files/system/usr/local/bin/"
 
+# 开发态本地安装(计划 checkbox 1):把 dev 产物装进用户前缀,免镜像即可使用全套 CLI。
+# 用法: just dev-install [前缀] (亦兼容 --prefix=X 形式);默认前缀 = $HOME/.local。
+# 产物: <prefix>/bin/{daedalus-host,daedalus-audit,daedalus-shell}
+#       <prefix>/share/daedalus/plugins/{5 个插件安装态} (消费 daedalus/core/bin/*.plugin.zip,不重新打包)
+dev-install prefix='':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # 本机 just(1.58)不把位置参数透传为 $1,经 {{prefix}} 插值取参;兼容 --prefix=X 旗标形式
+    prefix="{{prefix}}"
+    case "${prefix}" in
+        --prefix=*) prefix="${prefix#--prefix=}" ;;
+    esac
+    # 默认前缀 = $HOME/.local
+    if [ -z "${prefix}" ]; then
+        prefix="${HOME}/.local"
+    fi
+    root="$PWD"
+    plugins_root="${prefix}/share/daedalus/plugins"
+    # sudo 判定:受保护前缀(/opt、/usr/local、/usr)且非 root 时前缀安装命令;
+    # 非交互环境 sudo 不可用会立即显式失败,绝不静默半装。
+    sudo=""
+    case "${prefix}" in
+        /opt|/opt/*|/usr/local|/usr/local/*|/usr|/usr/*)
+            if [ "$(id -u)" -ne 0 ]; then
+                sudo="sudo"
+            fi
+            ;;
+    esac
+    # 建目录:<prefix>/bin 与 <prefix>/share/daedalus
+    ${sudo} install -d "${prefix}/bin" "${prefix}/share/daedalus"
+    # 复用 plan-1 构建(与 go-build/plugin-pack 逐字同旗标;不发明新构建形态)
+    cd "${root}/daedalus/core"
+    CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
+    # 三个 CLI 二进制进 <prefix>/bin(copilot audit.ts/exec.ts 与 host 的生产同名路径)
+    ${sudo} install -Dm0755 bin/daedalus-host "${prefix}/bin/daedalus-host"
+    ${sudo} install -Dm0755 bin/daedalus-audit "${prefix}/bin/daedalus-audit"
+    ${sudo} install -Dm0755 bin/daedalus-shell "${prefix}/bin/daedalus-shell"
+    # 逐插件解压安装态;zip 缺失只 WARN 跳过,不让整个 recipe 失败
+    for id in daedalus.fs daedalus.shell daedalus.pkg daedalus.sysinfo daedalus.copilot; do
+        zip="bin/${id}.plugin.zip"
+        dest="${plugins_root}/${id}"
+        if [ ! -f "${zip}" ]; then
+            echo "WARN: ${zip} 不存在,跳过 ${id}(先跑 just plugin-pack / just copilot-plugin 再重试)" >&2
+            continue
+        fi
+        ${sudo} install -d "${dest}"
+        # 解压器要求空目录(O_EXCL 不覆盖既有文件);本机权限面禁 rm,一律 find -delete 清空后再装
+        if [ -n "${sudo}" ]; then
+            ${sudo} find "${dest}" -mindepth 1 -delete
+        else
+            find "${dest}" -mindepth 1 -delete
+        fi
+        ${sudo} ./bin/daedalus-plugin-pack -verify "${zip}" --keep "${dest}"
+    done
+    # 收尾:打印可复制的导出行与冒烟命令
+    echo ""
+    echo "dev-install 完成: 前缀=${prefix}"
+    echo "请复制以下环境变量与命令:"
+    echo "  export DAEDALUS_PLUGIN_DIR=${plugins_root}"
+    echo "  export PATH=${prefix}/bin:\$PATH"
+    echo "  ${prefix}/bin/daedalus-host -dir ${plugins_root} list"
+
+# 列出开发态已安装插件(计划 checkbox 1 配套):优先用 <prefix>/bin 的 host,
+# 不可执行则回退 PATH 中的 daedalus-host;统一 -dir 指向前缀插件目录。
+host-list prefix='':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # 本机 just(1.58)不把位置参数透传为 $1,经 {{prefix}} 插值取参;兼容 --prefix=X 旗标形式
+    prefix="{{prefix}}"
+    case "${prefix}" in
+        --prefix=*) prefix="${prefix#--prefix=}" ;;
+    esac
+    if [ -z "${prefix}" ]; then
+        prefix="${HOME}/.local"
+    fi
+    plugins_dir="${prefix}/share/daedalus/plugins"
+    host="${prefix}/bin/daedalus-host"
+    if [ -x "${host}" ]; then
+        exec "${host}" -dir "${plugins_dir}" list
+    fi
+    if command -v daedalus-host >/dev/null 2>&1; then
+        echo "提示: ${host} 不可执行,回退 PATH 中的 $(command -v daedalus-host)" >&2
+        exec daedalus-host -dir "${plugins_dir}" list
+    fi
+    echo "错误: 找不到 daedalus-host(既无 ${host},也不在 PATH);请先跑 just dev-install" >&2
+    exit 1
+
 # 构建全部 Go 静态二进制到 daedalus/core/bin/(计划 todo 15;对齐 core/Makefile 的 build 语义:
 # CGO_ENABLED=0 纯静态、GOTOOLCHAIN=local 禁用工具链自动下载、-trimpath 可复现路径)
 go-build:

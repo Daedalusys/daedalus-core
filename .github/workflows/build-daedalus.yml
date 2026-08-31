@@ -11,8 +11,11 @@ on:
       - 'sync-daedalus.sh'
       - '.github/workflows/build-daedalus.yml'
   push:
-    branches:
-      - 'main'
+    # 仅在推送 v* 标签时构建并发布;普通 main push/PR 只走 build+verify 不推 ghcr。
+    # 发版流程:git tag v0.2.0 && git push --tags → 触发完整构建+三 tag 推送。
+    # KVM 临时更新(不正式发版)用 workflow_dispatch 并勾选 PUSH=true。
+    tags:
+      - 'v*'
     paths:
       - 'base_image/**'
       - 'daedalus/**'
@@ -28,6 +31,11 @@ on:
         required: false
         default: 'kde'
         type: string
+      PUSH:
+        description: '推送到 ghcr.io(打 :latest/:<sha>/:upstream 三个 tag);默认 false,仅构建+验证不推'
+        required: false
+        default: 'false'
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
@@ -120,8 +128,11 @@ jobs:
           echo "Daedalus bootc container verification completed successfully."
 
       # ---- 发布: OCI 镜像 → ghcr.io (bootc 原生分发形态; 公开包免费无 2GiB 硬限) ----
+      # 仅在 push 标签 (v*) 或 workflow_dispatch.PUSH=true 时执行。
+      # PR 与普通 main push 走到这里直接 skip,不消耗 ghcr 存储/带宽/配额。
       - name: Log in to ghcr.io
         # GITHUB_TOKEN 自动注入, 无需手动 secret
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true') }}
         uses: redhat-actions/podman-login@v1
         with:
           registry: ghcr.io
@@ -129,6 +140,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push OCI image to ghcr.io
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true') }}
         shell: bash
         env:
           OWNER_LOWER: ${{ github.repository_owner }}
@@ -139,7 +151,11 @@ jobs:
           podman tag localhost/daedalus-os:latest "${IMAGE}:${{ github.sha }}"
           podman push "${IMAGE}:latest"
           podman push "${IMAGE}:${{ github.sha }}"
-          echo "Pushed: ${IMAGE}:latest (+ sha tag)"
+          # :upstream 是 bootc 原地升级 (KVM guest 上 `bootc upgrade ghcr.io/<owner>/daedalus-os:upstream`)
+          # 的稳定别名, 与 :latest/:sha 共存, 指向同一镜像内容。
+          podman tag localhost/daedalus-os:latest "${IMAGE}:upstream"
+          podman push "${IMAGE}:upstream"
+          echo "Pushed: ${IMAGE}:latest (+ sha tag, + upstream tag)"
 
       # ---- 发布: qcow2 → artifact (本地 KVM 测试用; bootc-image-builder 产出) ----
       # 限额说明: GitHub Release 单文件硬限 2GiB, KDE qcow2 可能超; artifact 上限 10GB 更稳。
