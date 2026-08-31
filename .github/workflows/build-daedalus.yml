@@ -8,7 +8,7 @@ on:
       - 'Containerfile*'
       - 'Dockerfile*'
       - 'justfile'
-      - 'sync-daedalus.sh'
+      - 'scripts/sync-daedalus.sh'
       - '.github/workflows/build-daedalus.yml'
   push:
     # 仅在推送 v* 标签时构建并发布;普通 main push/PR 只走 build+verify 不推 ghcr。
@@ -22,7 +22,7 @@ on:
       - 'Containerfile*'
       - 'Dockerfile*'
       - 'justfile'
-      - 'sync-daedalus.sh'
+      - 'scripts/sync-daedalus.sh'
       - '.github/workflows/build-daedalus.yml'
   workflow_dispatch:
     inputs:

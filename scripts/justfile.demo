@@ -1,0 +1,99 @@
+# Daedalus demo/dev 侧 recipe —— 由根 justfile 通过
+# `import "scripts/justfile.demo"` 引入;just 的 import 会让本文件的
+# recipe 与根 justfile 的 recipe 合并到同一命名空间,`just --list`
+# 自动发现,无需在根 justfile 里逐个转发。
+# 本文件与 scripts/copilot-prep.sh 一样不是独立可执行脚本(0644 即可)。
+# 分工:本文件收 demo/dev 侧 recipe(go-build-demo / dev-copilot /
+# cli-copilot);生产侧(sync/build/plugin-pack/verify-image 等)留在根
+# justfile;CI/脚本用 dev-copilot(query 必填),人用 cli-copilot(无参进 REPL)。
+# i18n 工具在 justfile.demo(被根 justfile `import`);开发者用 `i18n-sync-autofix`
+# 改 manifest,CI 用 `i18n-sync` 严模式守门。
+
+# 构建 demo 开发态 Go 二进制(计划 checkbox: demo 路径重写)。
+# 本 recipe 由 scripts/justfile.demo 提供,通过 import 暴露给主 justfile。
+# 走 -tags demo 触发 daedalus-host 包里的 paths_demo.go,从仓库根的
+# daedalus-dev.toml (或 $DAEDALUS_DEV_PATHS 指向的文件) 读 dev 路径配置,
+# 把 /opt/daedalus 与 /usr/local/bin 在 entrypoint 字符串里重写到 dev 树。
+# 与默认 go-build 产物同名覆盖,切换 prod/demo 二者取其一,默认即 prod。
+go-build-demo:
+    cd daedalus/core && CGO_ENABLED=0 GOTOOLCHAIN=local go build -tags demo -trimpath -o bin/ ./cmd/...
+
+# 一键 demo 跑 copilot CLI(计划 checkbox):rebuild demo 二进制 → 安装
+# audit/shell 辅助二进制到镜像布局位 → 解包 5 个插件到临时目录 → 调
+# daedalus-host run-plugin 拼 argv (demo 重写镜像路径) → eval 执行。
+# 无需镜像;无需 LLM (LLM 走 $DAEDALUS_LLM_API_KEY 才有翻译;无 key 加
+# --dry-run 仅看翻译结果)。
+# 语义保留:query 必填,面向 CI/脚本;无参走用法提示后 exit 1。
+# 用法: just dev-copilot "show os version"
+#       just dev-copilot --dry-run "list files in /home"
+#       just dev-copilot -i "check disk space"
+dev-copilot *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # just 的 *args 是插值,不是 bash 位置参数;用 {{args}} 取值并嵌进 bash。
+    if [ -z "{{args}}" ]; then
+        echo "[dev-copilot] 用法: just dev-copilot \"<自然语言指令>\" [额外 deno 旗标...]" >&2
+        echo "[dev-copilot]   例: just dev-copilot \"show os version\"" >&2
+        echo "[dev-copilot]   例: just dev-copilot --dry-run \"list files\"" >&2
+        echo "[dev-copilot]   例: just dev-copilot -i \"check disk\"" >&2
+        echo "[dev-copilot] 提示: 无参数进 REPL 请改用 cli-copilot(CI/脚本用 dev-copilot,人用 cli-copilot)" >&2
+        exit 1
+    fi
+    # 共享准备:重建 demo 二进制 + 安装布局位 + 解包插件 + export 环境变量。
+    source scripts/copilot-prep.sh
+    prep_copilot
+    argv=$(daedalus/core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
+           run-plugin daedalus.copilot -- {{args}})
+    # 镜像 wrapper(`/usr/local/bin/daedalus`)用 `eval "set -- $argv"` 展开
+    # $HOME;dev 模式不经 wrapper,这里手工把字面 $HOME 替换为 HOME
+    # 环境变量值。deno --allow-write=$HOME/.local/share/daedalus 不展开
+    # $HOME(只接受字面路径),不替换则 deno 看不到任何与
+    # /home/<user>/.local/share/daedalus 匹配的 allow 规则,audit.ts
+    # 写日志时会弹 `Deno requests write access` 权限窗。
+    argv=${argv//\$HOME/$HOME}
+    echo "[dev-copilot] demo argv: $argv" >&2
+    eval "set -- $argv"
+    "$@"
+
+# 日常终端入口的 copilot(新增):与 dev-copilot 共用 scripts/copilot-prep.sh
+# 的 prep_copilot(重建 demo 二进制 → 安装布局位 → 解包插件 → export env)。
+#   - 无参数:不传 `--` 尾巴,host 拼出 `run-plugin daedalus.copilot`,
+#     copilot main.ts 拿到空 query 自动进 REPL;
+#   - 有参数:传 `-- {{args}}` 给 host,与 dev-copilot 完全一致,跑一次性查询。
+# 与 dev-copilot 的分工:CI/脚本用 dev-copilot(query 必填,无参报用法),
+# 人用 cli-copilot(无参进 REPL,日常终端入口)。
+# 用法: just cli-copilot                 # 进 REPL
+#       just cli-copilot "show os version"
+#       just cli-copilot -V              # 版本
+#       just cli-copilot --dry-run "list files"
+cli-copilot *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # 共享准备:重建 demo 二进制 + 安装布局位 + 解包插件 + export 环境变量。
+    source scripts/copilot-prep.sh
+    prep_copilot
+    # 无参时不带 `--` 尾巴 → 空 query → copilot main.ts 进 REPL;有参则透传。
+    if [ -z "{{args}}" ]; then
+        argv=$(daedalus/core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
+               run-plugin daedalus.copilot)
+    else
+        argv=$(daedalus/core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
+               run-plugin daedalus.copilot -- {{args}})
+    fi
+    # 镜像 wrapper(`/usr/local/bin/daedalus`)用 `eval "set -- $argv"` 展开
+    # $HOME;dev 模式不经 wrapper,这里手工把字面 $HOME 替换为 HOME
+    # 环境变量值。deno --allow-write=$HOME/.local/share/daedalus 不展开
+    # $HOME,dev 模式会让 audit.ts 写日志时弹 `Deno requests write access`
+    # 权限窗;展开后命中 allow list 静默通过。
+    argv=${argv//\$HOME/$HOME}
+    echo "[cli-copilot] demo argv: $argv" >&2
+    eval "set -- $argv"
+    "$@"
+
+# i18n 双向同步:默认严格,声明↔文件不一致即 exit 1。
+# 用法: just i18n-sync [plugin-dir]            严模式
+#       just i18n-sync-autofix [plugin-dir]    以 i18n/ 目录为准改写 manifest
+i18n-sync plugin-dir='.':
+    ./scripts/plugin-i18n-sync.sh "{{plugin-dir}}"
+i18n-sync-autofix plugin-dir='.':
+    ./scripts/plugin-i18n-sync.sh --autofix "{{plugin-dir}}"

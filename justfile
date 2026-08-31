@@ -1,10 +1,15 @@
+# demo/dev 侧 recipe(go-build-demo / dev-copilot / cli-copilot)拆分到
+# scripts/justfile.demo,经 just import 合入同一命名空间,`just --list`
+# 自动发现;import 必须出现在所有 recipe 之前。
+import "scripts/justfile.demo"
+
 # Default recipe: list available recipes
 default:
     @just --list
 
 # Sync Daedalus-owned files into base_image tree
 sync:
-    ./sync-daedalus.sh
+    ./scripts/sync-daedalus.sh
 
 # Build Daedalus container image
 build: sync
@@ -27,7 +32,7 @@ plugin-pack:
     #   2) 同步二进制到插件源目录 daedalus/plugin/<cap>/bin/(源目录布局 = manifest + bin/);
     #   3) plugin-pack -in/-out 打 zip:Pack 注入逐条目 sha256 checksums + manifest 规范化自摘要;
     #   4) plugin-pack -verify --keep 把 zip 解压到镜像树安装态目录——解压即完整校验,
-    #      任一摘要不符拒绝安装;安装态经 ./sync-daedalus.sh 同步为镜像 /opt/daedalus/plugins。
+    #      任一摘要不符拒绝安装;安装态经 ./scripts/sync-daedalus.sh 同步为镜像 /opt/daedalus/plugins。
     root="$PWD"
     cd "$root/daedalus/core"
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
@@ -166,7 +171,7 @@ test:
 # 产物: daedalus/core/bin/daedalus.copilot.plugin.zip(忽略)
 #       daedalus/files/system/opt/daedalus/plugins/daedalus.copilot/(入库,sync 进镜像)
 copilot-plugin:
-    ./pack-copilot-plugin.sh
+    ./scripts/pack-copilot-plugin.sh
 
 # Build bootable ISO
 iso:

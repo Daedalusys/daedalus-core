@@ -5,15 +5,18 @@
 **Branch:** (detached HEAD)
 
 ## OVERVIEW
-Immutable, atomic, AI-native desktop OS on AlmaLinux Bootc (KDE variant). Adds a Model Context Protocol (MCP) capability-middleware layer with three security boundaries (model/capability, enforcement/sandboxing, evidence/verification), tamper-evident audit logging, systemd credential isolation, and atomic rollback. OS capability servers (fs/shell/pkg/sysinfo), the hash-chained audit CLI, the plugin host (`daedalus-host`) and the plugin packer (`daedalus-plugin-pack`) are **Go static binaries** (single implementation; the former Python/Deno dual implementations are removed). A VSIX-like `daedalus-plugin` format (manifest `daedalus.plugin.json` + zip + sha256 checksums) makes every server and the Deno-based `daedalus` AI Copilot CLI an installable, discoverable, verifiable plugin. Security policy lives in one `policy.toml` single source of truth consumed at runtime by the Go servers. Stack: bootc/OSTree + systemd units + Go static binaries + Deno copilot plugin + Just orchestration.
+Immutable, atomic, AI-native desktop OS on AlmaLinux Bootc (KDE variant). Adds a Model Context Protocol (MCP) capability-middleware layer with three security boundaries (model/capability, enforcement/sandboxing, evidence/verification), tamper-evident audit logging, systemd credential isolation, and atomic rollback. OS capability servers (fs/shell/pkg/sysinfo), the hash-chained audit CLI, the plugin host (`daedalus-host`) and the plugin packer (`daedalus-plugin-pack`) are **Go static binaries** (single implementation; the former Python/Deno dual implementations are removed). A VSIX-like `daedalus-plugin` format (manifest `daedalus.plugin.json` + zip + sha256 checksums) makes every server and the Deno-based `daedalus` command advisor CLI (命令顾问 —— 非 agent: 生成命令 + L0/L1/L2 风险标注, 仅 L0 可经沙箱执行, 其余仅展示由用户手动执行) an installable, discoverable, verifiable plugin. Security policy lives in one `policy.toml` single source of truth consumed at runtime by the Go servers. Stack: bootc/OSTree + systemd units + Go static binaries + Deno copilot plugin + Just orchestration.
 
 ## STRUCTURE
 ```
 Daedalus/
 ├── Containerfile            # ACTIVE root build recipe (2-stage, bootc lint; COPY 白名单 = base_image/files/{system,scripts} + *.pub)
-├── justfile                 # Unified orchestrator (sync/build/test/go-build/go-test/plugin-pack/copilot-plugin/verify-image/iso/qemu)
-├── sync-daedalus.sh         # Syncs tracked daedalus/ source tree into base_image vendor tree (targeted stale-delete on systemd leg; --delete-excluded on plugin leg)
-├── pack-copilot-plugin.sh   # Copilot Pack→Verify 安装态生成 (源 = daedalus/plugin/copilot/)
+├── justfile                 # Unified orchestrator (sync/build/test/go-build/go-test/plugin-pack/copilot-plugin/verify-image/iso/qemu; import scripts/justfile.demo)
+├── scripts/                 # 仓库级辅助脚本 (镜像外; 与 daedalus/files/scripts/ 镜像内构建步骤不同作用域)
+│   ├── sync-daedalus.sh         # Syncs tracked daedalus/ source tree into base_image vendor tree (targeted stale-delete on systemd leg; --delete-excluded on plugin leg)
+│   ├── pack-copilot-plugin.sh   # Copilot Pack→Verify 安装态生成 (源 = daedalus/plugin/copilot/)
+│   ├── justfile.demo            # demo/dev 侧 recipe (go-build-demo/dev-copilot/cli-copilot), 经根 justfile `import` 合入
+│   └── copilot-prep.sh          # copilot 共享准备函数 (被 justfile.demo source 后调 prep_copilot; 非独立可执行)
 ├── daedalus/                    # ★ TRACKED SOURCE ROOT for all Daedalus-owned files (三层结构, 决策 23/24)
 │   ├── core/                #   代码逻辑层: Go 模块根 (module github.com/daedalus-os/daedalus/core; 镜像外, 仅 go.mod + go.sum 入库, vendor/ 与 bin/ 均不入库)
 │   │   ├── cmd/             #     daedalus-{fs,shell,pkg,sysinfo,audit,host,plugin-pack,smoke} 二进制入口
@@ -28,7 +31,7 @@ Daedalus/
 │           ├── usr/local/bin/            # daedalus CLI wrapper + daedalus-host/audit/shell 二进制 (task 21 接线)
 │           └── etc/credstore/            # systemd LoadCredential placeholders
 ├── base_image/              # VENDORED AlmaLinux/atomic-desktop fork (gitignored, own .git)
-│   └── files/               # Target for sync-daedalus.sh before container build (base_image/plugin/ 在 COPY 白名单之外)
+│   └── files/               # Target for scripts/sync-daedalus.sh before container build (base_image/plugin/ 在 COPY 白名单之外)
 ├── examples/                # mcp_client_config.json (4 Go 能力服务器条目, 指向插件内二进制)
 ├── tests/deno/              # 镜像外 Deno 测试: copilot 5 组 .test.ts + shellpolicy_contract.test.ts (Go↔Deno 跨语言契约)
 └── .github/workflows/       # build-daedalus.yml (runs `just build` from repo root + go-test/test 门 + 镜像零残留断言)
@@ -69,7 +72,7 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 | `audit.ts` | TS module | `daedalus/plugin/copilot/audit.ts` | Hash-chained audit logging via daedalus-audit Go CLI |
 | `llm.ts` | TS module | `daedalus/plugin/copilot/llm.ts` | OpenAI & Anthropic cloud LLM adapters with revision support |
 | `exec.ts` | TS module | `daedalus/plugin/copilot/exec.ts` | JSON-RPC bridge spawning daedalus-shell Go MCP server with 40s watchdog |
-| `main.ts` | TS entry | `daedalus/plugin/copilot/main.ts` | Copilot auto-execute default, opt-in interactive loop, edit/revise, REPL |
+| `main.ts` | TS entry | `daedalus/plugin/copilot/main.ts` | Command advisor (命令顾问) flow: L0 y/n sandboxed execution, L1/L2 display-only + manual-execution hint, opt-in interactive loop, edit/revise, REPL |
 | `76-daedalus-plugin-gen.sh` | build script | `daedalus/files/scripts/76-daedalus-plugin-gen.sh` | 构建期从 manifest+policy.toml 渲染/自校验 systemd ExecStart + tools 交叉核对 |
 | `75-daedalus-copilot.sh` | build script | `daedalus/files/scripts/75-daedalus-copilot.sh` | Sets directory and executable permissions for Copilot |
 
@@ -149,8 +152,8 @@ Daedalus implements OS capability servers adhering to the Model Context Protocol
 - **Tools**: `os_release`, `hardware_info`, `network_status`.
 
 ### 5. Daedalus Copilot CLI (`daedalus` / plugin `daedalus.copilot`, runtime=deno)
-- **Purpose**: Natural language terminal companion that translates user intent into allowlisted system commands.
-- **Auto-Execute Default**: Translated commands execute immediately after schema validation and re-validation against the 15-command allowlist plus path rules, with no y/n prompt. Human-in-the-loop confirmation is opt-in via `-i/--interactive`, which displays the proposal and prompts for `[y]es / [e]dit / [n]o (feedback) / [q]uit`. `-v/--verbose` shows the translated command before executing, `--dry-run` shows without executing, `-y/--yes` is a backward-compat alias for the default, and `-V` prints the version. Every decision still lands in the hash-chained audit log.
+- **Purpose**: Command advisor (命令顾问, 非 agent): translates user intent into a proposed shell command with a risk label (L0 safe / L1 cautious / L2 danger, judged by a local static classifier — the LLM never self-labels risk). L0 (safe + within the 15-command allowlist) may run in the `daedalus-shell` sandbox after y/n confirmation; L1/L2 are display-only with a manual-execution hint. Out-of-allowlist commands are never auto-executed.
+- **Risk-Tiered Flow**: Proposals are validated against the schema and re-checked against the 15-command allowlist plus path rules before execution. L0 asks y/n then runs sandboxed; L1/L2 never enter the execution channel. `-i/--interactive` displays the proposal and prompts for `[y]es / [e]dit / [n]o (feedback) / [q]uit`. `-v/--verbose` shows the translated command, `--dry-run` shows without executing, `-y/--yes` is a backward-compat alias, and `-V` prints the version. Every decision still lands in the hash-chained audit log.
 - **Zero Raw Execution**: The Copilot process never executes shell commands directly. It spawns the sandboxed `daedalus-shell` Go MCP server over stdio JSON-RPC.
 - **Plugin Host Launch**: Copilot is installed as plugin `daedalus.copilot` (runtime=deno) under `/opt/daedalus/plugins/`; source lives in `daedalus/plugin/copilot/`. The `/usr/local/bin/daedalus` wrapper asks `daedalus-host run-plugin daedalus.copilot` to construct (not spawn) the launch command from the manifest, expands `$HOME` placeholders, then execs it:
   ```sh
@@ -235,11 +238,11 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
   - **Go (core)**: `daedalus/core/cmd/daedalus-{fs,shell,pkg,sysinfo,audit,host,plugin-pack,smoke}/` + `daedalus/core/internal/{pathguard,shellpolicy,pkgquery,sysinfo,policy,audit,plugin,version}/`
   - **TS / Deno (copilot 源码)**: `daedalus/plugin/copilot/{policy,audit,exec,llm,main}.ts` + `daedalus.plugin.json`
   - **TS 测试 (镜像外)**: `tests/deno/{policy,audit,exec,llm,main}.test.ts` + `tests/deno/shellpolicy_contract.test.ts`
-  - **Shell scripts**: `daedalus/files/scripts/{60-ai-middleware,65-ai-safety,70-daedalus-mcp-servers,75-daedalus-copilot,76-daedalus-plugin-gen}.sh`, `usr/local/bin/daedalus` wrapper, `sync-daedalus.sh`, `pack-copilot-plugin.sh`
+  - **Shell scripts**: `daedalus/files/scripts/{60-ai-middleware,65-ai-safety,70-daedalus-mcp-servers,75-daedalus-copilot,76-daedalus-plugin-gen}.sh`, `usr/local/bin/daedalus` wrapper, `scripts/sync-daedalus.sh`, `scripts/pack-copilot-plugin.sh`, `scripts/justfile.demo`, `scripts/copilot-prep.sh`
   - **systemd units**: `daedalus-audit.service`, `daedalus-env.service`, `daedalus-{fs,shell,pkg,sysinfo}.service`, and each capability's `.service.d/{landlock,credentials}.conf` drop-ins
   - **Policy / manifests**: `daedalus/files/system/opt/daedalus/shared/policy.toml`, `daedalus/plugin/*/daedalus.plugin.json`
 - **三层结构 (决策 23/24)**: `daedalus/core/` = Go 代码逻辑层 (镜像外); `daedalus/plugin/` = 官方预置插件源码侧定义; `daedalus/files/` = 镜像构建落位 (rootfs 镜像树 + 构建脚本)。镜像内 `opt/daedalus/plugins/` 是**构建产物 (安装态)**, `daedalus/plugin/` 是**源码侧定义**——两者绝不同步混用。
-- **Vendor tree = `base_image/`**: Vendored upstream fork (gitignored). Updated from `daedalus/files/` (及 `daedalus/plugin/` → `base_image/plugin/`, 在 COPY 白名单外) via `sync-daedalus.sh` before container builds.
+- **Vendor tree = `base_image/`**: Vendored upstream fork (gitignored). Updated from `daedalus/files/` (及 `daedalus/plugin/` → `base_image/plugin/`, 在 COPY 白名单外) via `scripts/sync-daedalus.sh` before container builds.
 - **Go 依赖策略**: 仅入库 `daedalus/core/go.mod` + `go.sum`(版本与完整性锁);`daedalus/core/vendor/` 不入库,构建期 `go build` 自动从 module proxy 下载到 `GOMODCACHE`,首次构建需联网;`make verify` 仍可执行 `go mod verify` 校验 go.sum 完整性。
 - **镜像安装态策略**: `daedalus/files/system/opt/daedalus/plugins/daedalus.*/bin/` 与 `daedalus/files/system/usr/local/bin/daedalus-{audit,host,shell}` 是 `just plugin-pack` 的 Go 编译产物副本,均**不入库**(同 `daedalus/core/bin/` 性质);开发者 clone 后必须 `just plugin-pack` 才能 build,与 `just sync` 一起完成 vendor 树重建。
 - **Justfile workflow**: Use `just sync`, `just build`, `just test`, `just plugin-pack`, `just verify-image`, `just iso`, `just qemu` for all lifecycle actions.
@@ -247,6 +250,8 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
 - **Go 唯一实现 (取代旧 Python+Deno parity 条款)**: fs/shell/pkg/sysinfo 与审计仅有 `daedalus/core` 的 Go 实现, 不得恢复 Python/Deno 服务器。Copilot 的 `policy.ts` 内联 15 命令/9 前缀/5 blocked **冻结副本**, 与 `internal/shellpolicy` 存在**双向同步义务** (改一侧必改另一侧); 该契约由 `tests/deno/shellpolicy_contract.test.ts` (ALLOW_COMMANDS REPLACE 语义 Go↔Deno 一致) 与 Go 侧钉子测试共同钉住。policy.toml ↔ `policy.Default()` ↔ shellpolicy/pathguard 常量的三点防漂移链见 `daedalus/core/internal/policy` 测试。
 - **测试布局**: Deno 测试住仓库根 `tests/deno/` (镜像外), 相对导入指向 `daedalus/plugin/copilot/` 源码; Go 测试随包住 `daedalus/core/`。镜像 rootfs 内零测试文件。
 - **Single Containerfile**: `Containerfile` at repository root is the sole build entry point. All `*.daedalus` aliases have been removed.
+- **i18n 多语言(强制)**:所有插件的 UI 字符串必须经 `i18n.ts` 的 `t(key, ...args)` 走,不在源码里硬编码。locale 文件在 `<plugin>/i18n/<locale>.json`(POSIX 下划线命名,`en_US` / `zh_CN` / `ja_JP` / `ko_KR` 等);manifest 声明 `"i18n": ["en_US", "zh_CN"]` 数组形式,en_US 必定位兜底。声明 ↔ 实物用 `scripts/plugin-i18n-sync.sh` 双向校验,CI 走严模式(exit 1 拒漂移),开发者加新 locale 走 `--autofix` 自动改写 manifest。locale 探测:`LC_ALL` > `LANG` > `en_US`,支持精确匹配 → 语言级回退(精确 `zh_CN` → 语言级 `zh` → 兜底 `en_US`)。命名:`<key>` 风格 + `{0}` `{1}` printf 占位符。Go 侧 MCP server 的字符串翻译在 P1 单独做(共享同一份 JSON 文件,经 `embed.FS` 嵌入二进制)。
+- **本仓库边界**:本仓库装的是 daedalus 运行时(`daedalus/core/` Go 静态二进制) + 官方自带插件(`daedalus/plugin/` 的 5 个) + 这些官方插件的运维工具(`scripts/plugin-i18n-sync.sh` 等)。**插件开发脚手架**(生成新插件骨架、`daedalus-plugin-scaffold new` 之类)属另一个仓库,本仓库不实现;**外部作者的插件**各自维护在各自仓库,通过 `daedalus-host` 加载(后续 plan)。
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - **NEVER** `shell=True` / `bash -c` / `sh -c` in subprocess.
@@ -258,8 +263,8 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
 - **NEVER** let `daedalus-host` spawn or become the parent process of any MCP server (决策 16): the host only installs/discovers/verifies and *prints* the launch command; systemd executes it. Never add exec/spawn to `run-plugin`/`render-unit`.
 - **NEVER** introduce a second policy source of truth: whitelist changes go through `shared/policy.toml` (runtime) with `policy.Default()` and the `shellpolicy`/`pathguard` constants updated in lockstep (drift tests fail otherwise); units must not carry a drifted `Environment=ALLOW_COMMANDS=`.
 - **NEVER** leak source into the image rootfs: `daedalus/core/` (Go 源码 + 构建期下载到 GOMODCACHE 的模块) and `daedalus/plugin/` sources and any `*.test.ts`/`*.py`/`__pycache__`/`vendor` must never be rsync/COPY'd into `/opt` — only build products (`plugins/` 安装态, `usr/local/bin` binaries, `shared/policy.toml`) land there (`just verify-image` asserts this).
-- **NEVER** hand-edit `daedalus/files/system/opt/daedalus/plugins/` (构建产物) — regenerate via `just plugin-pack` / `./pack-copilot-plugin.sh`.
-- **NEVER** modify/commit changes to `base_image/` directly; modify `daedalus/{core,plugin,files}/` and run `just sync` / `./sync-daedalus.sh`.
+- **NEVER** hand-edit `daedalus/files/system/opt/daedalus/plugins/` (构建产物) — regenerate via `just plugin-pack` / `./scripts/pack-copilot-plugin.sh`.
+- **NEVER** modify/commit changes to `base_image/` directly; modify `daedalus/{core,plugin,files}/` and run `just sync` / `./scripts/sync-daedalus.sh`.
 
 ## COMMANDS
 ```bash
@@ -269,8 +274,12 @@ just build                 # sync + podman build Daedalus image (需 x86-64-v3 �
 just test                  # 全量测试: cd daedalus/core && go test ./... + deno test --allow-all tests/deno/
 just go-build              # CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/... (全部 Go 二进制;依赖首次构建需联网从 module proxy 下载到 GOMODCACHE)
 just go-test               # cd daedalus/core && go test ./...
+just go-build-demo         # 同 go-build + -tags demo,触发 daedalus-host 包的 dev 路径重写(详见 "Demo 构建模式" 段)
+just dev-copilot *args     # 0 安装端到端跑 copilot:rebuild demo 二进制 → 解包 5 插件到临时目录 → eval 拼好的 argv
 just plugin-pack           # 构建 Go 二进制 → 打包 4 能力插件 → 安装态落 files/system/opt/daedalus/plugins/ + host/audit/shell 进 usr/local/bin
-just copilot-plugin        # 打包 copilot 插件安装态 (./pack-copilot-plugin.sh)
+just copilot-plugin        # 打包 copilot 插件安装态 (./scripts/pack-copilot-plugin.sh)
+just i18n-sync [plugin-dir]            # 双向校验,严格,不一致 exit 1(CI 守门用)
+just i18n-sync-autofix [plugin-dir]    # 以 i18n/ 目录为准,改写 manifest 的 i18n 字段
 just verify-image          # 镜像零残留断言 (find /opt 无 *.py/*.pyc/__pycache__/*.test.ts/go.mod/vendor; 需已构建镜像)
 just iso                   # Build bootable ISO via bootc-image-builder
 just qemu                  # Build qcow2 and test-boot in QEMU
@@ -298,7 +307,7 @@ podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release
 
 ## NOTES
 - `daedalus/{core,plugin,files}/` are the authoritative source directories tracked by git. `base_image/` is gitignored vendor.
-- `sync-daedalus.sh` copies safely: systemd leg uses targeted stale-delete (only `daedalus-*`, upstream assets untouched); plugin leg uses `--delete --delete-excluded` (vendor mirrors source exactly); `base_image/plugin/` sits outside the Containerfile COPY whitelist so it never reaches rootfs.
+- `scripts/sync-daedalus.sh` copies safely: systemd leg uses targeted stale-delete (only `daedalus-*`, upstream assets untouched); plugin leg uses `--delete --delete-excluded` (vendor mirrors source exactly); `base_image/plugin/` sits outside the Containerfile COPY whitelist so it never reaches rootfs.
 - `base_image/` carries upstream dormant CI targeting upstream repos — do NOT mistake for Daedalus CI.
 - Deno install (`65-ai-safety.sh`) pulls from `https://deno.land/install.sh` to `/usr/local/bin/deno` — used **only** by the copilot plugin now.
 - **构建机限制 (todo 5/10/13 记录)**: `just build` 在本机不可执行——`almalinux-bootc:10` 要求 x86-64-v3 而本机 CPU 不支持; 镜像内断言 (`just verify-image`, in-image `daedalus-host list`, bootc lint, 76 脚本真实执行, copilot wrapper 全链路) 在 v3 构建机/CI 上补跑 (plan todo 18)。本机等价断言: `find daedalus/files/system base_image/files/system \( -name "*.py" -o -name "*.test.ts" -o -name "__pycache__" -o -name "go.mod" \) | wc -l` == 0。
@@ -340,3 +349,88 @@ daedalus/core/bin/daedalus-host -dir "$plugdir" render-unit daedalus.fs  # 仅�
 - `render-unit` 只输出 `[Service]` + `ExecStart=` 单元片段文本，不落盘、不启停任何单元。
 - degraded 插件（sha256 不匹配、id 与目录名不一致、manifest 损坏）会被 `run-plugin`/`render-unit` 拒绝（退出码 1），不产出启动命令。
 - 宿主每次子命令执行都会经 `daedalus-audit` 写一条 `host_*` 哈希链审计条目（`host_list` / `host_inspect` / `host_verify` / `host_run_plugin` / `host_render_unit`），写失败静默忽略（尽力而为）。
+
+## Demo 构建模式（计划 todo 3 增量）
+
+> 解决"无 KVM 镜像也能端到端跑 copilot CLI"的需求：补一个 build-tag-gated 路径重写层，让 `-tags demo` 编译的宿主二进制能从本地 `daedalus-dev.toml` 读 dev 路径，把 entrypoint 字符串里写死的 `/opt/daedalus` 与 `/usr/local/bin` 重写到 dev 树对应位置，deno 二进制走 `$PATH` 或显式指定。**生产构建（默认 tag）行为完全不变**——没有 dev 配置读代码，没有运行时 flag，编译期常量折叠消掉重写分支。
+
+### 设计要点
+
+- **编译期门控**：`daedalus/core/cmd/daedalus-host/{paths.go,paths_demo.go}` 通过 `//go:build !demo` / `//go:build demo` 互斥编译；`paths.go` 只放 prod 字面量（`var denoBinary = "/usr/local/bin/deno"`、`var devPrefix = ""`、`const devMode = false`），`paths_demo.go` 才接 `init()` + `loadDevPaths()`。发行版二进制里**不存在**任何读 dev 配置的代码路径，零攻击面。
+- **fail-closed**：`paths_demo.go` 的 `init()` 在 `loadDevPaths()` 失败时 `os.Exit(2)` 拒启，绝不静默退化为 prod 行为；`go test` 运行期间 `testing.Testing()` 为真则跳过强校验，让单测直接覆写包级变量。
+- **重写范围**：`buildStartTokens` 在 `devMode==true`（编译期 const 折叠）时对每个 entrypoint token 做 `strings.ReplaceAll`：`/opt/daedalus` → `devPrefix+"/opt/daedalus"`、`/usr/local/bin` → `devPrefix+"/usr/local/bin"`。`/home` `/var/log` `/tmp` `/proc` `/etc/...` `$HOME/...` 等普通路径**不受改写**（不是镜像根）。`denoBinary` 与 `devPrefix` 来自 `daedalus-dev.toml`。
+- **现有 prod 断言零回归**：`main_test.go:TestRunPlugin_Deno` 在两种 tag 下都通过——prod 模式 `denoBinary = "/usr/local/bin/deno"`；demo 模式 `init()` 因 `testing.Testing()` 跳过强校验，`denoBinary` 保留 demo 文件的 `var denoBinary = "/usr/local/bin/deno"` 缺省值。`buildStartTokens` 在 `devPrefix==""` 时重写是恒等替换，输出与 prod 逐字节一致。
+
+### 配置文件
+
+`daedalus-dev.toml`（仓库根，`.gitignore`，仅 `daedalus-dev.toml.example` 入库）：
+
+```toml
+# dev 树里"镜像布局"的根目录;entrypoint 里的 /opt/daedalus 改写为
+# {prefix}/opt/daedalus,/usr/local/bin 同理。从仓库根跑就用默认。
+prefix = "./daedalus/files/system"
+
+# Deno 二进制绝对路径;留空走 $PATH (exec.LookPath)。
+# deno = "/home/user/.asdf/installs/deno/2.1.4/bin/deno"
+```
+
+解析优先级：`$DAEDALUS_DEV_PATHS`（必须绝对路径）> 自 cwd 向上找 `daedalus-dev.toml` > 报错 exit 2。
+
+### 已验证用法（端到端跑通）
+
+```bash
+# 一次性：cp 模板
+cp daedalus-dev.toml.example daedalus-dev.toml
+
+# 一次性：确保 plugin zip 已就位（之前跑过 just plugin-pack / just copilot-plugin）
+# daedalus/core/bin/daedalus.{fs,shell,pkg,sysinfo,copilot}.plugin.zip 必须存在
+
+# 1) 构建 demo 二进制（覆盖 daedalus/core/bin/daedalus-host）
+just go-build-demo
+
+# 2) 单独验证 argv 重写
+plugdir=$(mktemp -d)
+for p in fs shell pkg sysinfo copilot; do
+  daedalus/core/bin/daedalus-plugin-pack -verify "daedalus/core/bin/daedalus.$p.plugin.zip" --keep "$plugdir/daedalus.$p"
+done
+daedalus/core/bin/daedalus-host -dir "$plugdir" run-plugin daedalus.copilot -- "show os version"
+#   期望输出:
+#     <deno> run --allow-env --allow-net
+#     '--allow-read=./daedalus/files/system/opt/daedalus,/home,/var/log,...'
+#     '--allow-write=/var/log/daedalus,/tmp,$HOME/.local/share/daedalus'
+#     --allow-run=./daedalus/files/system/usr/local/bin/deno,
+#                  ./daedalus/files/system/usr/local/bin/daedalus-audit,
+#                  ./daedalus/files/system/usr/local/bin/daedalus-shell
+#     $plugdir/daedalus.copilot/main.ts 'show os version'
+# 注意:/home /var/log /tmp /proc /etc/... $HOME/... 不被改写(不是镜像根)
+
+# 3) 端到端跑 copilot(包含 LLM 调用或 --dry-run)
+just dev-copilot --dry-run "show os version"
+#   等价于: rebuild demo 二进制 → 安装 daedalus-{audit,shell} 到镜像布局位
+#           daedalus/files/system/usr/local/bin/(deno --allow-run 旗标放行的路径)
+#         → 解包 5 插件 → 拼 argv → export DAEDALUS_AUDIT_BIN/SHELL_BIN
+#           与布局位同步 → eval 执行
+#   无 LLM key 也能跑(走 --dry-run);有 key 自动翻译自然语言指令
+#   镜像布局位已 .gitignore,不会污染版本控制
+
+# 4) prod 模式输出对照(同一命令,just go-build 切回 prod)
+just go-build
+daedalus/core/bin/daedalus-host -dir "$plugdir" run-plugin daedalus.copilot -- "x"
+#   期望输出: /usr/local/bin/deno run ... --allow-read=/opt/daedalus,...
+#   镜像路径字面量,与 demo 模式对比一目了然
+```
+
+### 与其他 dev 路径的关系
+
+| 路径 | recipe | 行为 | 何时用 |
+|------|--------|------|--------|
+| 镜像内（生产） | (无，systemd 跑) | 全部路径硬编码 | `just build` 出来的 podman/ISO |
+| 装到 `~/.local` | `just dev-install <prefix>` | 镜像路径（装出镜像布局的目录结构） | 装一套可用安装到前缀 |
+| 检视 / 打印启动命令 | 0 安装（`mktemp -d` + `daedalus-host -dir`） | 镜像路径（仅 capability server 可跑，copilot 路径错误） | 只想 inspect/verify/render-unit |
+| **Demo 跑 copilot** | `just go-build-demo` + `just dev-copilot` | **dev 路径重写**（path-aware） | **dev 树里端到端跑 copilot** |
+
+### 安全性质（与运行时 flag 方案的对比）
+
+- 发行版二进制：根本没有读 `daedalus-dev.toml` 的代码，攻击者无法通过 env、文件、CLI flag 让 prod 二进制走 dev 路径。
+- demo 二进制误进生产环境：缺 `daedalus-dev.toml` 即 exit 2，不产出任何 argv；即便配置存在也只影响本机 dev 用户的 argv 构造，不影响镜像内任何东西。
+- 与运行时 flag 方案相比：build tag 让"dev 能力"在 prod 二进制里**字面上不存在**，不是"加了 flag 但默认关闭"。

@@ -1,5 +1,5 @@
 # ===== VCS 本地状态 =====
-# 上游 vendor fork（gitignored；sync-daedalus.sh 同步）
+# 上游 vendor fork（gitignored；scripts/sync-daedalus.sh 同步）
 # 例外：保留 3 个上游 vendor 自带的 AGENTS.md（base_image/AGENTS.md、base_image/files/system/usr/lib/systemd/system/AGENTS.md、base_image/files/system/opt/daedalus/AGENTS.md）
 base_image/
 !base_image/**/AGENTS.md
@@ -23,6 +23,9 @@ daedalus/core/vendor/
 
 # Daedalus Go 核心工作区的本机构建产物(静态二进制与插件 zip 包,不进版本控制)
 daedalus/core/bin/
+
+# demo 构建的本地 dev 路径配置,不入库;仅 .example 模板入库
+daedalus-dev.toml
 
 # 能力插件源目录的构建期二进制(just plugin-pack 拷入用于打包;不入库)
 daedalus/plugin/*/bin/

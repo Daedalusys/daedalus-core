@@ -1,13 +1,14 @@
-# opt/daedalus — 插件安装态运行时根（Go 宿主 + Deno copilot 插件）
+# opt/daedalus — 插件安装态运行时根（Go 宿主 + Deno copilot 命令顾问插件）
 
 **Runtime root:** `/opt/daedalus` in the image. Source root: `daedalus/files/system/opt/daedalus/`.
 
 ## OVERVIEW
 
 todo 11 三层目录迁移后，本目录只保留**插件安装态** `plugins/`（构建产物，
-由 `just plugin-pack` 与 `./pack-copilot-plugin.sh` 经 Pack→Verify 生成，manifest 含 checksums）
+由 `just plugin-pack` 与 `./scripts/pack-copilot-plugin.sh` 经 Pack→Verify 生成，manifest 含 checksums）
 与**运行时策略单一事实源** `shared/policy.toml`（todo 12，Go 服务器经 internal/policy 启动时读取）。
-Daedalus Copilot 的 **Deno 源码态**已迁出镜像树，住进 `daedalus/plugin/copilot/`；
+Daedalus Copilot（command advisor / 命令顾问，非 agent：生成命令 + L0/L1/L2 风险标注，
+仅 L0 可经沙箱执行，其余仅展示由用户手动执行）的 **Deno 源码态**已迁出镜像树，住进 `daedalus/plugin/copilot/`；
 镜像树内的旧 `deno/` 子树（todo 5 前的能力服务器与 copilot 源目录）已整体删除。
 四个 OS 能力服务器（fs / shell / pkg / sysinfo）均以**插件内二进制**
 （`plugins/daedalus.<cap>/bin/daedalus-<cap>`，由 `daedalus/core/` 构建的 Go 静态二进制）
@@ -67,7 +68,7 @@ opt/daedalus/
 - **审计一律经 `daedalus-audit` CLI**：禁止 Deno 文件系统 API 直写审计文件；
   环境变量 `DAEDALUS_AUDIT_BIN` 可覆盖二进制路径（默认 `/usr/local/bin/daedalus-audit`）。
 - **安装态 = 构建产物**：本目录下任何文件不得手改；变更走
-  `just plugin-pack` / `./pack-copilot-plugin.sh` 重新 Pack→Verify。
+  `just plugin-pack` / `./scripts/pack-copilot-plugin.sh` 重新 Pack→Verify。
 - **中文注释强制**（见仓库根 CONVENTIONS）。
 
 ## ANTI-PATTERNS
@@ -86,7 +87,7 @@ deno test --allow-all tests/deno/
 # Go 工作区测试（能力服务器 + 审计 + 策略 + 宿主 + 打包器）
 cd daedalus/core && go test ./...
 # 重新生成 copilot 安装态（打包源 = daedalus/plugin/copilot/）
-./pack-copilot-plugin.sh
+./scripts/pack-copilot-plugin.sh
 ```
 
 ## 源码树内调试（dev-install 替代形态 — 0 安装）

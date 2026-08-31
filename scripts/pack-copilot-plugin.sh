@@ -7,7 +7,7 @@
 #   1) daedalus/core/bin/daedalus.copilot.plugin.zip          —— 可分发插件包(bin/ 已 gitignore,
 #      与 todo 9 能力插件的 <id>.plugin.zip 同一约定)
 #   2) daedalus/files/system/opt/daedalus/plugins/daedalus.copilot/  —— 解压安装态(入库):
-#      sync-daedalus.sh → base_image → Containerfile COPY → 镜像 /opt/daedalus/plugins/
+#      sync-daedalus.sh(已迁入 scripts/) → base_image → Containerfile COPY → 镜像 /opt/daedalus/plugins/
 #      宿主 daedalus-host 与 wrapper 都以该绝对路径消费它。
 #   暂存目录用 mktemp 临时目录并在退出时清理:仓库内不留构建中间产物。
 #
@@ -17,11 +17,13 @@
 # 时序说明:copilot 源码已随 todo 11 三层迁移住进 daedalus/plugin/copilot/
 # (源码态与清单同目录;镜像内权威安装态是 plugins/daedalus.copilot/,由本脚本产出)。
 #
-# 用法:./pack-copilot-plugin.sh
-#       ZIP_OUT=/tmp/x.zip ./pack-copilot-plugin.sh    # 只改包输出位置,安装态目标不变
+# 用法:./scripts/pack-copilot-plugin.sh
+#       ZIP_OUT=/tmp/x.zip ./scripts/pack-copilot-plugin.sh    # 只改包输出位置,安装态目标不变
 set -euo pipefail
 
-ROOT=$(cd -- "$(dirname -- "$0")" && pwd -P)
+# 仓库根:脚本位于 scripts/ 子目录,需向上一级。
+# 用 $(cd ... && pwd) 解析真实路径(兼容 symlink 与 ./ 相对调用)。
+ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
 CORE_DIR="$ROOT/daedalus/core"
 # 源码态 = 插件定义层(todo 11 起):清单与 5 个 .ts 同目录;测试位于仓库根 tests/deno/(todo 14 迁出)
 COPILOT_SRC="$ROOT/daedalus/plugin/copilot"
@@ -32,7 +34,7 @@ INSTALL_DIR="$ROOT/daedalus/files/system/opt/daedalus/plugins"
 PLUGIN_DEST="$INSTALL_DIR/$PLUGIN_ID"
 ZIP_OUT=${ZIP_OUT:-"$CORE_DIR/bin/$PLUGIN_ID.plugin.zip"}
 
-# 打包输入暂存目录(清单 + 源码副本),退出即清理
+# 打包输入暂存目录(清单 + 源码副本 + i18n/ locale 翻译目录),退出即清理
 STAGE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/daedalus-plugin-stage.XXXXXX")
 trap 'find "$STAGE_DIR" -depth -delete' EXIT
 
@@ -54,6 +56,12 @@ for src in "$COPILOT_SRC"/*.ts; do
     install -m 0644 "$src" "$STAGE_DIR/"
 done
 install -m 0644 "$MANIFEST_SRC" "$STAGE_DIR/daedalus.plugin.json"
+# i18n/ 目录进 zip:locale 翻译文件由 deno 运行时按 $LANG 加载。
+# 注意 en_US 必含是宿主 Validate 强约束,pack 此处只复制,Validate 在
+# 加载时再校验;此处若 i18n/ 缺失,允许(老插件可能没 i18n)。
+if [ -d "$COPILOT_SRC/i18n" ]; then
+    cp -r "$COPILOT_SRC/i18n" "$STAGE_DIR/i18n"
+fi
 # Pack 要求 executable 带可执行位(校验 mode&0o111),入口脚本因此置 0755
 chmod 0755 "$STAGE_DIR/main.ts"
 
