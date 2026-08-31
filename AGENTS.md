@@ -303,3 +303,40 @@ podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release
 - Deno install (`65-ai-safety.sh`) pulls from `https://deno.land/install.sh` to `/usr/local/bin/deno` — used **only** by the copilot plugin now.
 - **构建机限制 (todo 5/10/13 记录)**: `just build` 在本机不可执行——`almalinux-bootc:10` 要求 x86-64-v3 而本机 CPU 不支持; 镜像内断言 (`just verify-image`, in-image `daedalus-host list`, bootc lint, 76 脚本真实执行, copilot wrapper 全链路) 在 v3 构建机/CI 上补跑 (plan todo 18)。本机等价断言: `find daedalus/files/system base_image/files/system \( -name "*.py" -o -name "*.test.ts" -o -name "__pycache__" -o -name "go.mod" \) | wc -l` == 0。
 - 镜像内 `/usr/local/bin/daedalus-{audit,shell}` (audit.ts/exec.ts 的生产默认路径) 已由 `just plugin-pack` 构建期安装 (task 21 修复断链缺口; 与 wrapper `--allow-run` 放行路径一致); `daedalus-host list` 等镜像内端到端断言仍在 v3 构建机补跑 (todo 18)。copilot 内向上回溯 dev 路径的回退链仅作开发态兜底。
+
+## 源码树内调试（dev-install 替代形态 — 0 安装）
+
+> 本段由 plan `daedalus-dev-mode`（todo 2）增量追加：记录如何不安装、不触碰镜像安装态 `/opt/daedalus/plugins`，直接用宿主二进制对插件做检视/校验/打印启动命令。以下命令均已实际执行验证。
+
+### 用途与已验证用法
+
+`daedalus-host` 支持用 `-dir` 旗标指向任意插件目录（优先级：`-dir` 旗标 > `DAEDALUS_PLUGIN_DIR` 环境变量 > 镜像默认 `/opt/daedalus/plugins`），五个子命令 `list` / `inspect` / `verify` / `run-plugin` / `render-unit` 全部适用。两侧形态：
+
+- 镜像内（安装态）：宿主在 `/usr/local/bin/daedalus-host`，插件在 `/opt/daedalus/plugins`，直接 `daedalus-host list` 即可（期望 5 插件全 ok）。
+- 仓库侧（源码树，0 安装）：源码侧 `daedalus/plugin/<短名>/`（`fs`、`shell`、`pkg`、`sysinfo`、`copilot`）的目录名与 manifest id（`daedalus.fs` 等）不一致，且源码 manifest 不含 checksums。因此直接 `-dir daedalus/plugin` 时 `list` 能运行但全部标 degraded，`inspect`/`verify`/`run-plugin`/`render-unit` 会被 id 一致性防线拒绝。完整可用的源码树形态是先打包再解包（打包会注入 checksums），从仓库根执行：
+
+```bash
+# 1) 解包构建产物（zip 内 checksums 与内容自洽；改源码后需重跑 just plugin-pack 刷新 zip）
+plugdir=$(mktemp -d)
+for p in fs shell pkg sysinfo copilot; do
+  daedalus/core/bin/daedalus-plugin-pack -verify "daedalus/core/bin/daedalus.$p.plugin.zip" --keep "$plugdir/daedalus.$p"
+done
+# 2) 五个子命令全部可用（以 daedalus.fs 为例，其余插件同理）
+daedalus/core/bin/daedalus-host -dir "$plugdir" list                  # 5 插件全 ok
+daedalus/core/bin/daedalus-host -dir "$plugdir" inspect daedalus.fs   # manifest 详情 + 完整性
+daedalus/core/bin/daedalus-host -dir "$plugdir" verify daedalus.fs    # sha256 校验
+daedalus/core/bin/daedalus-host -dir "$plugdir" run-plugin daedalus.fs   # 仅打印启动命令
+daedalus/core/bin/daedalus-host -dir "$plugdir" render-unit daedalus.fs  # 仅输出 systemd 片段
+```
+
+### 与 `just dev-install` 的关系
+
+- 只需检视 manifest、校验完整性或打印启动命令：用上面的 0 安装形态，不落任何东西到系统路径。
+- 需要一套可运行的安装（binaries + 解包插件，例如装到 `~/.local` 免 sudo）：用 `just dev-install <prefix>`；装好后可用 `just host-list` 一键列插件。这两个 recipe 由同一 plan（`daedalus-dev-mode`，todo 1）提供，以 `justfile` 实际内容为准。
+
+### 安全约束（恒成立，与运行形态无关）
+
+- 宿主绝不 spawn，也绝不是任何 MCP 服务器的父进程；`run-plugin` 只把构造好的启动命令**打印**到 stdout，真正执行者是 systemd（按 ExecStart）或用户自己。
+- `render-unit` 只输出 `[Service]` + `ExecStart=` 单元片段文本，不落盘、不启停任何单元。
+- degraded 插件（sha256 不匹配、id 与目录名不一致、manifest 损坏）会被 `run-plugin`/`render-unit` 拒绝（退出码 1），不产出启动命令。
+- 宿主每次子命令执行都会经 `daedalus-audit` 写一条 `host_*` 哈希链审计条目（`host_list` / `host_inspect` / `host_verify` / `host_run_plugin` / `host_render_unit`），写失败静默忽略（尽力而为）。
