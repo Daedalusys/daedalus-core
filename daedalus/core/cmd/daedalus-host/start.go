@@ -11,21 +11,19 @@ import (
 	"io"
 	"strings"
 
+	"github.com/daedalus-os/daedalus/core/internal/i18n"
 	"github.com/daedalus-os/daedalus/core/internal/plugin"
 )
-
-// denoBinary 是镜像内 Deno 运行时的固定路径(65-ai-safety.sh 安装位)。
-const denoBinary = "/usr/local/bin/deno"
 
 // cmdVerify 复用 plugin 包的已安装目录校验核心(与 zip 校验同规则:
 // checksums 双向集合相等 + 逐条目 sha256 + manifest 规范化自摘要 + 可执行位)。
 // 通过 exit 0;失败 exit 1 并把原因写到 stderr。
 func cmdVerify(stdout, stderr io.Writer, st pluginState) int {
 	if st.status == statusOK {
-		fmt.Fprintf(stdout, "verify: %s 校验通过(sha256 全部匹配)\n", st.id)
+		fmt.Fprintf(stdout, "%s\n", i18n.T("host.verify.pass", st.id))
 		return exitOK
 	}
-	fmt.Fprintf(stderr, "daedalus-host: verify: %s 校验失败: %s\n", st.id, st.reason)
+	fmt.Fprintf(stderr, "daedalus-host: verify: %s %s\n", st.id, i18n.T("host.verify.fail", st.reason))
 	return exitRuntime
 }
 
@@ -35,9 +33,9 @@ func cmdRunPlugin(stdout, stderr io.Writer, st pluginState, extra []string) int 
 	if st.manifest == nil || st.status != statusOK {
 		reason := st.reason
 		if reason == "" {
-			reason = "manifest 不可用"
+			reason = i18n.T("host.error.manifest_unavailable")
 		}
-		fmt.Fprintf(stderr, "daedalus-host: run-plugin: %s 处于 degraded 状态,拒绝产出启动命令: %s\n", st.id, reason)
+		fmt.Fprintf(stderr, "daedalus-host: run-plugin: %s %s: %s\n", st.id, i18n.T("host.verify.degraded_run_plugin"), reason)
 		return exitRuntime
 	}
 	tokens := buildStartTokens(st.dir, st.manifest)
@@ -45,7 +43,7 @@ func cmdRunPlugin(stdout, stderr io.Writer, st pluginState, extra []string) int 
 	// stdout 只含纯命令行文本(供 todo 8 的 wrapper 之类消费),
 	// 非父进程语义写在 stderr 提示与 help 里,不污染命令输出。
 	fmt.Fprintln(stdout, shellJoin(tokens))
-	fmt.Fprintf(stderr, "note: host 不是进程父,以上仅为构造出的启动命令;systemd 按 ExecStart 执行\n")
+	fmt.Fprint(stderr, i18n.T("host.run_plugin.note"))
 	return exitOK
 }
 
@@ -56,14 +54,16 @@ func cmdRenderUnit(stdout, stderr io.Writer, st pluginState) int {
 	if st.manifest == nil || st.status != statusOK {
 		reason := st.reason
 		if reason == "" {
-			reason = "manifest 不可用"
+			reason = i18n.T("host.error.manifest_unavailable")
 		}
-		fmt.Fprintf(stderr, "daedalus-host: render-unit: %s 处于 degraded 状态,拒绝渲染单元: %s\n", st.id, reason)
+		fmt.Fprintf(stderr, "daedalus-host: render-unit: %s %s: %s\n", st.id, i18n.T("host.verify.degraded_render_unit"), reason)
 		return exitRuntime
 	}
 	tokens := buildStartTokens(st.dir, st.manifest)
-	fmt.Fprintf(stdout, "# 由 daedalus-host render-unit 生成(计划决策 16/22):内容来自插件 manifest,请勿手改\n")
-	fmt.Fprintf(stdout, "# 宿主不是进程父:systemd 直接执行以下 ExecStart,沙箱语义由 .service.d/*.conf drop-in 保留\n")
+	// 注释两行经 i18n.T(76 脚本只消费 ExecStart= 行,注释语言变化无影响);
+	// [Service] 与 ExecStart= 行是 systemd 消费的协议文本,永不翻译。
+	fmt.Fprint(stdout, i18n.T("host.render_unit.note1"))
+	fmt.Fprint(stdout, i18n.T("host.render_unit.note2"))
 	fmt.Fprintf(stdout, "[Service]\n")
 	fmt.Fprintf(stdout, "ExecStart=%s\n", systemdJoin(tokens))
 	return exitOK
@@ -73,14 +73,34 @@ func cmdRenderUnit(stdout, stderr io.Writer, st pluginState) int {
 //   - native: [<插件目录>/<executable>, entrypoint...](Go 静态二进制直接 exec);
 //   - deno  : [<deno>, "run", entrypoint..., <插件目录>/<executable>]
 //     (entrypoint 携带 --allow-* 权限旗标,executable 是脚本路径,置于参数尾)。
+//
+// demo 构建(-tags demo,devMode==true)额外把 entrypoint 字符串里的镜像
+// 路径 /opt/daedalus 与 /usr/local/bin 改写为 devPrefix 下的对应路径
+// (native 偶尔也带镜像路径,因此无论 runtime 一律过 rewriteEntry);
+// prod 构建 devMode==false 恒为编译期常量,重写分支被常量折叠整体消除,
+// 行为与历史版本逐字节一致。devPrefix 为空串时改写结果是恒等替换,
+// 现有 prod 断言(denoBinary + " run --allow-read=/opt/daedalus,/home …")
+// 在两种 tag 下均不受影响。
 func buildStartTokens(pluginDir string, m *plugin.Manifest) []string {
+	// rewriteEntry 对单个 entrypoint 字符串做 dev 路径改写;
+	// !devMode 时直接原样返回,prod 下整个分支被编译期折叠。
+	rewriteEntry := func(s string) string {
+		if !devMode {
+			return s
+		}
+		s = strings.ReplaceAll(s, "/opt/daedalus", devPrefix+"/opt/daedalus")
+		return strings.ReplaceAll(s, "/usr/local/bin", devPrefix+"/usr/local/bin")
+	}
+	entry := make([]string, len(m.Entrypoint))
+	for i, e := range m.Entrypoint {
+		entry[i] = rewriteEntry(e)
+	}
 	absExec := pluginDir + "/" + m.Executable // executable 已被 manifest 校验为安全相对路径
 	switch m.Runtime {
 	case plugin.RuntimeDeno:
-		tokens := append([]string{denoBinary, "run"}, m.Entrypoint...)
-		return append(tokens, absExec)
+		return append(append([]string{denoBinary, "run"}, entry...), absExec)
 	case plugin.RuntimeNative:
-		return append([]string{absExec}, m.Entrypoint...)
+		return append([]string{absExec}, entry...)
 	default:
 		// Manifest.Validate 已排除该分支;防御性返回,避免渲染出半截命令。
 		return []string{absExec}

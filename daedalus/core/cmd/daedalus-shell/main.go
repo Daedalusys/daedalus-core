@@ -33,6 +33,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/daedalus-os/daedalus/core/internal/audit"
 	"github.com/daedalus-os/daedalus/core/internal/policy"
 	"github.com/daedalus-os/daedalus/core/internal/shellpolicy"
 	"github.com/daedalus-os/daedalus/core/internal/version"
@@ -287,18 +288,46 @@ func newAuditEntry(command string, args []string, allowed bool, returncode *int,
 	}
 }
 
-// recordAudit best-effort 追加一行 JSON 到审计日志。对应 ts recordAudit
-// (231-238 行):以 create:false 打开——文件不存在即静默跳过,任何写失败
-// 均不上抛(测试环境/只读系统不得影响执行路径)。
+// recordAudit best-effort 追加一条哈希链审计条目到 path(经 internal/audit.LogAudit)。
+// 内部 LogAudit 用 O_CREATE|O_APPEND 打开,文件不存在会创建;写失败一律静默
+// (ts recordAudit create:false 语义已弃用,与新哈希链格式不兼容;daedalus-shell
+// 的工具调用必须与其他身份共链,不能跳过 LogAudit 走简写 JSON)。
+// args 结构体字段(command/args/allowed/returncode/error)以 JSON 对象形式嵌入
+// audit.Entry.Args,identity 固定 "daedalus-shell",tool 固定 "shell_exec"。
+// outcome 由 Allowed 派生:允许执行 → "success",验证拒绝 → "denied"。
 func recordAudit(path string, entry auditEntry) {
-	line, err := json.Marshal(entry)
+	outcome := "success"
+	if !entry.Allowed {
+		outcome = "denied"
+	}
+	// 用临时 struct 序列化保证字段顺序与键名稳定(便于解析回读),
+	// 再以 audit.ParseValue 解析为 *audit.Value,经 LogAudit 内置 ArgsString
+	// 走 sort_keys + ensure_ascii 规范化,字节级兼容 Python audit-log.py。
+	argsJSON, err := json.Marshal(struct {
+		Command    string   `json:"command"`
+		Args       []string `json:"args,omitempty"`
+		Allowed    bool     `json:"allowed"`
+		Returncode *int     `json:"returncode"`
+		Error      *string  `json:"error,omitempty"`
+	}{
+		Command:    entry.Command,
+		Args:       entry.Args,
+		Allowed:    entry.Allowed,
+		Returncode: entry.Returncode,
+		Error:      entry.Error,
+	})
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	argsVal, err := audit.ParseValue(string(argsJSON))
 	if err != nil {
-		return
+		argsVal = audit.NewObject() // 解析失败兜底空对象,不让审计阻塞 exec
 	}
-	defer func() { _ = f.Close() }()
-	_, _ = f.Write(append(line, '\n'))
+	_, _ = audit.LogAudit(audit.Entry{
+		Identity: "daedalus-shell",
+		Tool:     "shell_exec",
+		Args:     argsVal,
+		Outcome:  outcome,
+		LogPath:  path,
+	})
 }

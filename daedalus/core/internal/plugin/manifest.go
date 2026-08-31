@@ -67,6 +67,7 @@ type Manifest struct {
 	Entrypoint  []string          `json:"entrypoint,omitempty"`
 	Permissions *Permissions      `json:"permissions,omitempty"`
 	Tools       []string          `json:"tools,omitempty"`
+	I18N        []string          `json:"i18n,omitempty"`
 	Checksums   map[string]string `json:"checksums,omitempty"`
 }
 

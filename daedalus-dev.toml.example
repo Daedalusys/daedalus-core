@@ -1,0 +1,12 @@
+# Daedalus demo 开发态路径配置 —— 仅 `-tags demo` 构建会读取此文件。
+# 用法: cp daedalus-dev.toml.example daedalus-dev.toml 并按本机路径调整。
+# 优先级: $DAEDALUS_DEV_PATHS 指向的文件 > 本文件 (从 cwd 向上查找)。
+# 缺此文件 demo 二进制拒绝启动 (exit 2),绝不静默退化为 prod 行为。
+
+# dev 树里"镜像布局"的根目录;entrypoint 里的 /opt/daedalus 改写为
+# {prefix}/opt/daedalus,/usr/local/bin 同理。从仓库根跑就用默认。
+prefix = "./daedalus/files/system"
+
+# Deno 二进制绝对路径;留空走 $PATH (exec.LookPath)。deno 必须能解析到,
+# 否则 demo 二进制也拒启。
+# deno = "/home/user/.asdf/installs/deno/2.1.4/bin/deno"

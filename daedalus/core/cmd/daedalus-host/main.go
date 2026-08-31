@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/daedalus-os/daedalus/core/internal/audit"
+	"github.com/daedalus-os/daedalus/core/internal/i18n"
 	"github.com/daedalus-os/daedalus/core/internal/plugin"
 	"github.com/daedalus-os/daedalus/core/internal/version"
 )
@@ -47,23 +48,12 @@ const EnvPluginDir = "DAEDALUS_PLUGIN_DIR"
 // hostIdentity 写入审计日志的调用者身份。
 const hostIdentity = "daedalus-host"
 
-// usage 是 -h/--help 与用法错误时打印的帮助文本(列全子命令,含非父进程声明)。
-const usage = `usage: daedalus-host <command> [args] [-dir <插件目录>]
-
-Daedalus plugin host (core %s) —— 插件发现/检视/校验/审计。
-注意:宿主不是任何 MCP 服务器的父进程。run-plugin / render-unit 只打印
-manifest 构造出的启动命令 / systemd ExecStart 片段,systemd 才是真正的执行方
-(计划决策 16);宿主自身绝不 spawn 子进程。
-
-Commands:
-  list                 扫描插件目录,逐条打印 id/name/version/type/runtime;损坏插件标 degraded
-  inspect <id>         打印该插件 manifest 详情(checksums 摘要、tools、permissions)
-  verify <id>          复用 internal/plugin 校验核心做 sha256 完整性检查;通过 0,失败 1+原因
-  run-plugin <id>      仅打印启动命令(native: <exe> <args>;deno: deno run <args> <script>)
-  render-unit <id>     仅输出 systemd 片段(ExecStart= 行),供构建期 76-daedalus-plugin-gen.sh 使用
-
-插件目录:默认 /opt/daedalus/plugins;可用 DAEDALUS_PLUGIN_DIR 环境变量或 -dir 旗标覆盖(旗标优先)。
-`
+// usage 返回 -h/--help 与用法错误时打印的帮助文本(列全子命令,含非父进程声明)。
+// 文案经 i18n.T 按 locale 取值,en_US/zh_CN 双语;{0} 填版本号。
+// i18n key: host.usage.prefix / host.usage.body(locales json 为单一事实源)。
+func usage() string {
+	return i18n.T("host.usage.prefix") + i18n.T("host.usage.body", version.Version)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -71,18 +61,19 @@ func main() {
 
 // run 解析全局旗标、分派子命令,返回退出码。stdout/stderr 注入以便测试捕获。
 func run(argv []string, stdout, stderr io.Writer) int {
+	i18n.Init() // locale 一次定死(LC_ALL > LANG > en_US),全部用户可见文案经 i18n.T。
 	rest, dirFlag, err := splitDirFlag(argv)
 	if err != nil {
 		fmt.Fprintf(stderr, "daedalus-host: %v\n", err)
 		return exitUsage
 	}
 	if len(rest) == 0 {
-		fmt.Fprintf(stderr, usage, version.Version)
+		fmt.Fprint(stderr, usage())
 		return exitUsage
 	}
 	cmd, args := rest[0], rest[1:]
 	if cmd == "-h" || cmd == "--help" || cmd == "help" {
-		fmt.Fprintf(stdout, usage, version.Version)
+		fmt.Fprint(stdout, usage())
 		return exitOK
 	}
 	pluginDir := resolvePluginDir(dirFlag)
@@ -100,19 +91,19 @@ func run(argv []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 		if id == "" {
-			fmt.Fprintf(stderr, "daedalus-host: %s: 缺少 <id> 参数\n", cmd)
+			fmt.Fprintf(stderr, "daedalus-host: %s: %s\n", cmd, i18n.T("host.error.missing_id"))
 			return exitUsage
 		}
 		tool := "host_" + auditSlug(cmd)
 		// 只有 run-plugin 接受 `--` 追加参数;其余子命令给 tail 即用法错误。
 		if len(tail) > 0 && cmd != "run-plugin" {
-			fmt.Fprintf(stderr, "daedalus-host: %s: 该子命令不接受追加参数\n", cmd)
+			fmt.Fprintf(stderr, "daedalus-host: %s: %s\n", cmd, i18n.T("host.error.extra_args"))
 			hostAudit(tool, pluginDir, id, exitUsage)
 			return exitUsage
 		}
 		// id 注入防线:文法非法 '../' 等一律拒绝,绝不用它拼路径。
 		if !plugin.ValidID(id) {
-			fmt.Fprintf(stderr, "daedalus-host: %s: 插件 id %q 不匹配文法,拒绝\n", cmd, id)
+			fmt.Fprintf(stderr, "daedalus-host: %s: %s\n", cmd, i18n.T("host.error.invalid_id", id))
 			hostAudit(tool, pluginDir, id, exitUsage)
 			return exitUsage
 		}
@@ -131,8 +122,8 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		hostAudit(tool, pluginDir, id, code)
 		return code
 	default:
-		fmt.Fprintf(stderr, "daedalus-host: 未知子命令 %q\n\n", cmd)
-		fmt.Fprintf(stderr, usage, version.Version)
+		fmt.Fprintf(stderr, "daedalus-host: %s\n\n", i18n.T("host.error.unknown_cmd", cmd))
+		fmt.Fprint(stderr, usage())
 		return exitUsage
 	}
 }
@@ -144,7 +135,7 @@ func splitDirFlag(argv []string) (rest []string, dir string, err error) {
 		a := argv[i]
 		if a == "-dir" || a == "--dir" {
 			if i+1 >= len(argv) {
-				return nil, "", errors.New("-dir 需要跟一个值")
+				return nil, "", errors.New(i18n.T("host.error.dir_needs_value"))
 			}
 			dir = argv[i+1]
 			i++
@@ -160,13 +151,13 @@ func parseIDArgs(args []string) (id string, tail []string, err error) {
 	for i, a := range args {
 		if a == "--" {
 			if i != 1 {
-				return "", nil, errors.New("`--` 之前必须且只能有一个 <id>")
+				return "", nil, errors.New(i18n.T("host.error.tail_position"))
 			}
 			return args[0], args[2:], nil
 		}
 	}
 	if len(args) > 1 {
-		return "", nil, fmt.Errorf("多余参数 %v(追加参数请用 -- 分隔)", args[1:])
+		return "", nil, fmt.Errorf("%s", i18n.T("host.error.too_many_args", args[1:]))
 	}
 	if len(args) == 0 {
 		return "", nil, nil

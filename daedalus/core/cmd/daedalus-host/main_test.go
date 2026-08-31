@@ -8,12 +8,39 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/daedalus-os/daedalus/core/internal/audit"
+	"github.com/daedalus-os/daedalus/core/internal/i18n"
 	"github.com/daedalus-os/daedalus/core/internal/plugin"
 )
+
+// TestMain 在全部测试前把 locale 锁到 en_US:防止开发者本机 zh 环境
+// 泄漏进断言(与 tests/deno/main.test.ts 的既有先例一致)。
+// i18n.Init 幂等且包级状态一次定死,这里最先执行即生效于整个测试进程。
+// 个别中英切换测试用 t.Setenv + 重置包级状态自行接管。
+func TestMain(m *testing.M) {
+	os.Setenv("LC_ALL", "en_US.UTF-8")
+	i18n.ResetForTest()
+	i18n.Init()
+	os.Exit(m.Run())
+}
+
+// switchLocaleForTest 把 i18n 切到指定 locale 并注册恢复:
+// 先重置包级状态(t.Setenv 保证测试结束后 env 还原,再恢复状态),
+// 供中英表头切换等 locale 敏感测试使用。
+func switchLocaleForTest(t *testing.T, lcAll string) {
+	t.Helper()
+	t.Setenv("LC_ALL", lcAll)
+	i18n.ResetForTest()
+	t.Cleanup(func() {
+		i18n.ResetForTest()
+		i18n.Init() // 回到 TestMain 锁定的 en_US 基线
+	})
+	i18n.Init()
+}
 
 // writePluginSource 搭出最小 native 插件源目录(manifest 无 checksums,
 // 由 Pack 注入),返回源目录路径。
@@ -49,6 +76,16 @@ func nativeManifest() *plugin.Manifest {
 		Permissions: &plugin.Permissions{Read: []string{"/home"}, Write: []string{"/tmp"}, Run: []string{"/usr/bin/git"}},
 		Tools:       []string{"smoke_ping", "smoke_echo"},
 	}
+}
+
+// i18nManifest 是带 i18n 声明的 manifest 变体(覆盖 list 的 I18N 列与
+// inspect 的 i18n 段展示)。
+func i18nManifest() *plugin.Manifest {
+	m := *nativeManifest()
+	m.ID = "daedalus.i18n"
+	m.Name = "I18N Fixture"
+	m.I18N = []string{"en_US", "zh_CN"}
+	return &m
 }
 
 // installPlugin 把源目录打包并解压进 <pluginsRoot>/<id>/(模拟镜像安装)。
@@ -105,13 +142,18 @@ func TestList_MixedHealthyAndDegraded(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("list 退出码 = %d, want 0; stderr:\n%s", code, errOut)
 	}
+	// 表头经 i18n.T 取期望值(与生产同源),7 列制含 I18N。
 	for _, want := range []string{
-		"ID", "STATUS",
+		i18n.T("host.table.id"), i18n.T("host.table.status"), i18n.T("host.table.i18n"),
 		"daedalus.smoke", "Smoke Plugin", "0.1.0", "capability", "native",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list 输出缺少 %q:\n%s", want, out)
 		}
+	}
+	// 无 i18n 声明的插件,I18N 列显示 "-"(按空白归一化匹配,免疫 tabwriter 补格)。
+	if !normalizeRow(out, "daedalus.smoke", "Smoke Plugin\t0.1.0\tcapability\tnative\t-\tok") {
+		t.Errorf("smoke 行 I18N 列应为 -:\n%s", out)
 	}
 	if !strings.Contains(out, "daedalus.ghost") || !strings.Contains(out, "degraded") {
 		t.Errorf("缺 manifest 目录应标 degraded:\n%s", out)
@@ -126,8 +168,83 @@ func TestList_MixedHealthyAndDegraded(t *testing.T) {
 		t.Errorf("非法目录名应 degraded 并给出文法原因:\n%s", out)
 	}
 	// 健康行状态必须是 ok(且 good 路径确实被安装)。
-	if good == "" || !strings.Contains(out, "ok") {
+	if good == "" || !normalizeRow(out, "daedalus.smoke", "ok") {
 		t.Error("健康插件状态列缺失")
+	}
+}
+
+// normalizeRow 断言输出中存在"以 first 开头、以 rest 字段序列结尾"的行:
+// 字段间空白任意(免疫 tabwriter 补格),行内其他列(如 I18N 列)不参与匹配。
+// rest 里的 \t 表示字段边界;first 作为行首锚点(插件 id)。
+func normalizeRow(out, first, rest string) bool {
+	parts := strings.Split(rest, "\t")
+	quoted := make([]string, len(parts))
+	for i, p := range parts {
+		quoted[i] = regexp.QuoteMeta(p)
+	}
+	pattern := `(?m)^` + regexp.QuoteMeta(first) + `\s+.*` + strings.Join(quoted, `\s+`) + `\s*$`
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(out)
+}
+
+// TestList_I18NColumn 显示 locale 列表;无声明的插件显示 "-"。
+func TestList_I18NColumn(t *testing.T) {
+	// Given: 一个带 i18n 声明的插件 + 一个无声明的插件。
+	root := t.TempDir()
+	installPlugin(t, root, i18nManifest())
+	installPlugin(t, root, nativeManifest())
+
+	// When: list。
+	code, out, errOut := runCapture(t, "list", "-dir", root)
+	if code != exitOK {
+		t.Fatalf("list 退出码 = %d, want 0; stderr: %s", code, errOut)
+	}
+
+	// Then: 有声明行显示逗号列表,无声明行显示 "-";表头列存在。
+	if !strings.Contains(out, i18n.T("host.table.i18n")) {
+		t.Errorf("表头缺少 I18N 列:\n%s", out)
+	}
+	if !normalizeRow(out, "daedalus.i18n", "I18N Fixture\t0.1.0\tcapability\tnative\ten_US, zh_CN\tok") {
+		t.Errorf("i18n 插件行应显示 locale 列表:\n%s", out)
+	}
+	if !normalizeRow(out, "daedalus.smoke", "Smoke Plugin\t0.1.0\tcapability\tnative\t-\tok") {
+		t.Errorf("无声明插件 I18N 列应为 -:\n%s", out)
+	}
+}
+
+// TestList_LocaleSwitchHeader 验证 LC_ALL 切换时表头跟随中英切换。
+func TestList_LocaleSwitchHeader(t *testing.T) {
+	root := t.TempDir()
+	installPlugin(t, root, nativeManifest())
+
+	// zh_CN:表头为中文译名(标识/名称/…/多语言/状态)。
+	switchLocaleForTest(t, "zh_CN.UTF-8")
+	code, out, errOut := runCapture(t, "list", "-dir", root)
+	if code != exitOK {
+		t.Fatalf("zh list 退出码 = %d; stderr: %s", code, errOut)
+	}
+	for _, want := range []string{"标识", "名称", "版本", "类型", "运行时", "多语言", "状态"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("zh 表头缺少 %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\nID\t") {
+		t.Errorf("zh 表头不应再含英文列名:\n%s", out)
+	}
+
+	// en_US:表头为英文列名。
+	switchLocaleForTest(t, "en_US.UTF-8")
+	code, out, _ = runCapture(t, "list", "-dir", root)
+	if code != exitOK {
+		t.Fatalf("en list 退出码 = %d", code)
+	}
+	for _, want := range []string{"ID", "NAME", "VERSION", "TYPE", "RUNTIME", "I18N", "STATUS"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("en 表头缺少 %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -166,14 +283,44 @@ func TestInspect_Details(t *testing.T) {
 		t.Fatalf("inspect 退出码 = %d, want 0; stderr: %s", code, errOut)
 	}
 	for _, want := range []string{
-		"id:          daedalus.smoke", "name:        Smoke Plugin", "version:     0.1.0",
-		"type:        capability", "runtime:     native", "executable:  bin/main",
+		i18n.T("host.inspect.id") + "          daedalus.smoke",
+		i18n.T("host.inspect.name") + "        Smoke Plugin",
+		i18n.T("host.inspect.version") + "     0.1.0",
+		i18n.T("host.inspect.type") + "        capability",
+		i18n.T("host.inspect.runtime") + "     native",
+		i18n.T("host.inspect.executable") + "  bin/main",
 		"smoke_ping", "read:", "/usr/bin/git", // tools + permissions
-		"checksums:   2 条", "sha256:", "integrity:   ok",
+		i18n.T("host.inspect.checksums") + "   2 条", "sha256:",
+		i18n.T("host.inspect.integrity"),
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("inspect 输出缺少 %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestInspect_I18NSection:manifest 声明了 i18n 时输出 i18n 段,无声明的整段省略。
+func TestInspect_I18NSection(t *testing.T) {
+	root := t.TempDir()
+	installPlugin(t, root, i18nManifest())
+	installPlugin(t, root, nativeManifest())
+
+	// 有声明:列出 supported locale。
+	code, out, errOut := runCapture(t, "inspect", "daedalus.i18n", "-dir", root)
+	if code != exitOK {
+		t.Fatalf("inspect i18n 插件退出码 = %d; stderr: %s", code, errOut)
+	}
+	if !strings.Contains(out, "i18n:\n  supported:  en_US, zh_CN\n") {
+		t.Errorf("应含 i18n 段与 supported 列表:\n%s", out)
+	}
+
+	// 无声明:整段省略。
+	code, out, errOut = runCapture(t, "inspect", "daedalus.smoke", "-dir", root)
+	if code != exitOK {
+		t.Fatalf("inspect smoke 退出码 = %d; stderr: %s", code, errOut)
+	}
+	if strings.Contains(out, "i18n:\n") {
+		t.Errorf("无声明插件不应输出 i18n 段:\n%s", out)
 	}
 }
 
@@ -196,7 +343,7 @@ func TestVerify_Pass(t *testing.T) {
 	installPlugin(t, root, nativeManifest())
 
 	code, out, errOut := runCapture(t, "verify", "daedalus.smoke", "-dir", root)
-	if code != exitOK || !strings.Contains(out, "校验通过") {
+	if code != exitOK || !strings.Contains(out, i18n.T("host.verify.pass", "daedalus.smoke")) {
 		t.Fatalf("verify 应通过: %d / %s / %s", code, out, errOut)
 	}
 }
@@ -224,7 +371,7 @@ func TestVerify_TamperedBinary(t *testing.T) {
 func TestVerify_UnknownID(t *testing.T) {
 	root := t.TempDir()
 	code, _, errOut := runCapture(t, "verify", "daedalus.absent", "-dir", root)
-	if code != exitRuntime || !strings.Contains(errOut, "校验失败") {
+	if code != exitRuntime || !strings.Contains(errOut, i18n.T("host.verify.fail", "")) {
 		t.Fatalf("不存在的 id 应 exit 1 + 原因,得 %d / %q", code, errOut)
 	}
 }
@@ -249,7 +396,7 @@ func TestRunPlugin_NativePrintsOnly(t *testing.T) {
 		t.Errorf("启动命令 =\n%q\nwant\n%q", lines[0], want)
 	}
 	// 非父进程语义必须在 stderr 说明。
-	if !strings.Contains(errOut, "不是进程父") {
+	if !strings.Contains(errOut, i18n.T("host.run_plugin.note")) {
 		t.Errorf("run-plugin 应声明宿主非父进程: %q", errOut)
 	}
 }
@@ -309,6 +456,10 @@ func TestRunPlugin_RejectsDegraded(t *testing.T) {
 	if !strings.Contains(errOut, "degraded") {
 		t.Errorf("拒绝原因应写明 degraded: %q", errOut)
 	}
+	// 拒绝文案经 i18n.T 与生产同源。
+	if !strings.Contains(errOut, i18n.T("host.verify.degraded_run_plugin")) {
+		t.Errorf("拒绝原因应含 degraded 文案: %q", errOut)
+	}
 }
 
 // -------------------------------------------------------- render-unit ----
@@ -327,6 +478,10 @@ func TestRenderUnit_ExecStartShape(t *testing.T) {
 	}
 	if !strings.Contains(out, "不是进程父") {
 		t.Errorf("片段注释应声明宿主非父进程:\n%s", out)
+	}
+	// 注释行与 systemd 协议行经 i18n.T 与生产同源;ExecStart 行保持纯协议文本。
+	if !strings.Contains(out, i18n.T("host.render_unit.note2")) {
+		t.Errorf("片段注释应含 render_unit.note2:\n%s", out)
 	}
 }
 

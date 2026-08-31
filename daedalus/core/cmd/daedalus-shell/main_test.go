@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/daedalus-os/daedalus/core/internal/audit"
 	"github.com/daedalus-os/daedalus/core/internal/policy"
 	"github.com/daedalus-os/daedalus/core/internal/shellpolicy"
 )
@@ -331,8 +332,10 @@ func procMarkerAlive(t *testing.T, marker string) bool {
 	return false
 }
 
-// TestShellExec_AuditLines 验证成功与拒绝两条审计行的键序、可空性与语义;
-// 并验证审计文件缺失时写失败静默(执行结果不受影响)。
+// TestShellExec_AuditLines 验证成功与拒绝两条审计行符合 internal/audit
+// 哈希链 schema(daedalus-shell 身份 + shell_exec 工具名 + outcome 派生),
+// 与 daedalus-copilot / daedalus-host / daedalus-audit 等其他身份共链,
+// 任何工具调用后 daedalus-audit verify 都能通过(不能断链)。
 func TestShellExec_AuditLines(t *testing.T) {
 	cfg := testConfig(t, "")
 	session, ctx := connectSession(t, cfg)
@@ -353,47 +356,92 @@ func TestShellExec_AuditLines(t *testing.T) {
 		t.Fatalf("审计行数 = %d, want 2:\n%s", len(lines), data)
 	}
 
-	// 第一行:成功路径。键序与 ts JSON.stringify 一致:
-	// timestamp,tool,command,args,allowed,returncode,error。
-	ok := lines[0]
-	for _, frag := range []string{`"timestamp":`, `"tool":"shell_exec"`, `"command":"uname"`, `"args":["-s"]`, `"allowed":true`, `"returncode":0`, `"error":null`} {
-		if !strings.Contains(ok, frag) {
-			t.Errorf("成功审计行缺片段 %s: %s", frag, ok)
-		}
-	}
-	if !strings.HasPrefix(ok, `{"timestamp":`) {
-		t.Errorf("成功审计行键序漂移(首键应为 timestamp): %s", ok)
+	// 整链验证:daedalus-audit verify 应当不报错地接受两条 entry。
+	if n, err := audit.Verify(cfg.auditPath); err != nil || n != 2 {
+		t.Fatalf("哈希链应通过 2 条,得 n=%d err=%v\n%s", n, err, data)
 	}
 
-	bad := lines[1]
-	for _, frag := range []string{`"command":"rm"`, `"allowed":false`, `"returncode":126`, `"error":"Command 'rm' is not in ALLOW_COMMANDS allowlist."`} {
-		if !strings.Contains(bad, frag) {
-			t.Errorf("拒绝审计行缺片段 %s: %s", frag, bad)
+	// 第一行:成功路径。顶层 schema 固定,args 嵌套对象保留原字段。
+	var ok map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &ok); err != nil {
+		t.Fatalf("成功审计行非法 JSON: %v\n%s", err, lines[0])
+	}
+	for k, want := range map[string]string{
+		"identity": "daedalus-shell",
+		"tool":     "shell_exec",
+		"outcome":  "success",
+	} {
+		if got, _ := ok[k].(string); got != want {
+			t.Errorf("顶层 %s 应为 %q,得 %v", k, want, ok[k])
 		}
 	}
-
-	// 结构化解析复核字段类型。
-	var entry auditEntry
-	if err := json.Unmarshal([]byte(ok), &entry); err != nil {
-		t.Fatalf("审计行非法 JSON: %v", err)
+	if ok["prev_hash"] == "" || ok["entry_hash"] == "" || ok["timestamp"] == "" {
+		t.Errorf("哈希链字段缺失或为空: %v", ok)
 	}
-	if entry.Timestamp < 1e9 || entry.Tool != "shell_exec" || *entry.Returncode != 0 {
-		t.Errorf("审计字段异常: %+v", entry)
+	// 文件行用 sort_keys=True 序列化(与 Python json.dumps(sort_keys=True)
+	// 字节级兼容,保证哈希链跨语言稳定);首键是字母序最小的 args,不验
+	// HasPrefix。stdout 的 IndentJSON 走插入序,那里可以验键序。
+	for _, want := range []string{`"args":`, `"entry_hash":`, `"identity":`, `"outcome":`, `"policy_version":`, `"prev_hash":`, `"timestamp":`, `"tool":`} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("成功审计行缺顶层字段 %s: %s", want, lines[0])
+		}
+	}
+	args, ok2 := ok["args"].(map[string]any)
+	if !ok2 {
+		t.Fatalf("args 应为对象,得 %T: %v", ok["args"], ok["args"])
+	}
+	if args["command"] != "uname" {
+		t.Errorf("args.command 应为 uname,得 %v", args["command"])
+	}
+	if arr, _ := args["args"].([]any); len(arr) != 1 || arr[0] != "-s" {
+		t.Errorf("args.args 应为 [-s],得 %v", args["args"])
+	}
+	if args["allowed"] != true {
+		t.Errorf("args.allowed 应为 true,得 %v", args["allowed"])
+	}
+	if rc, _ := args["returncode"].(float64); rc != 0 {
+		t.Errorf("args.returncode 应为 0,得 %v", args["returncode"])
+	}
+
+	// 第二行:拒绝路径。outcome=denied,command/returncode 嵌入 args。
+	var bad map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &bad); err != nil {
+		t.Fatalf("拒绝审计行非法 JSON: %v\n%s", err, lines[1])
+	}
+	if bad["outcome"] != "denied" {
+		t.Errorf("拒绝行 outcome 应为 denied,得 %v", bad["outcome"])
+	}
+	badArgs, _ := bad["args"].(map[string]any)
+	if badArgs["command"] != "rm" {
+		t.Errorf("拒绝行 args.command 应为 rm,得 %v", badArgs["command"])
+	}
+	if badArgs["allowed"] != false {
+		t.Errorf("拒绝行 args.allowed 应为 false,得 %v", badArgs["allowed"])
+	}
+	if rc, _ := badArgs["returncode"].(float64); rc != 126 {
+		t.Errorf("拒绝行 args.returncode 应为 126,得 %v", badArgs["returncode"])
 	}
 }
 
-func TestRecordAudit_SilentWhenFileMissing(t *testing.T) {
+// TestRecordAudit_CreatesFileAndChainsHash 验证 recordAudit 在文件不存在时
+// 会创建文件(经 internal/audit.LogAudit 的 O_CREATE 模式),写入的 entry 立即
+// 进入哈希链;并证明 1 条 entry 也能独立 verify(ts create:false 旧语义已弃用,
+// 与新哈希链格式不兼容;若保留旧行为,daedalus-shell 的工具调用永远断链)。
+func TestRecordAudit_CreatesFileAndChainsHash(t *testing.T) {
 	cfg := serverConfig{
 		allow:     shellpolicy.ResolveAllowCommands(""),
-		auditPath: filepath.Join(t.TempDir(), "not-created-yet.jsonl"), // create:false → 静默
+		auditPath: filepath.Join(t.TempDir(), "created-on-demand.jsonl"),
 		timeout:   shellpolicy.Timeout,
 	}
 	res := shellExec(context.Background(), cfg, "uname", []string{"-s"})
 	if res.Returncode != 0 {
 		t.Errorf("审计缺失不应影响执行: %+v", res)
 	}
-	if _, err := os.Stat(cfg.auditPath); !os.IsNotExist(err) {
-		t.Error("recordAudit 不得创建文件(ts create:false 语义)")
+	if _, err := os.Stat(cfg.auditPath); err != nil {
+		t.Fatalf("recordAudit 应在文件缺失时创建之: %v", err)
+	}
+	if n, err := audit.Verify(cfg.auditPath); err != nil || n != 1 {
+		t.Fatalf("新建文件 1 条 entry 哈希链应通过,得 n=%d err=%v", n, err)
 	}
 }
 

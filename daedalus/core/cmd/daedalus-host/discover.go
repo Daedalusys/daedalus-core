@@ -16,6 +16,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/daedalus-os/daedalus/core/internal/i18n"
 	"github.com/daedalus-os/daedalus/core/internal/plugin"
 )
 
@@ -39,7 +40,7 @@ type pluginState struct {
 func scanPlugins(root string) ([]pluginState, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return nil, fmt.Errorf("插件目录不可读: %w", err)
+		return nil, fmt.Errorf("%s", i18n.T("host.error.list_failed", err))
 	}
 	var out []pluginState
 	for _, e := range entries {
@@ -94,25 +95,40 @@ func cmdList(stdout, stderr io.Writer, root string) int {
 	}
 	var reasons []string
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tVERSION\tTYPE\tRUNTIME\tSTATUS")
+	// 表头 7 列经 i18n.T(en_US 英文 / zh_CN 中文),I18N 列为新增。
+	fmt.Fprintln(tw, strings.Join([]string{
+		i18n.T("host.table.id"), i18n.T("host.table.name"), i18n.T("host.table.version"),
+		i18n.T("host.table.type"), i18n.T("host.table.runtime"), i18n.T("host.table.i18n"),
+		i18n.T("host.table.status"),
+	}, "\t"))
 	for _, st := range states {
-		name, ver, typ, rt := "-", "-", "-", "-"
+		name, ver, typ, rt, i18nCol := "-", "-", "-", "-", "-"
 		if st.manifest != nil {
 			name, ver, typ, rt = st.manifest.Name, st.manifest.Version, st.manifest.Type, st.manifest.Runtime
+			i18nCol = i18nColumn(st)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", st.id, name, ver, typ, rt, st.status)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", st.id, name, ver, typ, rt, i18nCol, st.status)
 		if st.status == statusDegraded {
 			reasons = append(reasons, fmt.Sprintf("  %s: %s", st.id, st.reason))
 		}
 	}
 	if err := tw.Flush(); err != nil {
-		fmt.Fprintf(stderr, "daedalus-host: list: 输出失败: %v\n", err)
+		fmt.Fprintf(stderr, "daedalus-host: %s\n", i18n.T("host.error.write_failed", err))
 		return exitRuntime
 	}
 	if len(reasons) > 0 {
-		fmt.Fprintf(stdout, "\ndegraded 明细:\n%s\n", strings.Join(reasons, "\n"))
+		fmt.Fprintf(stdout, "%s%s\n", i18n.T("host.list.degraded_details"), strings.Join(reasons, "\n"))
 	}
 	return exitOK
+}
+
+// i18nColumn 计算 list 表格的 I18N 列:manifest 缺失或未声明 i18n 字段
+// 返回 "-",否则返回支持 locale 的逗号列表(如 "en_US, zh_CN")。
+func i18nColumn(st pluginState) string {
+	if st.manifest == nil || len(st.manifest.I18N) == 0 {
+		return "-"
+	}
+	return strings.Join(st.manifest.I18N, ", ")
 }
 
 // cmdInspect 打印单个插件的 manifest 详情(checksums 摘要、tools、permissions)
@@ -124,25 +140,31 @@ func cmdInspect(stdout, stderr io.Writer, st pluginState) int {
 		return exitRuntime
 	}
 	m := st.manifest
-	fmt.Fprintf(stdout, "id:          %s\n", m.ID)
-	fmt.Fprintf(stdout, "name:        %s\n", m.Name)
-	fmt.Fprintf(stdout, "version:     %s\n", m.Version)
-	fmt.Fprintf(stdout, "type:        %s\n", m.Type)
-	fmt.Fprintf(stdout, "runtime:     %s\n", m.Runtime)
-	fmt.Fprintf(stdout, "executable:  %s\n", m.Executable)
-	fmt.Fprintf(stdout, "dir:         %s\n", st.dir)
-	fmt.Fprintf(stdout, "entrypoint:  %s\n", joinOrNone(m.Entrypoint))
-	fmt.Fprintf(stdout, "tools:       %s\n", joinOrNone(m.Tools))
+	// 段头标签经 i18n.T;标签本身含冒号与对齐空格,en_US 维持原固定宽度。
+	fmt.Fprintf(stdout, "%s          %s\n", i18n.T("host.inspect.id"), m.ID)
+	fmt.Fprintf(stdout, "%s        %s\n", i18n.T("host.inspect.name"), m.Name)
+	fmt.Fprintf(stdout, "%s     %s\n", i18n.T("host.inspect.version"), m.Version)
+	fmt.Fprintf(stdout, "%s        %s\n", i18n.T("host.inspect.type"), m.Type)
+	fmt.Fprintf(stdout, "%s     %s\n", i18n.T("host.inspect.runtime"), m.Runtime)
+	fmt.Fprintf(stdout, "%s  %s\n", i18n.T("host.inspect.executable"), m.Executable)
+	fmt.Fprintf(stdout, "%s         %s\n", i18n.T("host.inspect.dir"), st.dir)
+	fmt.Fprintf(stdout, "%s  %s\n", i18n.T("host.inspect.entrypoint"), joinOrNone(m.Entrypoint))
+	fmt.Fprintf(stdout, "%s       %s\n", i18n.T("host.inspect.tools"), joinOrNone(m.Tools))
 	fmt.Fprint(stdout, renderPermissions(m.Permissions))
-	fmt.Fprintf(stdout, "checksums:   %d 条\n", len(m.Checksums))
+	fmt.Fprintf(stdout, "%s   %d 条\n", i18n.T("host.inspect.checksums"), len(m.Checksums))
 	for _, name := range sortedKeys(m.Checksums) {
 		fmt.Fprintf(stdout, "  %s  %s\n", name, m.Checksums[name])
 	}
+	// i18n 段:manifest 声明了多语言支持时列出受支持 locale,空则整段省略。
+	if len(m.I18N) > 0 {
+		fmt.Fprintf(stdout, "i18n:\n")
+		fmt.Fprintf(stdout, "  %s  %s\n", i18n.T("host.inspect.i18n_supported"), strings.Join(m.I18N, ", "))
+	}
 	if st.status != statusOK {
-		fmt.Fprintf(stderr, "daedalus-host: inspect: %s 完整性 DEGRADED: %s\n", st.id, st.reason)
+		fmt.Fprintf(stderr, "daedalus-host: inspect: %s %s: %s\n", st.id, i18n.T("host.inspect.integrity_degraded"), st.reason)
 		return exitRuntime
 	}
-	fmt.Fprintf(stdout, "integrity:   ok(sha256 全部匹配)\n")
+	fmt.Fprint(stdout, i18n.T("host.inspect.integrity"))
 	return exitOK
 }
 
@@ -151,7 +173,7 @@ func inspectNoManifestReason(st pluginState) string {
 	if st.reason != "" {
 		return st.reason
 	}
-	return "manifest 不可用"
+	return i18n.T("host.error.manifest_unavailable")
 }
 
 // renderPermissions 把声明式权限渲染为可读块(nil = 未声明)。
