@@ -125,6 +125,18 @@ Traditional systems grant AI agents or LLM clients unrestricted shell access, po
 
 ---
 
+## Object Model
+
+> 本段由 plan `aios-object-model-alignment` W7/T31 增量追加 (决策 25 落地; 完整决策与执行模型细节见 `.omo/plans/aios-object-model-alignment.md`, 此处不重复)。
+
+- **单一事实源**: 对象模型 schema 只有 `daedalus/core/internal/objectmodel/` 一处定义。`Resource` 是 manifest 声明类型, 三字段元组 `kind` + `name` + `desired_state` (JSON 键 `kind`/`name`/`desired_state`), 绝不掺入 systemctl 字段; `ServiceState` 是查询/状态载荷共用类型 (`kind`/`name`/`desired_state`/`properties`, Properties 键为 systemctl 属性名原文)。id / metadata 等其它维度未进入 v1 声明模式。
+- **资源种类**: `Kind` 封闭枚举共 7 类 (service / package / container / capability / task / transaction / policy), v1 仅 `service` 有 provider (T6/T7 落地的 `daedalus-service` 只读查询 + T22 的 tx 适配器); 其余六类是保留枚举位, 校验器接受、策略网关 fail-closed 拒绝。**新增资源种类必须先在 `daedalus/core/internal/objectmodel/` 加 Kind 常量 + `kindRegistry` 登记 + 校验分支**, 再经 `policy.toml [objectmodel].enabled_kinds` 放行 (三点漂移测试 policy.toml ↔ `policy.Default()` ↔ objectmodel 常量拒绝漏改)。
+- **transactable**: 不是所有资源都事务化。事务性资源 (目前仅 service) 的状态变更走 `daedalus-tx` (begin→propose→apply→rollback) 通道; 未启用 / 无 tx 适配器的非事务性资源被策略网关与适配器注册表拒绝, 连 begin→propose→apply 序列都无法发起。v1 执行模型: `daedalus-tx` 是用户态调用的 CLI, 无 systemd 单元 (决策 25)。
+- **状态字段**: `ActiveState`/`SubState` 等观测态不在声明 schema 里, 由 `daedalus/core/internal/state/` 包提供——`state.jsonl` 追加式观测缓存, 行形 `StateEntry{kind, name, observed_at, payload}`, payload 为序列化的 `objectmodel.ServiceState`。state 是派生缓存, 与哈希链审计 (证据层) 分离; v1 状态记忆按上下文隔离 (DynamicUser 命名空间, 决策 25 补充条款)。
+- **安装态 vs 源码侧**: 镜像安装态 `daedalus/files/system/opt/daedalus/plugins/daedalus.service/daedalus.plugin.json` 的 `resources` 字段 (含 `desired_state` 补全与 checksums 注入) 是 `just plugin-pack` 的构建期产物; 源码侧仅 `daedalus/plugin/service/` 声明 `resources` (`{ "kind": "service", "name": "*" }`), 其余 4 个既有能力与 copilot manifest 暂不写。`76-daedalus-plugin-gen.sh` 构建期交叉核对 `resources[].kind` ⊆ `[objectmodel].enabled_kinds`, 漂移即拒构建。
+
+---
+
 ## 2. OS Capability MCP Servers & Copilot CLI
 
 Daedalus implements OS capability servers adhering to the Model Context Protocol specification. All servers are **Go static binaries** (`daedalus/core/cmd/daedalus-<cap>/`, official `modelcontextprotocol/go-sdk` stdio servers), packaged as `daedalus-plugin` (type=capability, runtime=native) under `/opt/daedalus/plugins/daedalus.<cap>/bin/`. The systemd units' ExecStart is rendered and self-verified at build time from the plugin manifests + `policy.toml` (`76-daedalus-plugin-gen.sh`), preserving per-service DynamicUser/Landlock drop-ins.
@@ -265,6 +277,9 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
 - **NEVER** leak source into the image rootfs: `daedalus/core/` (Go 源码 + 构建期下载到 GOMODCACHE 的模块) and `daedalus/plugin/` sources and any `*.test.ts`/`*.py`/`__pycache__`/`vendor` must never be rsync/COPY'd into `/opt` — only build products (`plugins/` 安装态, `usr/local/bin` binaries, `shared/policy.toml`) land there (`just verify-image` asserts this).
 - **NEVER** hand-edit `daedalus/files/system/opt/daedalus/plugins/` (构建产物) — regenerate via `just plugin-pack` / `./scripts/pack-copilot-plugin.sh`.
 - **NEVER** modify/commit changes to `base_image/` directly; modify `daedalus/{core,plugin,files}/` and run `just sync` / `./scripts/sync-daedalus.sh`.
+- **禁止绕开 daedalus-tx 直接改 service 状态**:所有 service 状态变更必须经 `daedalus-tx service.set` 通道,绕过即破坏审计链。
+- **禁止在 main.ts 写硬编码 UI 字符串**:所有 i18n 字符串必须经 `t(key, ...args)`,新加 key 必须同时写 `i18n/{en_US,zh_CN}.json` + manifest `i18n` 数组。
+- **禁止把镜像内安装态 `daedalus/files/system/opt/daedalus/plugins/` 手改**:必须 `just plugin-pack` / `./scripts/pack-copilot-plugin.sh` 重新生成。
 
 ## COMMANDS
 ```bash

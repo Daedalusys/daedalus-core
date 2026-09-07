@@ -1,5 +1,8 @@
 import { expect } from "jsr:@std/expect@1";
-import { defaultReadStdinAll, runCopilot, parseArgs, VERSION } from "../../daedalus/plugin/copilot/main.ts";
+import { defaultReadStdinAll, defaultTxBegin, runCopilot, parseArgs, readStateSummary, formatStateSummary, VERSION } from "../../daedalus/plugin/copilot/main.ts";
+import type { StateSummary, StateSummaryEntry } from "../../daedalus/plugin/copilot/main.ts";
+import type { TxApplyOutcome, TxJournal, TxPreviewOutcome, TxProposeOutcome, TxStep } from "../../daedalus/plugin/copilot/exec.ts";
+import { initI18n } from "../../daedalus/plugin/copilot/i18n.ts";
 
 // 锁定 locale 为 en_US：本测试文件的断言基于 en_US 文案硬编码。
 // 如不锁定，在 zh_CN locale 的开发机上（LC_ALL/LANG 为 zh_CN.UTF-8）
@@ -10,6 +13,15 @@ if ((globalThis as any).Deno?.env?.set) {
   Deno.env.set("LC_ALL", "en_US.UTF-8");
 } else {
   process.env.LC_ALL = "en_US.UTF-8";
+}
+
+// state 记忆基线锁(T20 同族纪律):todo 28 后 runQueryTurn 默认经
+// readStateSummary 真实读文件。把 DAEDALUS_STATE_PATH 钉到不存在的临时
+// 路径 → 全文件默认态读恒 NotFound 静默(env 存在即唯一候选,镜像
+// internal/dirs.File 的 env 独占链),开发者真实 ~/.local/share 状态
+// 绝不泄漏进断言。readStateSummary 专项测试再各自覆写该 env。
+if ((globalThis as any).Deno?.env?.set) {
+  Deno.env.set("DAEDALUS_STATE_PATH", "/tmp/daedalus-main-test-baseline-missing.jsonl");
 }
 
 let stdoutChunks: string[] = [];
@@ -1614,4 +1626,673 @@ Deno.test("Copilot Main - defaultReadStdinAll returns empty string when stream e
       Object.defineProperty(denoGlobal.Deno, "stdin", originalDescriptor);
     }
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// todo 27:事务通道接线(tx.propose / tx.apply / tx.rollback → execTx* 分派)
+//
+// LLM 事务提议编码:command = "tx.propose"|"tx.apply"|"tx.rollback",
+// args = [目标, 期望态?]。safe 定级(tx_propose 恒 safe;tx_apply
+// started|stopped)走 begin→propose→preview→y/n→apply;
+// caution/danger(tx_apply restarted/enabled/disabled/reload、tx_rollback)
+// 只展示,永不 apply。execTx* 三函数与 begin 全部 mock 注入(除
+// defaultTxBegin 真实假二进制用例),沿用 setup/teardown 风格。
+// ═══════════════════════════════════════════════════════════════════════════
+
+const TX_ID = "a1b2c3d4e5f60718";
+
+/** 构造通过 exec.ts asJournal 五键形态校验的事务日志夹具。 */
+function txJournalFixture(status: string, steps: TxStep[]): TxJournal {
+  return {
+    id: TX_ID,
+    created_at: "2026-09-07T00:00:00Z",
+    status: status as TxJournal["status"],
+    steps,
+    rollback_plan: { steps: [] },
+  };
+}
+
+const TX_STEP: TxStep = {
+  index: 1,
+  adapter: "service.set",
+  args: { name: "nginx", desired_state: "started" },
+  before_state: { ActiveState: "inactive" },
+  after_state: { ActiveState: "active" },
+  op_result: { returncode: 0 },
+};
+
+/** 记录调用顺序的 4 个 tx mock(成功形态;个别用例单独覆写)。 */
+function makeTxMocks() {
+  const calls: string[] = [];
+  return {
+    calls,
+    txBeginFn: async () => {
+      calls.push("begin");
+      return { ok: true, txId: TX_ID } as const;
+    },
+    txProposeFn: async (_txId: string, _adapter: string, _args: unknown): Promise<TxProposeOutcome> => {
+      calls.push("propose");
+      const journal = txJournalFixture("proposed", [TX_STEP]);
+      return { ok: true, journal, step: TX_STEP, beforeState: TX_STEP.before_state, afterState: TX_STEP.after_state };
+    },
+    txPreviewFn: async (_txId: string): Promise<TxPreviewOutcome> => {
+      calls.push("preview");
+      return {
+        ok: true,
+        journal: txJournalFixture("proposed", [TX_STEP]),
+        diff: [{
+          index: 1,
+          adapter: "service.set",
+          args: TX_STEP.args,
+          beforeState: TX_STEP.before_state,
+          afterState: TX_STEP.after_state,
+        }],
+      };
+    },
+    txApplyFn: async (_txId: string): Promise<TxApplyOutcome> => {
+      calls.push("apply");
+      return { ok: true, journal: txJournalFixture("applied", [TX_STEP]), opResults: [{ returncode: 0 }] };
+    },
+  };
+}
+
+function txTranslate(command: string, args: string[]) {
+  return async () => JSON.stringify({
+    command,
+    args,
+    explanation: "Apply desired_state to a user-scope service",
+  });
+}
+
+const txConfig = () => ({
+  provider: "openai" as const,
+  apiKey: "test-key",
+  model: "gpt-4o-mini",
+  baseUrl: "https://api.openai.com/v1",
+});
+
+Deno.test("Copilot Main - tx L0 happy path: begin -> propose -> preview -> 'y' -> apply, no shell exec", async () => {
+  setup();
+  const tx = makeTxMocks();
+  let shellExecCalls = 0;
+  const inputs = ["y"];
+  const mockStdinReader = async (_prompt?: string) => inputs.shift() ?? null;
+
+  const code = await runCopilot({
+    query: "start the nginx user service",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: mockStdinReader,
+    translateFn: txTranslate("tx.apply", ["nginx", "started"]),
+    execFn: async () => {
+      shellExecCalls++;
+      return { stdout: "", stderr: "", returncode: 0, error: null };
+    },
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  expect(code).toBe(0);
+  // 严格调用序:begin 先行(execTxPropose 不自动 begin),propose/preview 均先于 y,apply 最后
+  expect(tx.calls).toEqual(["begin", "propose", "preview", "apply"]);
+  expect(shellExecCalls).toBe(0); // 事务通道绝不走 execAllowlisted
+
+  const allStdout = stdoutChunks.join("");
+  // preview 的「计划前 → 计划后」diff 在确认提示之前展示
+  expect(allStdout).toContain(`Planned changes (transaction ${TX_ID}`);
+  expect(allStdout).toContain("step 1 [service.set]");
+  expect(allStdout).toContain('{"ActiveState":"inactive"} -> {"ActiveState":"active"}');
+  expect(allStdout).toContain(`Transaction ${TX_ID} applied`);
+
+  // 审计链:translate(带 tx_kind)→ tx_propose → tx_apply(auto:false = y 显式授权)
+  const translateLog = auditLogs.find((l) => l.tool === "copilot_translate");
+  expect(translateLog?.args.risk_level).toBe("safe");
+  expect(translateLog?.args.tx_kind).toBe("tx_apply");
+  const proposeLog = auditLogs.find((l) => l.tool === "copilot_tx_propose");
+  expect(proposeLog?.outcome).toBe("success");
+  expect(proposeLog?.args.tx_id).toBe(TX_ID);
+  expect(proposeLog?.args.adapter).toBe("service.set");
+  expect(proposeLog?.args.target).toBe("nginx");
+  expect(proposeLog?.args.desired_state).toBe("started");
+  const applyLog = auditLogs.find((l) => l.tool === "copilot_tx_apply");
+  expect(applyLog?.outcome).toBe("success");
+  expect(applyLog?.args.auto).toBe(false);
+  // shell 通道的 copilot_confirm 绝不出现在事务轮次
+  expect(auditLogs.some((l) => l.tool === "copilot_confirm")).toBe(false);
+});
+
+Deno.test("Copilot Main - tx L0 user says 'n': proposal dropped, apply never called, copilot_tx_reject with 'user denied tx'", async () => {
+  setup();
+  const tx = makeTxMocks();
+  const inputs = ["n"];
+  const mockStdinReader = async (_prompt?: string) => inputs.shift() ?? null;
+
+  const code = await runCopilot({
+    query: "start nginx",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: mockStdinReader,
+    translateFn: txTranslate("tx.apply", ["nginx", "started"]),
+    execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  expect(code).toBe(0);
+  // begin/propose/preview 已发生(仅快照,无副作用);apply 绝不调用
+  expect(tx.calls).toEqual(["begin", "propose", "preview"]);
+  const rejectLog = auditLogs.find((l) => l.tool === "copilot_tx_reject");
+  expect(rejectLog?.outcome).toBe("denied");
+  expect(rejectLog?.args.reason).toBe("user denied tx");
+  expect(rejectLog?.args.tx_id).toBe(TX_ID);
+  expect(auditLogs.some((l) => l.tool === "copilot_tx_apply")).toBe(false);
+  expect(stdoutChunks.join("")).toContain("Transaction dropped");
+});
+
+Deno.test("Copilot Main - tx L1 (restarted -> caution) display-only: no begin/propose/apply, no prompt", async () => {
+  setup();
+  const tx = makeTxMocks();
+  let readLineCalls = 0;
+
+  const code = await runCopilot({
+    query: "restart nginx",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: async () => {
+      readLineCalls++;
+      return "y";
+    },
+    translateFn: txTranslate("tx.apply", ["nginx", "restarted"]),
+    execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  expect(code).toBe(0);
+  expect(readLineCalls).toBe(0);
+  expect(tx.calls).toEqual([]); // L1 绝不进事务执行通道(连 begin 都不发起)
+
+  const allStdout = stdoutChunks.join("");
+  expect(allStdout).toContain("⚠");
+  expect(allStdout).toContain("→ tx.apply nginx restarted");
+  expect(allStdout).toContain("Please run this command in your terminal");
+
+  const rejectLog = auditLogs.find((l) => l.tool === "copilot_reject");
+  expect(rejectLog?.outcome).toBe("denied");
+  expect(rejectLog?.args.risk).toBe("caution");
+  expect(rejectLog?.args.tx_kind).toBe("tx_apply");
+  expect(rejectLog?.args.target).toBe("nginx");
+  expect(rejectLog?.args.desired_state).toBe("restarted");
+});
+
+Deno.test("Copilot Main - tx L2 (reload -> danger) display-only: danger banner + reason, apply never reachable", async () => {
+  setup();
+  const tx = makeTxMocks();
+
+  const code = await runCopilot({
+    query: "reload nginx",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: async () => "y",
+    translateFn: txTranslate("tx.apply", ["nginx", "reload"]),
+    execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  expect(code).toBe(0);
+  expect(tx.calls).toEqual([]);
+
+  const allStdout = stdoutChunks.join("");
+  expect(allStdout).toContain("🚨");
+  expect(allStdout).toContain("Reason:");
+  // danger 借 risk.pattern.shutdown 文案(T24 钉:reload 中断在途服务)
+  expect(allStdout).toContain("Shutdown/reboot; interrupts all sessions");
+
+  const rejectLog = auditLogs.find((l) => l.tool === "copilot_reject");
+  expect(rejectLog?.args.risk).toBe("danger");
+  expect(rejectLog?.args.reason).toBe("risk.pattern.shutdown");
+  expect(auditLogs.some((l) => l.tool === "copilot_tx_apply" || l.tool === "copilot_tx_propose")).toBe(false);
+});
+
+Deno.test("Copilot Main - tx_rollback (caution) for an unknown tx-id is display-only, no CLI spawn, structured hint, no stack", async () => {
+  setup();
+  const tx = makeTxMocks();
+
+  const code = await runCopilot({
+    query: "rollback transaction deadbeefdeadbeef01",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: async () => "y",
+    translateFn: txTranslate("tx.rollback", ["deadbeefdeadbeef01"]),
+    execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  // plan Failure QA 的当前形态:rollback 定级 caution → 展示路径,
+  // copilot 连 daedalus-tx 都不 spawn(「不存在的事务」错误在 v1 通道不可达),
+  // 用户拿到的是手动执行提示而非栈。
+  expect(code).toBe(0);
+  expect(tx.calls).toEqual([]);
+  const allOutput = stdoutChunks.join("") + stderrChunks.join("");
+  expect(allOutput).not.toContain("    at ");
+  const rejectLog = auditLogs.find((l) => l.tool === "copilot_reject");
+  expect(rejectLog?.args.tx_kind).toBe("tx_rollback");
+  expect(rejectLog?.args.target).toBe("deadbeefdeadbeef01");
+});
+
+Deno.test("Copilot Main - tx proposal with empty target fails closed before begin (zero spawn, exit 126)", async () => {
+  setup();
+  const tx = makeTxMocks();
+
+  const code = await runCopilot({
+    query: "apply something",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: async () => "y",
+    // args 缺目标:classifyTxProposal 抛 "target is empty"(plan QA 字面量)
+    translateFn: txTranslate("tx.apply", []),
+    execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  expect(code).toBe(126);
+  expect(tx.calls).toEqual([]); // 分类先行于开账:begin 绝不被调用
+  expect(stderrChunks.join("")).toContain("classifyTxProposal: target is empty");
+  const rejectLog = auditLogs.find((l) => l.tool === "copilot_reject");
+  expect(rejectLog?.outcome).toBe("denied");
+});
+
+Deno.test("Copilot Main - tx apply structured failure renders i18n error (no stack trace), audits copilot_error, exits 1", async () => {
+  setup();
+  const tx = makeTxMocks();
+  tx.txApplyFn = async (_txId: string): Promise<TxApplyOutcome> => {
+    tx.calls.push("apply");
+    return {
+      ok: false,
+      kind: "tx_runtime_error",
+      returncode: 1,
+      error: "step 1 failed: systemctl exit 1",
+      stderr: "",
+    };
+  };
+
+  const code = await runCopilot({
+    query: "start nginx",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: async () => "y",
+    translateFn: txTranslate("tx.apply", ["nginx", "started"]),
+    execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  expect(code).toBe(1);
+  expect(tx.calls).toEqual(["begin", "propose", "preview", "apply"]);
+  const stderr = stderrChunks.join("");
+  // T26 TxFailure 的 error 字段经 t("tx.error.run") 渲染;绝不抛栈
+  expect(stderr).toContain("Transaction step apply failed: step 1 failed: systemctl exit 1");
+  expect(stderr).not.toContain("    at ");
+  // 成功文案「Transaction <id> applied」绝不得出现(preview header 的
+  // "applied only after your confirmation" 是子串陷阱,断言必用完整句)
+  expect(stdoutChunks.join("")).not.toContain(`Transaction ${TX_ID} applied`);
+  const errLog = auditLogs.find((l) => l.tool === "copilot_error");
+  expect(errLog?.args.stage).toBe("apply");
+  expect(errLog?.args.tx_id).toBe(TX_ID);
+});
+
+Deno.test("Copilot Main - defaultTxBegin spawns DAEDALUS_TX_BIN fake binary (real process) and parses tx_id per stdout contract", async () => {
+  // 真实假二进制(T26 TX_FIXTURE 同族思路,begin 单行 JSON 文档即可):
+  // 验证 begin 解析链的进程边界保真度 —— argv 直传 + 单层转义 JSON 一次解析。
+  const dir = await Deno.makeTempDir({ prefix: "t27-txbegin-" });
+  const okBin = `${dir}/tx-ok`;
+  await Deno.writeTextFile(okBin, `#!/bin/sh\necho '{"tx_id":"${TX_ID}"}'\n`);
+  await Deno.chmod(okBin, 0o755);
+  const badBin = `${dir}/tx-bad`;
+  await Deno.writeTextFile(badBin, `#!/bin/sh\necho '{"error":"no tx dir available"}'\nexit 1\n`);
+  await Deno.chmod(badBin, 0o755);
+
+  try {
+    Deno.env.set("DAEDALUS_TX_BIN", okBin);
+    const ok = await defaultTxBegin();
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.txId).toBe(TX_ID);
+
+    Deno.env.set("DAEDALUS_TX_BIN", badBin);
+    const bad = await defaultTxBegin();
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) {
+      // 失败契约:非零退出也吐 {"error":...},优先取文档文本(永不 throw)
+      expect(bad.error).toContain("no tx dir available");
+    }
+  } finally {
+    Deno.env.delete("DAEDALUS_TX_BIN");
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// todo 28:state 记忆注入 runQueryTurn 测试组
+//
+// 覆盖三面:① 非空摘要 → translate 的 system prompt 追加段 + revise 循环
+// history[0] 同构注入;② 读取失败(PermissionDenied 分类)→ stderr 可见、
+// 无审计、翻译照常、绝不 throw;③ 空/缺失态 → 兜底文案绝不污染 prompt。
+// 另有 readStateSummary 直调测试钉真实文件解析链(newest-wins / 坏行 /
+// kind 过滤 / NotFound 静默 / PermissionDenied 可见)。
+// ─────────────────────────────────────────────────────────────────────────────
+
+const stateConfig = () => ({
+  provider: "openai" as const,
+  apiKey: "test-key",
+  model: "gpt-4o-mini",
+  baseUrl: "https://api.openai.com/v1",
+});
+
+function makeStateEntry(
+  name: string,
+  activeState: string,
+  observedAt: string,
+  extra: Record<string, string> = {},
+): StateSummaryEntry {
+  return {
+    name,
+    observedAt,
+    desiredState: "",
+    properties: { ActiveState: activeState, ...extra },
+  };
+}
+
+function stateSummaryOf(entries: StateSummaryEntry[], errors: string[] = []): StateSummary {
+  return { entries, text: formatStateSummary(entries), errors };
+}
+
+Deno.test("Copilot Main - TestRunQueryTurn_StateInjection: state summary appended to system prompt before translate", async () => {
+  await initI18n();
+  setup();
+  let capturedSystemContext: string | undefined;
+  let capturedQuery = "";
+
+  const entries = [
+    makeStateEntry("sshd.service", "active", "2026-09-07T02:00:00Z", {
+      SubState: "running",
+      LoadState: "loaded", // 不在 curated 三项子集,绝不得出现在摘要行
+    }),
+    makeStateEntry("crond.service", "inactive", "2026-09-07T02:10:00Z"),
+  ];
+
+  const code = await runCopilot({
+    query: "show disk usage",
+    isTerminal: true,
+    dryRun: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    translateFn: async (_q: string, _o?: unknown, systemContext?: string) => {
+      capturedQuery = _q;
+      capturedSystemContext = systemContext;
+      return JSON.stringify({ command: "df", args: ["-h"], explanation: "Show disk usage" });
+    },
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: stateConfig,
+    readStateFn: async () => stateSummaryOf(entries),
+  });
+
+  expect(code).toBe(0);
+  // 用户查询原文绝不掺入状态数据(注入只走 system prompt 追加段)
+  expect(capturedQuery).toBe("show disk usage");
+  // 注入内容 = formatStateSummary 产物,逐字节一致
+  expect(capturedSystemContext).toBe(formatStateSummary(entries));
+  const block = capturedSystemContext ?? "";
+  // 块标记(与 T30 落位的 en_US state.summary.header 文案一致,大小写不敏感钉 token)
+  expect(block.toLowerCase()).toContain("known state");
+  expect(block).toContain("sshd.service: ActiveState=active, SubState=running (observed 2026-09-07T02:00:00Z)");
+  expect(block).toContain("crond.service: ActiveState=inactive");
+  expect(block).not.toContain("LoadState");
+  // 兜底文案绝不混入非空摘要
+  expect(block).not.toContain("No service state recorded yet.");
+  // dry-run 正常收尾 + 状态读取零审计(plan 条款:NotFound/PermissionDenied 均不落审计事件)
+  expect(stdoutChunks.join("")).toContain("[dry-run] Proposed command");
+  expect(auditLogs.some((l) => l.tool.includes("state"))).toBe(false);
+  expect(stderrChunks.join("")).toBe("");
+});
+
+Deno.test("Copilot Main - TestRunQueryTurn_StateInjection_ReviseHistory: revise loop system message carries the same state block", async () => {
+  await initI18n();
+  setup();
+  let capturedHistory: Array<{ role: string; content: string }> = [];
+
+  const entries = [makeStateEntry("nginx.service", "active", "2026-09-07T03:00:00Z")];
+  const block = formatStateSummary(entries);
+
+  // 交互流:df -h 提议 → [n] 反馈 → revise(捕获 history)→ 新提议 free -m → [y] 执行
+  const inputs = ["n", "use mem info instead", "y"];
+  const code = await runCopilot({
+    query: "check memory",
+    isTerminal: true,
+    interactive: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: async () => inputs.shift() ?? null,
+    translateFn: async () => JSON.stringify({ command: "df", args: ["-h"], explanation: "Show disk usage" }),
+    reviseFn: async (history: Array<{ role: "system" | "user" | "assistant"; content: string }>) => {
+      capturedHistory = history;
+      return JSON.stringify({ command: "free", args: ["-m"], explanation: "Show memory" });
+    },
+    execFn: async () => ({ stdout: "ok\n", stderr: "", returncode: 0, error: null }),
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: stateConfig,
+    readStateFn: async () => stateSummaryOf(entries),
+  });
+
+  expect(code).toBe(0);
+  // 修订轮 system 消息 = 基础提示词 + 与首轮 translate 同构的 KNOWN STATE 追加段
+  expect(capturedHistory.length).toBeGreaterThanOrEqual(1);
+  expect(capturedHistory[0].role).toBe("system");
+  expect(capturedHistory[0].content).toContain(block);
+  expect(capturedHistory[0].content).toContain("nginx.service: ActiveState=active");
+});
+
+Deno.test("Copilot Main - TestRunQueryTurn_StateReadFailure: permission-denied paths print stderr + continue, prompt unpolluted, zero audit", async () => {
+  await initI18n();
+  setup();
+  let capturedSystemContext: string | undefined = "sentinel-not-called";
+
+  const code = await runCopilot({
+    query: "show uptime",
+    isTerminal: true,
+    dryRun: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    translateFn: async (_q: string, _o?: unknown, systemContext?: string) => {
+      capturedSystemContext = systemContext;
+      return JSON.stringify({ command: "uptime", args: [], explanation: "Show uptime" });
+    },
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: stateConfig,
+    // 模拟 readStateSummary 的真实降级形状:entries 空 + 兜底 text + errors 路径清单
+    readStateFn: async () => ({
+      entries: [],
+      text: "No service state recorded yet.",
+      errors: ["/var/lib/daedalus/state.jsonl"],
+    }),
+  });
+
+  // 优雅降级:退出码照常 0,LLM 翻译照常进行
+  expect(code).toBe(0);
+  // 配置期可见性:逐字钉 plan 文案(en_US state.summary.error)
+  expect(stderrChunks.join("")).toContain(
+    "copilot: state read permission denied: /var/lib/daedalus/state.jsonl",
+  );
+  // 失败态绝不把兜底文案注入 prompt
+  expect(capturedSystemContext).toBeUndefined();
+  // 翻译事件照常落审计;状态读取本身零审计条目
+  expect(auditLogs.some((l) => l.tool === "copilot_translate")).toBe(true);
+  expect(auditLogs.some((l) => l.tool.includes("state"))).toBe(false);
+});
+
+Deno.test("Copilot Main - TestRunQueryTurn_EmptyState: no entries means no prompt pollution (fallback text never injected)", async () => {
+  await initI18n();
+  setup();
+  let capturedSystemContext: string | undefined = "sentinel-not-called";
+
+  const code = await runCopilot({
+    query: "list files",
+    isTerminal: true,
+    dryRun: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    translateFn: async (_q: string, _o?: unknown, systemContext?: string) => {
+      capturedSystemContext = systemContext;
+      return JSON.stringify({ command: "ls", args: [], explanation: "List files" });
+    },
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: stateConfig,
+    // 空缓存正常态:text 是兜底文案,但 entries 长度为 0 → 不注入
+    readStateFn: async () => ({
+      entries: [],
+      text: "No service state recorded yet.",
+      errors: [],
+    }),
+  });
+
+  expect(code).toBe(0);
+  expect(capturedSystemContext).toBeUndefined();
+  expect(stderrChunks.join("")).toBe("");
+  expect(stdoutChunks.join("")).toContain("[dry-run] Proposed command");
+});
+
+// readStateSummary 直调测试:钉真实文件读取链(dirs 候选解析 + JSONL 容错
+// 解析 + newest-wins + kind 过滤 + 错误分类)。用后即删,不触碰真实
+// /var/lib/daedalus 与 $HOME 状态记忆(baseline env 已在文件顶锁定)。
+async function withStateEnv(path: string, fn: () => Promise<void>): Promise<void> {
+  const prev = Deno.env.get("DAEDALUS_STATE_PATH");
+  Deno.env.set("DAEDALUS_STATE_PATH", path);
+  try {
+    await fn();
+  } finally {
+    if (prev === undefined) Deno.env.delete("DAEDALUS_STATE_PATH");
+    else Deno.env.set("DAEDALUS_STATE_PATH", prev);
+  }
+}
+
+Deno.test("readStateSummary - parses real state.jsonl: service-only, newest-wins, bad lines skipped, deterministic sort", async () => {
+  await initI18n();
+  const dir = await Deno.makeTempDir({ prefix: "t28-state-" });
+  const file = `${dir}/state.jsonl`;
+  const lines = [
+    // sshd 旧观测(将被同文件后写的 sshd 新观测覆盖)
+    JSON.stringify({ kind: "service", name: "sshd.service", observed_at: "2026-09-06T10:00:00Z", payload: { kind: "service", name: "sshd.service", desired_state: "", properties: { ActiveState: "inactive", SubState: "dead" } } }),
+    // 坏行:非法 JSON(Go Read 容错姿态的 TS 镜像,静默跳过)
+    "{ broken json",
+    // 非 service 条目:kind=package 过滤
+    JSON.stringify({ kind: "package", name: "bash", observed_at: "2026-09-06T11:00:00Z", payload: { kind: "package", name: "bash", desired_state: "", properties: {} } }),
+    // nginx 单条
+    JSON.stringify({ kind: "service", name: "nginx.service", observed_at: "2026-09-06T12:00:00Z", payload: { kind: "service", name: "nginx.service", desired_state: "", properties: { ActiveState: "active", SubState: "running", UnitFileState: "enabled" } } }),
+    // 非对象行(数组)→ 静默跳过
+    "[1,2,3]",
+    // sshd 新观测:后写即新
+    JSON.stringify({ kind: "service", name: "sshd.service", observed_at: "2026-09-07T02:00:00Z", payload: { kind: "service", name: "sshd.service", desired_state: "", properties: { ActiveState: "active", SubState: "running" } } }),
+  ];
+  await Deno.writeTextFile(file, lines.join("\n") + "\n");
+
+  await withStateEnv(file, async () => {
+    const summary = await readStateSummary();
+    expect(summary.errors).toEqual([]);
+    // kind 过滤 + newest-wins:恰 sshd + nginx 两条,按 name 升序
+    expect(summary.entries.map((e) => e.name)).toEqual(["nginx.service", "sshd.service"]);
+    const sshd = summary.entries[1];
+    expect(sshd.observedAt).toBe("2026-09-07T02:00:00Z"); // 后写行胜出
+    expect(sshd.properties.ActiveState).toBe("active");
+    expect(sshd.properties.SubState).toBe("running");
+    const nginx = summary.entries[0];
+    expect(nginx.properties.UnitFileState).toBe("enabled");
+    // text = 追加块:header + 两行,坏行/非 service 绝不泄漏
+    expect(summary.text).toContain("nginx.service: ActiveState=active, SubState=running, UnitFileState=enabled");
+    expect(summary.text).toContain("sshd.service: ActiveState=active, SubState=running (observed 2026-09-07T02:00:00Z)");
+    expect(summary.text).not.toContain("bash");
+    expect(summary.text).not.toContain("2026-09-06T10:00:00Z"); // 旧观测不重现
+  });
+
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("readStateSummary - missing file degrades silently (NotFound = v1 normal state, no error entries)", async () => {
+  await initI18n();
+  const dir = await Deno.makeTempDir({ prefix: "t28-missing-" });
+  await withStateEnv(`${dir}/no-such-state.jsonl`, async () => {
+    const summary = await readStateSummary();
+    expect(summary.entries).toEqual([]);
+    expect(summary.errors).toEqual([]); // NotFound 静默,不记 errors
+    // 兜底文案在 text 上(由 formatStateSummary 的 state.summary.empty 渲染),
+    // 注入与否由调用方按 entries.length 裁决(runQueryTurn 已测:绝不注入)
+    expect(summary.text).toBe("No service state recorded yet.");
+  });
+  await Deno.remove(dir, { recursive: true });
+});
+
+Deno.test("readStateSummary - PermissionDenied is classified into errors (never throws, developer-visible)", async () => {
+  await initI18n();
+  // root 下 DAC 恒放行(EACCES 不可复现),与 Go 侧 dirs/state 测试同法 skip
+  if (typeof (Deno as any).euid === "function" && (Deno as any).euid() === 0) {
+    return;
+  }
+  const dir = await Deno.makeTempDir({ prefix: "t28-denied-" });
+  const file = `${dir}/state.jsonl`;
+  await Deno.writeTextFile(file, "whatever\n");
+  await Deno.chmod(file, 0o000);
+
+  await withStateEnv(file, async () => {
+    let summary: StateSummary | null = null;
+    let threw = false;
+    try {
+      summary = await readStateSummary();
+    } catch {
+      threw = true;
+    }
+    await Deno.chmod(file, 0o644); // 先恢复权限再断言/清理,永不 throw 是契约
+    expect(threw).toBe(false);
+    expect(summary).not.toBeNull();
+    expect(summary!.errors).toEqual([file]); // 唯一候选被拒 → 记路径继续
+    expect(summary!.entries).toEqual([]);
+    expect(summary!.text).toBe("No service state recorded yet.");
+  });
+
+  await Deno.remove(dir, { recursive: true });
 });

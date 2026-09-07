@@ -82,6 +82,14 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: i18n Manifest Gate (strict)
+        # 计划 todo 30 接线:严模式校验 copilot 清单 "i18n" 声明 ↔ i18n/ 目录实物
+        # (外加 Go 侧 i18n.T() key ↔ locales 交叉核对),漂移 exit 1 拒构建。
+        # 放在 deno test(下方 Full Test Suite Gate)之前尽早失败,不浪费镜像构建。
+        shell: bash
+        run: |
+          just i18n-sync daedalus/plugin/copilot
+
       - name: Build Plugin Install-State (Go binaries + plugin packaging)
         # 必须在 just build 之前: plugin-pack 把 Go 静态二进制与插件安装态
         # 落到 daedalus/files/system/(usr/local/bin + opt/daedalus/plugins),
@@ -109,6 +117,27 @@ jobs:
         run: |
           # `just test` = go test ./... + deno test --allow-all tests/deno/
           just test
+
+      - name: Tx Service Roundtrip Integration (todo 30 CI 接线)
+        # daedalus-tx 全链路端到端(todo 23 脚本):begin→propose→apply→status→
+        # rollback→审计双链 verify + ActiveState 实感断言,跑在 runner 的 user
+        # systemd 会话上。脚本自带就绪门:无用户管理器 → exit 77(SKIP 约定,
+        # automake 惯例)。**仅 0 / 77 放行**,其余非零退出(含 FAIL=1)原样上抛,
+        # 绝不把实现失败读成跳过。二进制构建由脚本自身 ensure_binaries 兜底。
+        shell: bash
+        run: |
+          set +e
+          bash tests/integration/tx_service_roundtrip.sh
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "tx_service_roundtrip: PASS"
+          elif [ "$rc" -eq 77 ]; then
+            echo "tx_service_roundtrip: SKIP (runner 无 user systemd 会话,exit 77)"
+          else
+            echo "tx_service_roundtrip: FAIL (exit $rc)"
+            exit "$rc"
+          fi
 
       - name: Verify Image Zero-Residue
         shell: bash

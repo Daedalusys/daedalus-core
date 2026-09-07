@@ -1,0 +1,19 @@
+# Daedalus 集成测试夹具(计划 todo 23)—— 平凡 Type=oneshot 用户域单元。
+#
+# 用途: tx_service_roundtrip.sh 把它复制到 ~/.config/systemd/user/ 后, 用
+# daedalus-tx 走 begin → propose service.set(started) → apply → rollback 全链路,
+# 断言 ActiveState 随事务施加/回滚发生 active ↔ inactive 变化。
+#
+# RemainAfterExit=yes 是断言的关键: oneshot 跑完 /bin/true 即退出, 不加此旗标
+# ActiveState 会停在 inactive, "apply 后应变 active" 无从断言。
+#
+# 生命周期: 仅测试期驻留 ~/.config/systemd/user/, 脚本 EXIT trap 负责
+# stop + 删除 + daemon-reload(计划钉死的强制 teardown), 绝不长期残留。
+
+[Unit]
+Description=Daedalus tx integration fixture (no-op oneshot)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true

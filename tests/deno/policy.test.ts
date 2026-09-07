@@ -13,6 +13,7 @@ import {
   L1_CAUTION_CMDS,
   L2_DANGER_PATTERNS,
   classifyProposal,
+  classifyTxProposal,
 } from "../../daedalus/plugin/copilot/policy.ts";
 
 Deno.test("Copilot Policy & Validation - exports validators and constants matching gateway definitions", () => {
@@ -333,4 +334,110 @@ Deno.test("classifyProposal - risk table structure exports", () => {
     expect(L1_CAUTION_CMDS.has(cmd)).toBe(true);
   }
   expect(L1_CAUTION_CMDS.has("df")).toBe(false);
+});
+
+// ── classifyTxProposal 事务风险分类器（aios-object-model-alignment todo 24）──
+//
+// ★ L0_WHITELIST 竞态条款（镜像 plan 措辞）★
+// 当意图是事务（transactional intent）时，分类器绝不走 shell 路径：
+// tx_* 意图不经 L0_WHITELIST 交集后检等 shell 推理，直接由
+// classifyTxProposal 按 (intent × desired_state) 静态表定级——
+// 使 L0 shell_exec 路径与 tx 路径互不竞争（no race）。
+//
+// reasonKey 仅复用已落地 i18n 键（risk.reason.* / risk.pattern.*）；
+// tx.* 专用键由 todo 30 落地，届时替换。
+
+/** 断言事务风险评估结果（level + reasonKey + tx_kind）的辅助函数 */
+function expectTxRisk(actual: RiskAssessment, level: string, reasonKey: string | null, txKind: string) {
+  expect(actual.level).toBe(level);
+  expect(actual.reasonKey).toBe(reasonKey);
+  expect(actual.tx_kind).toBe(txKind);
+}
+
+Deno.test("classifyTxProposal - 8-cell intent x desired_state matrix", () => {
+  // tx_propose 恒 safe（展示 + 记录，无论目标态为何）
+  expectTxRisk(classifyTxProposal("tx_propose", "nginx.service", "started"), "safe", null, "tx_propose");
+  expectTxRisk(classifyTxProposal("tx_propose", "nginx.service", "reload"), "safe", null, "tx_propose");
+  // tx_apply: started / stopped → safe
+  expectTxRisk(classifyTxProposal("tx_apply", "nginx.service", "started"), "safe", null, "tx_apply");
+  expectTxRisk(classifyTxProposal("tx_apply", "nginx.service", "stopped"), "safe", null, "tx_apply");
+  // tx_apply: restarted / enabled / disabled → caution
+  expectTxRisk(
+    classifyTxProposal("tx_apply", "nginx.service", "restarted"),
+    "caution",
+    "risk.reason.caution_command",
+    "tx_apply",
+  );
+  expectTxRisk(
+    classifyTxProposal("tx_apply", "nginx.service", "enabled"),
+    "caution",
+    "risk.reason.caution_command",
+    "tx_apply",
+  );
+  expectTxRisk(
+    classifyTxProposal("tx_apply", "nginx.service", "disabled"),
+    "caution",
+    "risk.reason.caution_command",
+    "tx_apply",
+  );
+  // tx_apply: reload → danger（触发 daemon-reload；todo 22 适配器已在 propose
+  // 时拒绝 reload，v1 无 apply 路径，danger 标注是纵深防御的展示层兜底）
+  expectTxRisk(
+    classifyTxProposal("tx_apply", "nginx.service", "reload"),
+    "danger",
+    "risk.pattern.shutdown",
+    "tx_apply",
+  );
+  // tx_rollback → caution（状态回退操作，intent 驱动可回滚但仍改系统状态）
+  expectTxRisk(
+    classifyTxProposal("tx_rollback", "nginx.service", ""),
+    "caution",
+    "risk.reason.caution_command",
+    "tx_rollback",
+  );
+});
+
+Deno.test("classifyTxProposal - empty target rejected with plan-pinned message", () => {
+  expect(() => classifyTxProposal("tx_apply", "", "started")).toThrow(
+    "classifyTxProposal: target is empty",
+  );
+  expect(() => classifyTxProposal("tx_propose", "   ", "started")).toThrow(
+    "classifyTxProposal: target is empty",
+  );
+  expect(() => classifyTxProposal("tx_rollback", "", "")).toThrow(
+    "classifyTxProposal: target is empty",
+  );
+});
+
+Deno.test("classifyTxProposal - unknown intent and unknown desired_state fail closed", () => {
+  // 未知 intent → 抛错（静态表无该行走 neither-safe 兜底，fail-closed）
+  expect(() => classifyTxProposal("tx_explode", "nginx.service", "started")).toThrow(
+    "classifyTxProposal: unknown intent",
+  );
+  // tx_apply 未知目标态（适配器会拒的动词）→ caution 而非 safe
+  expectTxRisk(
+    classifyTxProposal("tx_apply", "nginx.service", "hibernated"),
+    "caution",
+    "risk.reason.caution_command",
+    "tx_apply",
+  );
+});
+
+Deno.test("classifyProposal - legacy paths keep tx_kind undefined (shell default, outputs unchanged)", () => {
+  // 向后兼容表：全部既有 classifyProposal 输出的 level/reasonKey 逐格不变，
+  // 且不带 tx_kind 显式值（undefined ≙ "shell" 默认，消费方按 ?? "shell" 归一）。
+  const legacyTable: Array<[CommandProposal, string, string | null]> = [
+    [prop("df", ["-h", "/tmp"]), "safe", null],
+    [prop("systemctl", ["status"]), "caution", "risk.reason.caution_command"],
+    [prop("rm", ["-rf", "/tmp/x"]), "danger", "risk.pattern.rm_rf"],
+    [prop("git", ["push"]), "caution", "risk.reason.caution_command"],
+    [prop("git", ["log"]), "safe", "risk.reason.outside_sandbox"],
+    [prop("nvim", ["notes.txt"]), "safe", "risk.reason.outside_sandbox"],
+  ];
+  for (const [proposal, level, reasonKey] of legacyTable) {
+    const r = classifyProposal(proposal);
+    expectRisk(r, level, reasonKey);
+    // tx_kind 缺省即 shell：对象上不携带该键（旧输出逐字段不变）
+    expect(Object.hasOwn(r, "tx_kind")).toBe(false);
+  }
 });

@@ -42,6 +42,15 @@ dev-copilot *args:
     # 共享准备:重建 demo 二进制 + 安装布局位 + 解包插件 + export 环境变量。
     source scripts/copilot-prep.sh
     prep_copilot
+    # todo 16(v1 执行模型钉死):state/tx 根经 internal/dirs 的 env→system→$HOME
+    # 链解析;demo 态 parity 由下面两个 env 导出提供(paths_demo.go 重写清单
+    # 只有 /opt/daedalus 与 /usr/local/bin,不扩展——env 覆盖是钉死的 demo 机制)。
+    # recipe 走 bash,$PWD 在运行时展开(必为仓库根)。demo 里 state 读取通常
+    # NotFound→静默(无 writer 跑过);仓库在 $HOME 之外的边缘情形是
+    # PermissionDenied→可见-继续(todo 28)——两者皆良性;tx 往返完全可用,
+    # 因为 daedalus-tx 是 Go 二进制,不受 Deno 权限授予约束。
+    export DAEDALUS_STATE_PATH="$PWD/daedalus/files/system/var/lib/daedalus/state.jsonl"
+    export DAEDALUS_TX_DIR="$PWD/daedalus/files/system/var/lib/daedalus/tx"
     argv=$(daedalus/core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
            run-plugin daedalus.copilot -- {{args}})
     # 镜像 wrapper(`/usr/local/bin/daedalus`)用 `eval "set -- $argv"` 展开

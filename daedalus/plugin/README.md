@@ -36,7 +36,10 @@ plugin/
 │   └── bin/daedalus-fs             # 由 just plugin-pack 从 daedalus/core 构建拷入
 ├── shell/              # 同上:shell_exec(15 命令白名单,权威在 core/internal/shellpolicy)
 ├── pkg/                # 同上:dnf/rpm 只读查询
-└── sysinfo/            # 同上:os-release/hardware/network 只读探测
+├── sysinfo/            # 同上:os-release/hardware/network 只读探测
+└── service/            # 同上:service.query/service.list(systemd 单元只读观测)
+    ├── daedalus.plugin.json      # 唯一在源码侧声明 resources 的官方清单
+    └── bin/daedalus-service
 ```
 
 ## 清单格式(`daedalus.plugin.json`)
@@ -53,16 +56,93 @@ schema 与校验的单一事实源: `daedalus/core/internal/plugin/manifest.go`�
 | `entrypoint` | 可选 | deno runtime 的权限旗标列表;**不要写 `run`**(宿主已自动前置 `deno run`);`$HOME` 占位由 wrapper 在 argv 层展开 |
 | `permissions` | 可选 | `{read,write,run}` 路径白名单,与 entrypoint 旗标逐项一致 |
 | `tools` | capability 必填 | 声明的 MCP 工具名;76-daedalus-plugin-gen.sh 构建期与二进制 stdio `tools/list` 交叉核对,漂移即拒绝 |
+| `resources` | 可选 | Object Model 资源声明数组,条目为 `kind`/`name`/`desired_state` 三字段元组;schema 单一事实源 `daedalus/core/internal/objectmodel/objectmodel.go`。声明≠授权:kind 放行由 `policy.toml` `[objectmodel].enabled_kinds` 网关 fail-closed 强制;76-daedalus-plugin-gen.sh 构建期交叉核对声明 kind ⊆ 启用集,漂移即拒构建。写法详见下方「Object Model 与资源声明」 |
 | `checksums` | 安装态必填 | 由 `daedalus-plugin-pack` 注入(逐条目 sha256 + manifest 规范化自摘要);源码态清单**不得手填** |
+
+## Object Model 与资源声明(决策 25 落地)
+
+> 本节面向**插件开发者**:新插件如何声明资源、kind 词表从哪查、变更走哪条通道。
+> 全局对象模型决策与执行模型细节见仓库根 `AGENTS.md` 的 `## Object Model` 段
+> (plan `.omo/plans/aios-object-model-alignment.md` 决策 25),此处不重复。
+
+### 新插件入口:`daedalus.service`(type=capability, runtime=native)
+
+- **工具**:`service.query` / `service.list`,systemd 单元**只读**观测
+  (`systemctl show` 限定 7 项 curated 只读属性;`systemctl list-units --type=service` 列表)。
+  实现在 `daedalus/core/cmd/daedalus-service/`(`main.go` 注册 + `list.go` 解析),
+  回包载荷为 `objectmodel.ServiceState`(`kind`/`name`/`desired_state`/`properties`,
+  Properties 键为 systemctl 属性名原文)。
+- **严格只读**:本插件不暴露任何变更工具,manifest `permissions.write` 为空;
+  service 资源的**状态变更一律经 `daedalus-tx` 事务通道**(`service.set` 适配器,
+  begin→propose→apply→rollback),绕过即破坏审计链(根 `AGENTS.md` 反模式条款)。
+- **资源声明**:源码侧 manifest 用 `"resources": [{ "kind": "service", "name": "*" }]`
+  声明"我管理 service 类的全部实例";目前是**唯一**写 `resources` 的官方插件,
+  其余 4 能力与 copilot 暂不声明。安装态清单里的 `resources` 补全与 checksums 注入
+  同为 `just plugin-pack` 构建产物,勿手改。
+
+### 资源声明怎么写(manifest `resources` 字段)
+
+条目 schema 与校验的单一事实源:`daedalus/core/internal/objectmodel/objectmodel.go`;
+清单校验层(`daedalus/core/internal/plugin/manifest.go`)逐条目委托 `ValidateResource`。
+
+- **三字段元组**:`kind`(资源类别,封闭枚举)+ `name`(单段资源名:拒空、拒空字节、
+  拒 `/` 与 `..`,不携带路径语义;`"*"` 为全类通配)+ `desired_state`(取值词汇归各
+  provider 领域,如 service 的 `active`/`inactive`,本层允许空、不枚举)。
+  id/metadata 等其它维度未进入 v1 声明模式。
+- **kind 词表从哪查**:`objectmodel.AllKinds()` 共 7 类
+  (`service`/`package`/`container`/`capability`/`task`/`transaction`/`policy`);
+  **v1 仅 `service` 有 provider**,其余六类是保留枚举位。
+- **新增资源种类的改动面**(三点漂移测试拒绝漏改任何一处):
+  `objectmodel.go` 加 Kind 常量并登记 `kindRegistry` → `internal/policy` 的
+  `Default()` → `policy.toml` 的 `[objectmodel].enabled_kinds`。
+- **声明≠授权**:校验器接受保留 kind(类型层开放),策略网关 fail-closed 决定是否放行
+  (v1 仅启用 `service`);`76-daedalus-plugin-gen.sh` 构建期再交叉核对
+  声明 kind ⊆ 启用集,漂移即拒构建。
+- **transactable 不是清单字段**:资源是否事务化不写在 manifest 里,由"该 kind 是否有
+  `daedalus-tx` 适配器"决定(v1 仅 `service.set`);无适配器的资源连 begin→propose→apply
+  序列都无法发起(策略网关 + 适配器注册表双重拒绝)。
+
+### 状态字段归哪
+
+`ActiveState`/`SubState` 等**观测态不在声明 schema 里**:查询结果走 `ServiceState.properties`;
+成功观测另经 `daedalus/core/internal/state/` 追加进 `state.jsonl`(`StateEntry` 行,
+payload 为序列化的 `ServiceState`)。state 是**派生缓存**,与哈希链审计(证据层)分离;
+v1 状态记忆按上下文隔离(DynamicUser 命名空间,决策 25 补充条款,细节见根 `AGENTS.md`)。
+
+### `daedalus-tx`:带外事务 CLI(非插件)
+
+`daedalus-tx` **不在本目录**、无 `daedalus.plugin.json`、无 systemd 单元(v1 执行模型:
+用户态调用的 CLI,`cmd/daedalus-tx/`;用户作用域由适配器路径守卫无条件强制,装饰性单元是反模式)。
+`just plugin-pack` 把它装到 `daedalus/files/system/usr/local/bin/daedalus-tx`(镜像内 `/usr/local/bin/`)。
+子命令 `begin`/`propose`/`apply`/`rollback`/`status`;只有 begin/apply/rollback 在审计哈希链上
+盖 `TxID`+`TxStep`,propose/status 发空 TxID 条目(链校验语义见 plan 决策 25)。
+
+### Copilot 的事务通道
+
+命令顾问自此有**两条执行通道**,同由本地静态 classifier 把关(LLM 从不自标注风险):
+
+| 通道 | 提议形态 | L0(safe) | L1 / L2 |
+|------|---------|-----------|---------|
+| shell | 白名单内普通 shell 命令 | y/n 后经 `daedalus-shell` 沙箱执行 | 仅展示 + 手动执行提示(既有约定不变) |
+| transaction | 保留动词 `tx.propose` / `tx.apply` / `tx.rollback`(args = `[目标, 期望态?]`) | `classifyTxProposal`(`daedalus/plugin/copilot/policy.ts`)定级:`tx_propose` 恒 safe;`tx_apply` 的 `started`/`stopped` safe → 走事务执行通道 | 其余定级:`tx_apply` 的 `restarted`/`enabled`/`disabled` 与 `tx_rollback` 为 caution、`reload` 为 danger → **仅展示,绝不进入 apply** |
+
+- **L0 事务五步**(`daedalus/plugin/copilot/main.ts` 的 `runTxTurn`):
+  `begin`(开账取 tx_id)→ `propose`(`service.set` 适配器登记步骤,仅快照 Before/AfterState,
+  无副作用)→ `preview`(展示计划前→计划后 diff)→ **y/n 确认** → `apply`(真实副作用)。
+  `-y` / 非 TTY 视为已授权(审计记 `auto: true`);`--dry-run` 三步零调用(不开账、不落 journal)。
+- 用户拒绝(`n`)放弃事务:journal 停在 proposed 态、零副作用,决策同样落哈希链审计。
+- **事务提议不经 shell 白名单**:`tx.apply` 不在 15 命令集是设计使然;两条通道的执行
+  都收敛在带外二进制(`daedalus-shell` / `daedalus-tx`)上,copilot 进程自身零裸执行。
 
 ## 打包与安装流水线
 
 - **copilot**: `./scripts/pack-copilot-plugin.sh` —— 暂存 5 个 `.ts`(排除 `.test.ts`)+ 清单
   → Pack 注入 checksums → `-verify --keep` 解压安装态(解压即完整校验,摘要不符拒绝安装)。
   命令顾问(command advisor)插件:L0 之外的风险级别仅展示、由用户手动执行。
-- **4 能力插件**: `just plugin-pack` —— 构建 Go 二进制拷入各自 `bin/` → 同一 Pack→Verify 流程;
-  顺带安装宿主与 copilot 运行期依赖的审计/执行二进制到
-  `daedalus/files/system/usr/local/bin/daedalus-{host,audit,shell}`（task 21）。
+- **5 能力插件(fs/shell/pkg/sysinfo/service)**: `just plugin-pack` —— 构建 Go 二进制拷入各自 `bin/` → 同一 Pack→Verify 流程;
+  顺带安装宿主与 copilot 运行期依赖的审计/执行/事务二进制到
+  `daedalus/files/system/usr/local/bin/daedalus-{host,audit,shell,service,tx}`（task 21 + plan todo 17;
+  `daedalus-tx` 即走该 out-of-band 安装位,见下方「Object Model 与资源声明」）。
 - 安装态入库后经 `just sync`(rsync `files/system/` leg)进镜像 `/opt/daedalus/plugins/`;
   `just sync` 另有保守 leg 把本目录同步到 `base_image/plugin/` 仅作构建上下文,不进镜像。
 - 运行期消费方: 宿主 `daedalus-host list/verify/run-plugin`;systemd 单元由

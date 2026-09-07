@@ -23,7 +23,9 @@ verify-image:
     set -euo pipefail
     podman run --rm localhost/daedalus-os:latest sh -c 'find /opt \( -name "*.py" -o -name "*.pyc" -o -name "__pycache__" -o -name "*.test.ts" -o -name "go.mod" -o -name vendor \) | grep . && exit 1 || echo OK'
 
-# 打包 4 个能力服务器为 daedalus-plugin 并安装进镜像树(计划 todo 9;构建镜像前执行)
+# 打包 5 个能力服务器(fs/shell/pkg/sysinfo/service)为 daedalus-plugin 并安装进镜像树
+# (计划 todo 9;service 腿 = aios 计划 todo 11;构建镜像前执行)
+# 同时安装带外 CLI 到 /usr/local/bin: host/audit/shell/service/tx(计划 todo 17 补 tx)
 plugin-pack:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -36,7 +38,9 @@ plugin-pack:
     root="$PWD"
     cd "$root/daedalus/core"
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
-    for cap in fs shell pkg sysinfo; do
+    # 能力循环(aios 计划 todo 11 扩 service):源目录 daedalus/plugin/<cap>、
+    # 安装态 plugins/daedalus.<cap>/,与 70 编号脚本"仅 chmod+提示"的分工互补——复制职责恒在本 recipe。
+    for cap in fs shell pkg sysinfo service; do
         id="daedalus.${cap}"
         src="$root/daedalus/plugin/${cap}"
         dest="$root/daedalus/files/system/opt/daedalus/plugins/${id}"
@@ -58,7 +62,16 @@ plugin-pack:
     #   76 脚本 render-unit 指向插件内二进制; 此处副本仅服务 copilot 进程内 spawn 的字面路径。
     install -Dm0755 "bin/daedalus-audit" "$root/daedalus/files/system/usr/local/bin/daedalus-audit"
     install -Dm0755 "bin/daedalus-shell" "$root/daedalus/files/system/usr/local/bin/daedalus-shell"
-    echo "plugin-pack: 4 个能力插件已安装 -> daedalus/files/system/opt/daedalus/plugins/; host/audit/shell 已安装 -> daedalus/files/system/usr/local/bin/"
+    # aios 计划 todo 11:daedalus-service 按同款 task-21 形态双落位——
+    #   插件安装态 plugins/daedalus.service/bin/(上方能力循环产出)供 systemd
+    #   ExecStart(76 脚本 render-unit 指向);/usr/local/bin 副本服务镜像内以字面
+    #   路径直接启动该二进制的 QA 链路(F3(e) service.query 手工管道)。两态互不替代。
+    install -Dm0755 "bin/daedalus-service" "$root/daedalus/files/system/usr/local/bin/daedalus-service"
+    # 计划 todo 17:daedalus-tx 为 out-of-band CLI(todo 16 裁决:无插件清单、无 systemd 单元、
+    #   不进 76 脚本 render/handshake 环路)——与 audit/shell 同款 task-21 形态仅落
+    #   /usr/local/bin,服务 copilot spawn 与用户直接 CLI(v1 执行模型 = 调用者进程)。
+    install -Dm0755 "bin/daedalus-tx" "$root/daedalus/files/system/usr/local/bin/daedalus-tx"
+    echo "plugin-pack: 5 个能力插件(fs/shell/pkg/sysinfo/service)已安装 -> daedalus/files/system/opt/daedalus/plugins/; host/audit/shell/service/tx 已安装 -> daedalus/files/system/usr/local/bin/"
 
 # 开发态本地安装(计划 checkbox 1):把 dev 产物装进用户前缀,免镜像即可使用全套 CLI。
 # 用法: just dev-install [前缀] (亦兼容 --prefix=X 形式);默认前缀 = $HOME/.local。
@@ -165,6 +178,8 @@ deps:
 test:
     cd daedalus/core && go test ./...
     deno test --allow-all tests/deno/
+    # i18n 键集门禁(todo 30):en↔zh 对称 + t() 字面量双 locale 存在性
+    bash tests/deno/i18n_keys.test.sh
 
 # 打包 Copilot 为 daedalus-plugin(Deno runtime,计划 todo 8):
 # 编译 pack/host → mktemp 暂存 5 个 .ts + 清单 → Pack 注入 checksums → 校验并解压安装态
@@ -183,3 +198,7 @@ qemu:
     mkdir -p output
     podman run --rm -v "$(pwd)/output":/output --security-opt label=disable quay.io/centos-bootc/bootc-image-builder:latest --type qcow2 --image-name localhost/daedalus-os:latest
     qemu-system-x86_64 -m 4096 -cdrom output/boot.qcow2 -enable-kvm -vga virtio
+# 端到端集成测试(aios 计划 todo 23):真机 user-manager 跑 tx 全链路;无用户会话时 exit 77 SKIP
+# 参数透传: just integration-test [--tamper-step-args](本机 just 不透传位置参数,经 {{args}} 插值取参,与 dev-install 同法)
+integration-test args='':
+    bash tests/integration/tx_service_roundtrip.sh "{{args}}"
