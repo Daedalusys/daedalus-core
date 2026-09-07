@@ -74,6 +74,18 @@ jobs:
           sudo apt-get install -y just
           just --version
 
+      - name: Prepare justfile.local (gitignored stub for import)
+        # 主 justfile 加了 `import "justfile.local"`。本机私有 recipe 永不进库
+        # (.gitignore),但 CI clone 出来没有该文件 → just 解析期 fail,整条 pipeline
+        # 挂掉。touch 一个空文件兜底:空 import 等价无操作,主 recipe 全可用;本机
+        # 那 10 个 deploy/kvm-* recipe 在 CI 自然不生效(预期,只对 ThinkPadTest
+        # 本机有意义)。仅 ci 跑前一步 Set up just 完成时执行一次。
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          touch justfile.local
+          ls -la justfile.local
+
       - name: i18n Manifest Gate (strict)
         # 计划 todo 30 接线:严模式校验 copilot 清单 "i18n" 声明 ↔ i18n/ 目录实物
         # (外加 Go 侧 i18n.T() key ↔ locales 交叉核对),漂移 exit 1 拒构建。
@@ -151,6 +163,16 @@ jobs:
         with:
           go-version: '1.25.x'
           cache-dependency-path: daedalus/core/go.sum
+
+      - name: Prepare justfile.local (gitignored stub for import)
+        # 同 ci job:本机私有 recipe 永不进库,CI clone 出来没有该文件,just 解析
+        # 会 fail。touch 空文件兜底 —— 空 import 等价无操作,主 recipe 全可用。
+        # 必须先于第一个 `just` 调用(下方 Build Plugin Install-State)执行。
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          touch justfile.local
+          ls -la justfile.local
 
       - name: Build Plugin Install-State (Go binaries + plugin packaging)
         # plugin-pack 把 Go 静态二进制与插件安装态落到 daedalus/files/system/

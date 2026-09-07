@@ -27,6 +27,15 @@ daedalus/core/bin/
 # demo 构建的本地 dev 路径配置,不入库;仅 .example 模板入库
 daedalus-dev.toml
 
+# 本机私有 justfile(local recipe:build / kvm-install / print-rdp 等),
+# 不入库;若要给团队参考,放 justfile.local.example
+justfile.local
+
+# 本机/SSH 私有环境变量(just 通过 set dotenv-load 自动加载);.env.example 入库作模板
+.env
+.env.*
+!.env.example
+
 # 能力插件源目录的构建期二进制(just plugin-pack 拷入用于打包;不入库)
 daedalus/plugin/*/bin/
 
@@ -65,8 +74,13 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.opencode/*
 
 # ===== 本地环境 / 密钥（防御性） =====
-.env
-.env.*
+# .env / .env.* 的忽略规则在文件前面 line 35-36(那里有 `!.env.example` 例外);
+# 这里只留 .local 兜底。避免重复 .env.* 后覆盖前面的 ! 例外,把 .env.example
+# 错误地一并忽略掉(已踩坑验证过)。
 *.local
+
+# ===== 本地运行日志(remote-* recipe 的 tee 输出,不进版本控制) =====
+logs/

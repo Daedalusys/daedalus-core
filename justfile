@@ -3,6 +3,18 @@
 # 自动发现;import 必须出现在所有 recipe 之前。
 import "scripts/justfile.demo"
 
+# 本机私有 recipe(ThinkPadTest 的 KVM install / RDP / debug 等)。
+# justfile.local 在 .gitignore(永不进库),本地存在时自动合入,直接
+# `just deploy` / `just kvm-install` / `just print-rdp` 即可,不用 -f。
+# CI runner 上 clone 出来无此文件 → just 解析期 fail,故 CI workflow 在
+# actions/checkout 之后加 `touch justfile.local` 一步兜底(空 import 等价
+# 无操作,主 recipe 全可用;本地 recipe 在 CI 自然不生效,符合预期)。
+import "justfile.local"
+
+# 自动加载仓库根 .env(SSH/本机用同一份配置,gitignored 不进库)。模板见
+# .env.example;未提供 .env 时不报错(loaded 静默忽略)。
+set dotenv-load
+
 # Default recipe: list available recipes
 default:
     @just --list
@@ -12,8 +24,35 @@ sync:
     ./scripts/sync-daedalus.sh
 
 # Build Daedalus container image
+# --network=host:让容器共享 host 网络栈,容器内 127.0.0.1 才指 host(用 host 的
+#   127.0.0.1:7890 proxy);默认 podman 用 slirp4netns,127.0.0.1 指容器自己。
+# --env HTTP_PROXY / --env HTTPS_PROXY:把 host 的 env 透传给容器,77-xrdp.sh
+#   之类 dnf 调用能拿到(若 host 没设,容器里就是空,dnf 直连不变)。
+# --cache-from:复用上一次的 localhost/daedalus-os:latest 镜像作 cache 源,
+#   改 build.sh / Containerfile 之外的内容时,整个 RUN 步骤直接命中 cache,
+#   dnf install + Go compile 全跳过,build 从 5-10 分钟降到 1-2 分钟。
+# --jobs:BuildKit 内部独立步骤并行(对单步骤 RUN 帮助有限,加上零成本)。
+# --network=host:让容器共享 host 网络栈,容器内 127.0.0.1 才指 host(用 host 的
+#   127.0.0.1:7890 proxy);默认 podman 用 slirp4netns,127.0.0.1 指容器自己。
+# --env HTTP_PROXY / --env HTTPS_PROXY:把 host 的 env 透传给容器,77-xrdp.sh
+#   之类 dnf 调用能拿到(若 host 没设,容器里就是空,dnf 直连不变)。
+# --cache-from 故意不传:本机 buildkit 版本对 --cache-from=localhost/...:tag 解析
+#   有问题(报 "repository must contain neither a tag nor digest"),放弃跨 build
+#   镜像层复用。Containerfile 已拆 8 stage + dnf cache mount,单次 build 内
+#   已经够快;第二次 build 想更快就手动 `podman pull localhost/daedalus-os:latest`
+#   后再跑,或后续升级 buildkit 再加回。
+# 这几行**不影响 CI**(github-actions runner 上 HTTP_PROXY 不设,dnf 直连仓库不受影响)。
+# 凭据透传:DAEDALUS_DEV_USER/PASS 从环境或 .env 取,空值时 78 脚本走公开构建模式(不注入账号)
 build: sync
-    podman build --platform=linux/amd64 --security-opt=label=disable --cap-add=all --device /dev/fuse --build-arg IMAGE_NAME=daedalus-os --build-arg IMAGE_REGISTRY=localhost --build-arg VARIANT=kde -t localhost/daedalus-os:latest -f Containerfile .
+    podman build --jobs=$(nproc) --network=host --env HTTP_PROXY --env HTTPS_PROXY --env DAEDALUS_DEV_USER="{{ env_var_or_default('DAEDALUS_DEV_USER', '') }}" --env DAEDALUS_DEV_PASS="{{ env_var_or_default('DAEDALUS_DEV_PASS', '') }}" --platform=linux/amd64 --security-opt=label=disable --cap-add=all --device /dev/fuse --build-arg IMAGE_NAME=daedalus-os --build-arg IMAGE_REGISTRY=localhost --build-arg VARIANT=kde -t localhost/daedalus-os:latest -f Containerfile .
+
+# --no-cache 版 build:改 build.sh / 脚本内容后必须用它。
+# 原因:脚本经 --mount=type=bind,from=ctx 进 RUN,bind-mount 内容不进 Buildah
+# 缓存 key → 改了脚本、甚至改了 build.sh 的去重 bug,stage RUN 仍 "Using cache"
+# 复用旧层(镜像一直没 KDE 就是这个坑)。要真重跑改 build.sh 影响的 stage 就 --no-cache。
+# 凭据透传:DAEDALUS_DEV_USER/PASS 从环境或 .env 取,空值时 78 脚本走公开构建模式(不注入账号)
+build-nocache: sync
+    podman build --no-cache --jobs=$(nproc) --network=host --env HTTP_PROXY --env HTTPS_PROXY --env DAEDALUS_DEV_USER="{{ env_var_or_default('DAEDALUS_DEV_USER', '') }}" --env DAEDALUS_DEV_PASS="{{ env_var_or_default('DAEDALUS_DEV_PASS', '') }}" --platform=linux/amd64 --security-opt=label=disable --cap-add=all --device /dev/fuse --build-arg IMAGE_NAME=daedalus-os --build-arg IMAGE_REGISTRY=localhost --build-arg VARIANT=kde -t localhost/daedalus-os:latest -f Containerfile .
 
 # 镜像零残留断言(todo 15 接线,todo 16 收口;仅在 just build 成功后可跑):
 # 断言镜像 /opt 内无 Python 源码/字节码、__pycache__、Deno 测试文件、Go 模块/依赖残留。
@@ -29,6 +68,19 @@ verify-image:
 plugin-pack:
     #!/usr/bin/env bash
     set -euo pipefail
+    # 与 go-build / go-test 同款 fallback:SSH 远端非交互 shell 不 source rc,asdf
+    # 用户的 go 不在 PATH,recipe 自带多源兜底(asdf → .local → 系统 go)。这里
+    # 必须自带,因为 plugin-pack 是独立 recipe 不依赖 go-build 已跑过(可能 go-build
+    # 用 apt 装 go 跳过了 fallback,而本机是 asdf 装的)。
+    if ! command -v go >/dev/null 2>&1; then
+        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+            if [ -x "$c" ]; then
+                export PATH="$(dirname "$c"):$PATH"
+                break
+            fi
+        done
+    fi
+    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
     # 流程(决策 22:构建期内建,无运行时安装;task 7 交接:安装态必经 Pack 注入 checksums):
     #   1) 构建全部 Go 静态二进制(含宿主 daedalus-host 与打包器 daedalus-plugin-pack);
     #   2) 同步二进制到插件源目录 daedalus/plugin/<cap>/bin/(源目录布局 = manifest + bin/);
@@ -80,6 +132,18 @@ plugin-pack:
 dev-install prefix='':
     #!/usr/bin/env bash
     set -euo pipefail
+    # 与 go-build / go-test / plugin-pack 同款 fallback:SSH 远端非交互 shell
+    # 不 source rc,asdf 用户的 go 不在 PATH,recipe 自带多源兜底。下面 line 133
+    # 的 go build 不依赖前面 recipe 已跑过(独立流程)。
+    if ! command -v go >/dev/null 2>&1; then
+        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+            if [ -x "$c" ]; then
+                export PATH="$(dirname "$c"):$PATH"
+                break
+            fi
+        done
+    fi
+    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
     # 本机 just(1.58)不把位置参数透传为 $1,经 {{prefix}} 插值取参;兼容 --prefix=X 旗标形式
     prefix="{{prefix}}"
     case "${prefix}" in
@@ -162,20 +226,81 @@ host-list prefix='':
 
 # 构建全部 Go 静态二进制到 daedalus/core/bin/(计划 todo 15;对齐 core/Makefile 的 build 语义:
 # CGO_ENABLED=0 纯静态、GOTOOLCHAIN=local 禁用工具链自动下载、-trimpath 可复现路径)
+#
+# 用 shebang 跑(而非一行 cd && go build ...):SSH 远端非交互 shell 不 source rc,
+# asdf/mise 用户装的 go 不在 PATH。先 `command -v go` 试 PATH;找不到时按常见
+# 位置 fallback(asdf shims / $HOME/.local/bin / 系统 /usr/local/go/bin),把
+# 找到的 go 所在目录 prepend 到 PATH。这样:
+#   - 本地交互 shell(go 已在 PATH):直接走 command -v,零成本
+#   - GitHub Actions ubuntu-latest(apt 装 go 在 /usr/local/go/bin):走 fallback
+#   - SSH 远端 asdf 用户:走 fallback 找到 ~/.asdf/shims/go
+#   - SSH 远端裸系统 go:走 fallback 找到 /usr/local/go/bin/go
 go-build:
-    cd daedalus/core && CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd daedalus/core
+    if ! command -v go >/dev/null 2>&1; then
+        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+            if [ -x "$c" ]; then
+                export PATH="$(dirname "$c"):$PATH"
+                break
+            fi
+        done
+    fi
+    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
 
 # Go 全量单元测试(纯模块级,不依赖镜像;just test 的 Go 腿即此命令)
+# 与 go-build 同款 fallback:SSH 远端非交互 shell 不 source rc,asdf/mise
+# 用户的 go 不在 PATH,recipe 自带多源兜底(asdf → .local → 系统 go)。
 go-test:
-    cd daedalus/core && go test ./...
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd daedalus/core
+    if ! command -v go >/dev/null 2>&1; then
+        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+            if [ -x "$c" ]; then
+                export PATH="$(dirname "$c"):$PATH"
+                break
+            fi
+        done
+    fi
+    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    go test ./...
 
 # 显式下载 Go 模块依赖到 GOMODCACHE(vendor/ 不入库,首次构建需联网;`go build` 也会
 # 隐式触发,此 recipe 仅用于预热缓存或排查模块网络问题)
+# 与 go-build 同款 fallback。
 deps:
-    cd daedalus/core && go mod download
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd daedalus/core
+    if ! command -v go >/dev/null 2>&1; then
+        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+            if [ -x "$c" ]; then
+                export PATH="$(dirname "$c"):$PATH"
+                break
+            fi
+        done
+    fi
+    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    go mod download
 
 # Run test suite
+# go test 那行同款 fallback(SSH 远端 asdf/mise 自找 go);deno + bash 走 PATH
+# 已有,demo build 路径不影响。
 test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v go >/dev/null 2>&1; then
+        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+            if [ -x "$c" ]; then
+                export PATH="$(dirname "$c"):$PATH"
+                break
+            fi
+        done
+    fi
+    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
     cd daedalus/core && go test ./...
     deno test --allow-all tests/deno/
     # i18n 键集门禁(todo 30):en↔zh 对称 + t() 字面量双 locale 存在性
@@ -190,22 +315,34 @@ copilot-plugin:
 
 # Build bootable ISO
 iso:
+    #!/usr/bin/env bash
+    set -euo pipefail
     mkdir -p output
-    podman run --rm -v "$(pwd)/output":/output --security-opt label=disable quay.io/centos-bootc/bootc-image-builder:latest --type iso --image-name localhost/daedalus-os:latest
+    # save/load 交接:just build 是 rootless(镜像在 ~/.local/share/containers/storage);
+    # bootc-image-builder 跑 rootful(看 /var/lib/containers/storage)。先 podman save
+    # (rootless 导出)再 sudo podman load(rootful 导入),否则 builder --local 报
+    # "image not known"(见 CI commit fe37ac4 同款处理)。
+    podman save --format oci-archive -o output/daedalus-os.oci.tar localhost/daedalus-os:latest
+    sudo podman load -i output/daedalus-os.oci.tar
+    sudo podman run --rm --privileged -v "$(pwd)/output":/output -v /var/lib/containers/storage:/var/lib/containers/storage --security-opt label=disable quay.io/centos-bootc/bootc-image-builder:latest --type iso --local localhost/daedalus-os:latest
 
 # Build qcow2 and run in QEMU
 qemu:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p output
-    podman run --rm -v "$(pwd)/output":/output --security-opt label=disable quay.io/centos-bootc/bootc-image-builder:latest --type qcow2 --image-name localhost/daedalus-os:latest
+    # save/load 交接(同 iso):rootless build 的镜像先导出再 sudo 导入 rootful 存储,
+    # 否则 bootc-image-builder --local 会 "image not known"。
+    podman save --format oci-archive -o output/daedalus-os.oci.tar localhost/daedalus-os:latest
+    sudo podman load -i output/daedalus-os.oci.tar
+    sudo podman run --rm --privileged -v "$(pwd)/output":/output -v /var/lib/containers/storage:/var/lib/containers/storage --security-opt label=disable quay.io/centos-bootc/bootc-image-builder:latest --type qcow2 --local localhost/daedalus-os:latest
     # qcow2 是磁盘镜像(不是 CDROM;-cdrom 是旧配方残留)。-enable-kvm 走 KVM 加速;
     # -netdev user + hostfwd=tcp::3389-:3389 把 guest 3389 转 host 同一端口,
     # 本机 mstsc/Remmina 直接连 localhost:3389。-display gtk 开图形窗口
     # (调试 RDP 不通时换成 -vnc :0 先 VNC 进去看)。
     qemu-system-x86_64 \
         -m 4096 -smp 2 -enable-kvm -cpu host -vga virtio \
-        -drive file=output/boot.qcow2,format=qcow2,if=virtio \
+        -drive file=output/qcow2/disk.qcow2,format=qcow2,if=virtio \
         -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
         -device virtio-net,netdev=net0 \
         -display gtk

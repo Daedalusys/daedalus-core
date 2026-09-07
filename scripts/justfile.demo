@@ -15,8 +15,21 @@
 # daedalus-dev.toml (或 $DAEDALUS_DEV_PATHS 指向的文件) 读 dev 路径配置,
 # 把 /opt/daedalus 与 /usr/local/bin 在 entrypoint 字符串里重写到 dev 树。
 # 与默认 go-build 产物同名覆盖,切换 prod/demo 二者取其一,默认即 prod。
+# 与 go-build 同款 fallback:SSH 远端非交互 shell 不 source rc 时自找 go。
 go-build-demo:
-    cd daedalus/core && CGO_ENABLED=0 GOTOOLCHAIN=local go build -tags demo -trimpath -o bin/ ./cmd/...
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd daedalus/core
+    if ! command -v go >/dev/null 2>&1; then
+        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+            if [ -x "$c" ]; then
+                export PATH="$(dirname "$c"):$PATH"
+                break
+            fi
+        done
+    fi
+    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    CGO_ENABLED=0 GOTOOLCHAIN=local go build -tags demo -trimpath -o bin/ ./cmd/...
 
 # 一键 demo 跑 copilot CLI(计划 checkbox):rebuild demo 二进制 → 安装
 # audit/shell 辅助二进制到镜像布局位 → 解包 5 个插件到临时目录 → 调
