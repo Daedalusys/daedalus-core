@@ -41,6 +41,14 @@ for arg in "$@"; do
     esac
 done
 
+# 解析 plugin_dir:相对路径以 ROOT(脚本所在父目录=仓库根)为基准,绝对路径原样。
+# 让脚本 cwd 无关——CI runner 在 just 执行 recipe body 时 cwd 不一定是 repo 根,
+# 此前 MANIFEST 用相对路径时漂到非根目录 → 误报"清单不存在"。
+case "$plugin_dir" in
+    /*) ;;
+    *)  plugin_dir="$ROOT/$plugin_dir" ;;
+esac
+
 MANIFEST="$plugin_dir/daedalus.plugin.json"
 I18N_DIR="$plugin_dir/i18n"
 [ -f "$MANIFEST" ] || { echo "错误:清单不存在: $MANIFEST" >&2; exit 1; }

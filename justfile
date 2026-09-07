@@ -195,9 +195,20 @@ iso:
 
 # Build qcow2 and run in QEMU
 qemu:
+    #!/usr/bin/env bash
+    set -euo pipefail
     mkdir -p output
     podman run --rm -v "$(pwd)/output":/output --security-opt label=disable quay.io/centos-bootc/bootc-image-builder:latest --type qcow2 --image-name localhost/daedalus-os:latest
-    qemu-system-x86_64 -m 4096 -cdrom output/boot.qcow2 -enable-kvm -vga virtio
+    # qcow2 是磁盘镜像(不是 CDROM;-cdrom 是旧配方残留)。-enable-kvm 走 KVM 加速;
+    # -netdev user + hostfwd=tcp::3389-:3389 把 guest 3389 转 host 同一端口,
+    # 本机 mstsc/Remmina 直接连 localhost:3389。-display gtk 开图形窗口
+    # (调试 RDP 不通时换成 -vnc :0 先 VNC 进去看)。
+    qemu-system-x86_64 \
+        -m 4096 -smp 2 -enable-kvm -cpu host -vga virtio \
+        -drive file=output/boot.qcow2,format=qcow2,if=virtio \
+        -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
+        -device virtio-net,netdev=net0 \
+        -display gtk
 # 端到端集成测试(aios 计划 todo 23):真机 user-manager 跑 tx 全链路;无用户会话时 exit 77 SKIP
 # 参数透传: just integration-test [--tamper-step-args](本机 just 不透传位置参数,经 {{args}} 插值取参,与 dev-install 同法)
 integration-test args='':

@@ -2,26 +2,22 @@
 name: Build Daedalus Image
 on:
   pull_request:
-    paths:
-      - 'base_image/**'
-      - 'daedalus/**'
-      - 'Containerfile*'
-      - 'Dockerfile*'
-      - 'justfile'
-      - 'scripts/sync-daedalus.sh'
-      - '.github/workflows/build-daedalus.yml'
+    # 反向白名单:仅忽略纯文档/模板,其余路径变更都触发 CI(改任何代码/脚本/
+    # manifest 都跑)。正向白名单容易漏列新加的脚本(如 scripts/justfile.demo
+    # 之前漏掉就导致 CI 静默不跑)。
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
   push:
-    # 触发器:任何 push(命中路径过滤)都至少跑 ci job;镜像构建与发布(build-image
-    # job)由其自身 if: 限定到 feat/* 分支推送、任何 tag 推送、workflow_dispatch。
-    # 发版:合并到 feat/<name> 后 push,或 git tag v0.2.0 && git push --tags。
-    paths:
-      - 'base_image/**'
-      - 'daedalus/**'
-      - 'Containerfile*'
-      - 'Dockerfile*'
-      - 'justfile'
-      - 'scripts/sync-daedalus.sh'
-      - '.github/workflows/build-daedalus.yml'
+    # 触发器:任何 push(除了纯文档/模板)都至少跑 ci job;镜像构建与发布
+    # (build-image job)由其自身 if: 限定到 feat/* 分支推送、任何 tag 推送、
+    # workflow_dispatch。发版:合并到 feat/<name> 后 push,或 git tag v0.2.0
+    # && git push --tags。
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
     inputs:
       VARIANT:
