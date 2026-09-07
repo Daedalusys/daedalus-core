@@ -11,11 +11,11 @@ on:
       - 'scripts/sync-daedalus.sh'
       - '.github/workflows/build-daedalus.yml'
   push:
-    # 仅在推送 v* 标签时构建并发布;普通 main push/PR 只走 build+verify 不推 ghcr。
-    # 发版流程:git tag v0.2.0 && git push --tags → 触发完整构建+三 tag 推送。
-    # KVM 临时更新(不正式发版)用 workflow_dispatch 并勾选 PUSH=true。
-    tags:
-      - 'v*'
+    # 触发器:任何 push(命中路径过滤)都跑完整 CI(build/test/verify/lint);
+    # publish 步骤(ghcr + qcow2 artifact)由 job 级 SHOULD_PUBLISH env 闸门
+    # 限定到 feat/* 分支推送与任何 tag 推送;workflow_dispatch 勾选 PUSH=true
+    # 作为手动兜底。
+    # 发版:合并到 feat/<name> 后 push,或 git tag v0.2.0 && git push --tags。
     paths:
       - 'base_image/**'
       - 'daedalus/**'
@@ -55,6 +55,11 @@ jobs:
       fail-fast: false
       matrix:
         variant: [kde]
+    # 发布闸门:仅在 feat/* 分支推送、任何 tag 推送、workflow_dispatch 勾选
+    # PUSH=true 时为 true;其他情况(普通分支 push、PR)走 build+verify 即可,
+    # 不消耗 ghcr 存储/带宽/artifact 配额。下方 5 个 publish 步骤统一引用此 env。
+    env:
+      SHOULD_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true' || startsWith(github.ref, 'refs/heads/feat/') || startsWith(github.ref, 'refs/tags/') }}
 
     steps:
       - name: Checkout repository
@@ -157,11 +162,11 @@ jobs:
           echo "Daedalus bootc container verification completed successfully."
 
       # ---- 发布: OCI 镜像 → ghcr.io (bootc 原生分发形态; 公开包免费无 2GiB 硬限) ----
-      # 仅在 push 标签 (v*) 或 workflow_dispatch.PUSH=true 时执行。
-      # PR 与普通 main push 走到这里直接 skip,不消耗 ghcr 存储/带宽/配额。
+      # 由 job 级 SHOULD_PUBLISH env 统一闸门:feat/* 分支 / 任何 tag / dispatch PUSH。
+      # PR 与普通分支 push 走到这里直接 skip,不消耗 ghcr 存储/带宽/配额。
       - name: Log in to ghcr.io
         # GITHUB_TOKEN 自动注入, 无需手动 secret
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true') }}
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         uses: redhat-actions/podman-login@v1
         with:
           registry: ghcr.io
@@ -169,7 +174,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push OCI image to ghcr.io
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true') }}
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         shell: bash
         env:
           OWNER_LOWER: ${{ github.repository_owner }}
@@ -187,9 +192,13 @@ jobs:
           echo "Pushed: ${IMAGE}:latest (+ sha tag, + upstream tag)"
 
       # ---- 发布: qcow2 → artifact (本地 KVM 测试用; bootc-image-builder 产出) ----
+      # 同样由 job 级 SHOULD_PUBLISH env 闸门:仅 feat/* 分支 / 任何 tag / dispatch
+      # PUSH=true 才构建并上传。PR 与普通分支 push 直接 skip,不浪费 rootful builder
+      # 资源与 10GB artifact 配额。
       # 限额说明: GitHub Release 单文件硬限 2GiB, KDE qcow2 可能超; artifact 上限 10GB 更稳。
       # 若未来要挂 Release, 先 gzip 或分卷。
       - name: Export OCI archive (rootless → rootful handoff)
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         # bootc-image-builder 的 --local 模式硬性要求 rootful podman
         # ("this command must be run in rootful"), 而 Actions 的构建在
         # rootless 存储里。用 save/load 把镜像从用户存储转交 root 存储。
@@ -197,6 +206,7 @@ jobs:
         run: podman save --format oci-archive -o /tmp/daedalus-os.oci.tar localhost/daedalus-os:latest
 
       - name: Build qcow2 disk image (bootc-image-builder, rootful)
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         shell: bash
         run: |
           sudo podman load -i /tmp/daedalus-os.oci.tar
@@ -215,6 +225,7 @@ jobs:
           ls -lh output/qcow2/
 
       - name: Upload qcow2 artifact
+        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: daedalus-os-qcow2-${{ matrix.variant }}
