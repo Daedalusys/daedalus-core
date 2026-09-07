@@ -5,6 +5,9 @@
  * 1. CLI 参数解析（--verbose, --interactive, --dry-run, --yes, --provider, --model, --base-url, --help, --version）
  * 2. 交互式终端的 REPL 模式，每个查询具有独立的修订计数器
  * 3. 建议先行:所有命令先展示 + 风险标注;交互终端下白名单内只读诊断经 y/n 确认后由沙箱运行,白名单外只展示由用户手动执行;非 TTY 仅白名单只读诊断运行
+ * 3.5 事务通道(计划 todo 27):tx.propose / tx.apply / tx.rollback 提议改走
+ *     daedalus-tx 的 begin→propose→preview→(y/n)→apply,与 shell 沙箱通道互斥;
+ *     仅 classifyTxProposal 定级 safe 的事务可申请执行,L1/L2 事务只展示
  * 4. 分步轮次循环：转换 -> 解析并验证 -> 确认/编辑/拒绝反馈循环 -> 执行
  * 5. 针对每个生命周期事件严格执行加密哈希链审计日志记录
  */
@@ -12,6 +15,7 @@
 import {
   parseProposal,
   classifyProposal,
+  classifyTxProposal,
   L0_WHITELIST,
   validateProposal,
   buildSystemPrompt,
@@ -20,7 +24,16 @@ import {
 } from "./policy.ts";
 import { recordAudit, type AuditOutcome } from "./audit.ts";
 import { readConfig, translate, revise, type Config } from "./llm.ts";
-import { execAllowlisted, type ExecResult } from "./exec.ts";
+import {
+  execAllowlisted,
+  execTxPropose,
+  execTxPreview,
+  execTxApply,
+  type ExecResult,
+  type TxProposeOutcome,
+  type TxPreviewOutcome,
+  type TxApplyOutcome,
+} from "./exec.ts";
 import { initI18n, t, currentLocale } from "./i18n.ts";
 
 export const VERSION = "1.0.0";
@@ -66,6 +79,356 @@ export interface CopilotOptions {
   execFn?: typeof execAllowlisted;
   recordAuditFn?: typeof recordAudit;
   readConfigFn?: typeof readConfig;
+  // 事务通道注入点（todo 27）:begin 为 main.ts 本地实现（exec.ts 无 begin）,
+  // propose/preview/apply 直承 T26 的 execTx* 三函数,测试全部 mock 注入。
+  txBeginFn?: typeof defaultTxBegin;
+  txProposeFn?: typeof execTxPropose;
+  txPreviewFn?: typeof execTxPreview;
+  txApplyFn?: typeof execTxApply;
+  // state 记忆注入点(todo 28):镜像 translateFn 的可 stub 形态,测试注入
+  // 假摘要,默认实现为 readStateSummary(直读 state.jsonl 缓存,永不 throw)。
+  readStateFn?: typeof readStateSummary;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 事务通道（aios-object-model-alignment 计划 todo 27）
+//
+// ★ 编码约定 ★ LLM 以 CommandProposal 形态提议事务:command 取保留动词
+// "tx.propose" / "tx.apply" / "tx.rollback",args = [目标, 期望态?]
+// （rollback 只需目标 = tx-id;期望态缺省空串）。detectTxIntent 命中即改走
+// classifyTxProposal（todo 24）定级,shell 分类器（classifyProposal /
+// L0_WHITELIST）绝不参与事务意图——两条执行通道互不竞争（竞态条款）。
+//
+// ★ begin 归属 ★ T26 只交付 execTxPropose/Preview/Apply 三函数,均不自动
+// begin;而 daedalus-tx CLI 的 propose 走 mustLoad(空日志即 not found),
+// 故事务通道必须显式 begin 先行。begin 无 MCP/exec.ts 通道,在本文件内
+// 直接 spawn `daedalus-tx begin`（argv 直传,无 shell 解释;二进制解析链
+// 与 exec.ts resolveTxBinary 逐项镜像:DAEDALUS_TX_BIN → 生产路径 →
+// 仓库 dev 产物）。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 事务提议三元组:classifyTxProposal 的入参形态（intent 为下划线 token）。 */
+interface TxIntent {
+  intent: "tx_propose" | "tx_apply" | "tx_rollback";
+  target: string;
+  desiredState: string;
+}
+
+/** v1 唯一事务适配器（todo 22）;与 daedalus-tx 侧 service.set 词汇逐字一致。 */
+const TX_ADAPTER_SERVICE_SET = "service.set";
+
+/** begin 看门狗毫秒数:与 execAllowlisted / execTx* 缺省 40s 同源常量。 */
+const TX_BEGIN_TIMEOUT_MS = 40000;
+
+/** 保留动词 → 事务 intent 映射（静态表,勿运行时改写）。 */
+const TX_COMMAND_INTENTS: Record<string, TxIntent["intent"]> = {
+  "tx.propose": "tx_propose",
+  "tx.apply": "tx_apply",
+  "tx.rollback": "tx_rollback",
+};
+
+/**
+ * 判定提议是否为事务意图。命中保留动词 → 返回 {intent, target, desiredState};
+ * 否则返回 null（走既有 shell 路径）。target/desiredState 原样透传给
+ * classifyTxProposal——空 target 由其抛 "classifyTxProposal: target is empty"
+ * （fail-closed,plan QA 字面量）,调用方不得先行吞错。
+ */
+export function detectTxIntent(proposal: CommandProposal): TxIntent | null {
+  const intent = TX_COMMAND_INTENTS[proposal.command];
+  if (!intent) {
+    return null;
+  }
+  return {
+    intent,
+    target: proposal.args[0] ?? "",
+    desiredState: proposal.args[1] ?? "",
+  };
+}
+
+/** begin 结果:成功仅携带 16-hex tx_id;失败仅携带错误文本（永不 throw）。 */
+export type TxBeginOutcome =
+  | { ok: true; txId: string }
+  | { ok: false; error: string };
+
+// tx_id 形状门（todo 15 契约:crypto/rand 8 字节 hex）;形态不符即解析失败。
+const TX_ID_RE = /^[a-f0-9]{16}$/;
+
+/**
+ * 解析 begin 用的 daedalus-tx 二进制路径。
+ * 与 exec.ts resolveTxBinary 镜像同链:DAEDALUS_TX_BIN 环境变量 → 生产
+ * /usr/local/bin/daedalus-tx → 仓库 dev 产物 daedalus/core/bin/daedalus-tx。
+ * （exec.ts 的解析器未导出,begin 属本 todo 新增调用面,此处为刻意最小镜像,
+ * 若后续 exec.ts 补 execTxBegin 则收敛回单一实现。）
+ */
+function resolveTxBeginBinary(): string {
+  const envPath = typeof (globalThis as any).Deno?.env?.get === "function"
+    ? (globalThis as any).Deno.env.get("DAEDALUS_TX_BIN")
+    : (globalThis as any).process?.env?.DAEDALUS_TX_BIN;
+  if (envPath) {
+    return envPath;
+  }
+
+  const exists = (target: string): boolean => {
+    try {
+      (globalThis as any).Deno.statSync(target);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const productionPath = "/usr/local/bin/daedalus-tx";
+  if (exists(productionPath)) {
+    return productionPath;
+  }
+  for (const rel of [
+    "daedalus/core/bin/daedalus-tx",
+    "../daedalus/core/bin/daedalus-tx",
+  ]) {
+    if (exists(rel)) {
+      return rel;
+    }
+  }
+  return productionPath;
+}
+
+/**
+ * `daedalus-tx begin` —— 开事务日志并取回 tx_id（stdout 契约:恰一份
+ * JSON 文档 {"tx_id":"<16hex>"}）。失败归一化为 {ok:false,error},永不 throw,
+ * 由 runTxTurn 经 t("tx.error.run") 渲染给用户。导出仅用于单元测试注入
+ * 真实假二进制（DAEDALUS_TX_BIN）验证 spawn/解析链。
+ */
+export async function defaultTxBegin(): Promise<TxBeginOutcome> {
+  const CommandConstructor = (globalThis as any).Deno?.Command;
+  if (!CommandConstructor) {
+    return {
+      ok: false,
+      error: "Deno.Command is not available in the current runtime environment",
+    };
+  }
+
+  const binary = resolveTxBeginBinary();
+  let output: any;
+  try {
+    // argv 直传 begin 子命令,无 /bin/sh 包装;超时走 AbortSignal（一次性 CLI,
+    // 无 stdio 桥,不需要 execAllowlisted 的 activeProcesses 回收链）。
+    output = await new CommandConstructor(binary, {
+      args: ["begin"],
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+      signal: AbortSignal.timeout(TX_BEGIN_TIMEOUT_MS),
+    }).output();
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: `Failed to spawn daedalus-tx begin: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const decoder = new TextDecoder();
+  const stdout = decoder.decode(output.stdout ?? new Uint8Array());
+  const stderr = decoder.decode(output.stderr ?? new Uint8Array());
+
+  if (typeof output.code === "number" && output.code !== 0) {
+    // CLI 失败契约:出错也吐 {"error":...};优先取文档 error 字段
+    const errText = stdout.trim() || stderr.trim() ||
+      `daedalus-tx begin exited with code ${output.code}`;
+    return { ok: false, error: errText };
+  }
+
+  // todo 15 stdout 契约:单行紧凑 JSON,单层转义,JSON.parse 一次即得终值
+  const line = stdout.split("\n").map((l) => l.trim()).filter((l) => l.length > 0)[0];
+  if (!line) {
+    return { ok: false, error: "daedalus-tx begin stdout 为空(契约要求恰一份 JSON 文档)" };
+  }
+  try {
+    const doc = JSON.parse(line) as { tx_id?: unknown };
+    if (typeof doc?.tx_id !== "string" || !TX_ID_RE.test(doc.tx_id)) {
+      return { ok: false, error: `daedalus-tx begin 输出缺少合法 tx_id: ${line.slice(0, 200)}` };
+    }
+    return { ok: true, txId: doc.tx_id };
+  } catch {
+    return { ok: false, error: `daedalus-tx begin stdout 解析失败: ${line.slice(0, 200)}` };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// state 记忆读取(aios-object-model-alignment 计划 todo 28)
+//
+// copilot 是 internal/state(todo 19)追加式观测缓存 state.jsonl 的**用户态
+// 读取方**:LLM 翻译前把每个服务资源的"最新一次观测"注入 system prompt 追加段
+// (KNOWN STATE 块),让提议基于当前系统状态而非凭空生成。
+//
+// ★ 为什么直读缓存文件而不是经 daedalus-service MCP ★ v1 state 按上下文隔离
+// (决策 25 补充条款/todo 16 KNOWN LIMITATION):daemon 态 daedalus-service 跑在
+// DynamicUser 命名空间里,其写入的 /var/lib/daedalus 实际落宿主
+// /var/lib/private/daedalus,用户态进程读不到;且 service.query 是实时
+// systemctl 查询而非缓存读取,manifest 的 --allow-run 亦未放行该二进制。
+// 消费面因此与 internal/dirs.File 链逐字镜像:
+// DAEDALUS_STATE_PATH(存在即唯一候选,env 独占语义)→
+// /var/lib/daedalus/state.jsonl → $HOME/.local/share/daedalus/state.jsonl。
+//
+// ★ 错误分类(todo 28 规格)★ NotFound(文件/目录缺失)静默——新镜像与 demo
+// 的正常态;PermissionDenied 及其它真实 I/O 错记入 errors[],由 runQueryTurn
+// 经 t("state.summary.error", path) 打到 stderr 后继续(配置期 bug 必须
+// 开发者可见,不静默吞)。两者都**不写审计事件**:state 是派生缓存,不是证据,
+// 与哈希链审计边界分离。readStateSummary 永不 throw。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 摘要中的一条 service 观测(internal/state StateEntry + objectmodel.ServiceState 的消费侧形状)。 */
+export interface StateSummaryEntry {
+  /** 单元名(含 .service 后缀,systemctl 原文)。 */
+  name: string;
+  /** 观测时刻(StateEntry.observed_at 原文,UTC RFC3339Nano)。 */
+  observedAt: string;
+  /** 声明期望态(ServiceState.desired_state,查询路径恒空)。 */
+  desiredState: string;
+  /** systemctl 属性载荷(ServiceState.properties,键为属性名原文)。 */
+  properties: Record<string, string>;
+}
+
+/** readStateSummary 的结果。text 为空 entries 时是兜底文案(经调用方 entries.length 过滤,不进 prompt)。 */
+export interface StateSummary {
+  /** 每个资源名最新一条 service 观测,按 name 升序(镜像 LatestByKind 的 newest-wins + 确定性排序)。 */
+  entries: StateSummaryEntry[];
+  /** system prompt 追加块(KNOWN STATE);entries 为空时为 state.summary.empty 兜底文案。 */
+  text: string;
+  /** PermissionDenied / 其它真实 I/O 错的路径清单(调用方负责 stderr 呈现,随后继续)。 */
+  errors: string[];
+}
+
+/** dirs 链的系统级缺省落位(与 internal/dirs.StateSystemFile 逐字一致)。 */
+const STATE_SYSTEM_FILE = "/var/lib/daedalus/state.jsonl";
+
+/** dirs 链的 $HOME 相对落位(与 internal/dirs.StateHomeRel 逐字一致)。 */
+const STATE_HOME_REL = ".local/share/daedalus/state.jsonl";
+
+/** 摘要行呈现的属性子集(curated 只读白名单里对提议最相关的三项,顺序固定)。 */
+const STATE_SUMMARY_PROPERTIES = ["ActiveState", "SubState", "UnitFileState"];
+
+/** Deno / Node 双运行时环境变量读取(audit.ts 同款守卫形态)。 */
+function getEnvValue(name: string): string | undefined {
+  const deno = (globalThis as any).Deno;
+  if (typeof deno?.env?.get === "function") {
+    return deno.env.get(name) ?? undefined;
+  }
+  return (globalThis as any).process?.env?.[name];
+}
+
+/**
+ * 解析 state.jsonl 候选路径链。env 存在即独占(Go 侧 dirs.File 的 env 段
+ * 命中后不再下探;相对路径 env 值在生产由 Go 写入方硬拒,TS 读取方按
+ * 普通候选处理——读不到即 NotFound 静默,属良性)。env 未设时依次尝试
+ * 系统路径 → $HOME 路径($HOME 缺失兜底 /root,与 audit.ts 同款)。
+ */
+function resolveStatePathCandidates(): string[] {
+  const envPath = getEnvValue("DAEDALUS_STATE_PATH");
+  if (envPath) {
+    return [envPath];
+  }
+  const home = getEnvValue("HOME") || "/root";
+  return [STATE_SYSTEM_FILE, `${home}/${STATE_HOME_REL}`];
+}
+
+/**
+ * 单条观测的摘要行。属性 token(ActiveState=active 等)与单元名是喂给
+ * LLM 的机器可读数据,保留英文原文(与 JSON 协议字段同理,非 UI 文案);
+ * 行模板本身经 i18n state.summary.line 走。
+ */
+function summarizeEntryLine(entry: StateSummaryEntry): string {
+  const shown = STATE_SUMMARY_PROPERTIES
+    .filter((k) => typeof entry.properties?.[k] === "string" && entry.properties[k] !== "")
+    .map((k) => `${k}=${entry.properties[k]}`)
+    .join(", ");
+  const detail = shown || (entry.desiredState ? `desired_state=${entry.desiredState}` : "-");
+  return t("state.summary.line", entry.name, detail, entry.observedAt || "-");
+}
+
+/**
+ * 渲染 system prompt 追加块。entries 为空返回 state.summary.empty 兜底
+ * 文案("no prior state memory")——是否注入由调用方按 entries.length
+ * 决定,空态绝不污染 prompt。
+ */
+export function formatStateSummary(entries: StateSummaryEntry[]): string {
+  if (entries.length === 0) {
+    return t("state.summary.empty");
+  }
+  return [t("state.summary.header"), ...entries.map(summarizeEntryLine)].join("\n");
+}
+
+/**
+ * 解析 state.jsonl 全文:kind=service 的条目按名 newest-wins(append-only
+ * 文件"后写即新",与 Go LatestByKind 同判据),输出按 name 升序。
+ * 容错姿态与 Go Read 一致(缓存≠证据):非法 JSON / 截断行 / 非对象行 /
+ * 字段类型不符一律静默跳过,绝不因单行损坏报错。
+ */
+function parseStateEntries(text: string): StateSummaryEntry[] {
+  const latest = new Map<string, StateSummaryEntry>();
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    let obj: unknown;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue; // 坏行静默跳过
+    }
+    const e = obj as Record<string, unknown> | null;
+    if (!e || typeof e !== "object" || e.kind !== "service" || typeof e.name !== "string") {
+      continue; // 非 service 条目 / 结构不符
+    }
+    const payload = (e.payload && typeof e.payload === "object"
+      ? e.payload
+      : {}) as Record<string, unknown>;
+    const properties: Record<string, string> = {};
+    if (payload.properties && typeof payload.properties === "object") {
+      for (const [k, v] of Object.entries(payload.properties as Record<string, unknown>)) {
+        if (typeof v === "string") {
+          properties[k] = v;
+        }
+      }
+    }
+    latest.set(e.name, {
+      name: e.name,
+      observedAt: typeof e.observed_at === "string" ? e.observed_at : "",
+      desiredState: typeof payload.desired_state === "string" ? payload.desired_state : "",
+      properties,
+    });
+  }
+  return [...latest.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+/**
+ * 读取 state 记忆缓存(best-effort,永不 throw)。NotFound 静默;
+ * PermissionDenied / 其它真实 I/O 错记入 errors 后继续下探下一候选。
+ * 导出用于 runQueryTurn 的默认注入实现与单元测试直调。
+ */
+export async function readStateSummary(): Promise<StateSummary> {
+  const deno = (globalThis as any).Deno;
+  if (typeof deno?.readTextFile !== "function") {
+    // 非 Deno 运行时(Node 测试宿主等):无 FS 即无状态,静默降级
+    return { entries: [], text: t("state.summary.empty"), errors: [] };
+  }
+  const errors: string[] = [];
+  let content: string | null = null;
+  for (const candidate of resolveStatePathCandidates()) {
+    try {
+      content = await deno.readTextFile(candidate);
+      break;
+    } catch (err: unknown) {
+      const name = (err as { name?: string })?.name ?? "";
+      if (name === "NotFound") {
+        continue; // 缺失 = 正常态(v1 新镜像 / demo 无写入方)
+      }
+      // PermissionDenied 与其它 I/O 错:开发者可见,记录后继续
+      errors.push(candidate);
+    }
+  }
+  const entries = content === null ? [] : parseStateEntries(content);
+  return { entries, text: formatStateSummary(entries), errors };
 }
 
 /**
@@ -352,6 +715,13 @@ interface TurnContext {
   execFn: typeof execAllowlisted;
   recordAuditFn: typeof recordAudit;
   readConfigFn: typeof readConfig;
+  // 事务通道依赖（todo 27）,见 CopilotOptions 同名注入点
+  txBeginFn: typeof defaultTxBegin;
+  txProposeFn: typeof execTxPropose;
+  txPreviewFn: typeof execTxPreview;
+  txApplyFn: typeof execTxApply;
+  // state 记忆读取依赖(todo 28),见 CopilotOptions 同名注入点
+  readStateFn: typeof readStateSummary;
 }
 
 /** renderLLMError 返回的渲染结果:stderr 文案 + 分类 + 透传字段(供审计条件展开)。 */
@@ -447,6 +817,156 @@ function buildErrorAuditArgs(
 }
 
 /**
+ * 事务通道轮次(todo 27):begin → propose(service.set 快照步骤,无副作用)
+ * → preview(status 日志全文 + 计划前→计划后 diff 展示)→ y/n → apply(真实副作用)。
+ * 仅 safe 分级(L0)的事务意图可达本函数;caution/danger 事务在 runQueryTurn
+ * 的展示分流处提前拦截,永不进入(★ L1/L2 事务绝不 apply ★)。
+ * begin/propose/apply 消费 T26 execTx* 的结构化返回(永不 throw),失败经
+ * t("tx.error.run") 渲染为可操作文案并落 copilot_error 审计,绝不吐栈。
+ * "n" 放弃提议:日志留在 proposed 态(无副作用,无需回滚),审计
+ * copilot_tx_reject 携带 reason "user denied tx"(audit token,plan 字面量)。
+ * v1 事务不进 [e]dit / [n] 修订循环——修订通道属 shell 提议,事务的反馈
+ * 路径是重新发起一次查询。
+ */
+async function runTxTurn(
+  ctx: TurnContext,
+  proposal: CommandProposal,
+  txIntent: TxIntent,
+): Promise<number> {
+  const {
+    query,
+    yes,
+    isTerminal,
+    io,
+    recordAuditFn,
+    txBeginFn,
+    txProposeFn,
+    txPreviewFn,
+    txApplyFn,
+  } = ctx;
+  // 与 shell 通道同门:-y / 非 TTY 视为已授权(auto),TTY 默认 y/n
+  const requireConfirmation = isTerminal && !yes;
+
+  // 步骤 1:显式 begin。execTxPropose 不自动 begin(todo 15:CLI propose 走
+  // mustLoad,空日志即 tx_not_found),事务通道必须先行开账。
+  const begun = await txBeginFn();
+  if (!begun.ok) {
+    await io.writeStderr(t("tx.error.run", "begin", begun.error) + "\n");
+    await recordAuditFn(
+      "copilot_error",
+      { query, stage: "begin", error: begun.error },
+      "error",
+    );
+    return 1;
+  }
+  const txId = begun.txId;
+
+  // 步骤 2:propose —— 追加 service.set 适配器步骤(仅快照 Before/AfterState,无副作用)
+  const proposed: TxProposeOutcome = await txProposeFn(txId, TX_ADAPTER_SERVICE_SET, {
+    name: txIntent.target,
+    desired_state: txIntent.desiredState,
+  });
+  if (!proposed.ok) {
+    await io.writeStderr(t("tx.error.run", "propose", proposed.error) + "\n");
+    await recordAuditFn(
+      "copilot_error",
+      { query, tx_id: txId, stage: "propose", error: proposed.error },
+      "error",
+    );
+    return proposed.returncode || 1;
+  }
+  await recordAuditFn(
+    "copilot_tx_propose",
+    {
+      query,
+      tx_id: txId,
+      adapter: TX_ADAPTER_SERVICE_SET,
+      target: txIntent.target,
+      desired_state: txIntent.desiredState,
+    },
+    "success",
+  );
+
+  // 步骤 3:preview —— 计划前→计划后 diff 展示。preview 失败不阻断确认:
+  // 步骤已在日志中(上一步 propose 成功),diff 只是展示增益。
+  const preview: TxPreviewOutcome = await txPreviewFn(txId);
+  if (preview.ok) {
+    await io.writeStdout(t("tx.preview.header", txId) + "\n");
+    for (const entry of preview.diff) {
+      await io.writeStdout(
+        t(
+          "tx.preview.diff",
+          entry.index,
+          entry.adapter,
+          JSON.stringify(entry.args ?? null),
+          JSON.stringify(entry.beforeState ?? null),
+          JSON.stringify(entry.afterState ?? null),
+        ) + "\n",
+      );
+    }
+  } else {
+    await io.writeStderr(t("tx.error.run", "preview", preview.error) + "\n");
+  }
+
+  // 步骤 4:y/n 确认(仅 L0;apply 的真实副作用必须由这次 y 授权)
+  if (requireConfirmation) {
+    while (true) {
+      const choiceRaw = await io.readLine(t("tx.prompt.confirm"));
+      if (choiceRaw === null) {
+        // EOF (Ctrl-D) 视作放弃:日志留 proposed 态,无任何副作用
+        await recordAuditFn("copilot_cancel", { query, proposal, tx_id: txId }, "denied");
+        return 0;
+      }
+
+      const choice = choiceRaw.trim().toLowerCase();
+      if (choice === "y" || choice === "yes") {
+        break;
+      }
+      if (choice === "n" || choice === "no") {
+        await recordAuditFn(
+          "copilot_tx_reject",
+          { query, tx_id: txId, reason: "user denied tx" },
+          "denied",
+        );
+        await io.writeStdout(t("tx.reject.dropped") + "\n");
+        return 0;
+      }
+      if (choice === "q" || choice === "quit") {
+        await recordAuditFn("copilot_cancel", { query, proposal, tx_id: txId }, "denied");
+        return 0;
+      }
+      await io.writeStdout(t("tx.prompt.invalid") + "\n");
+    }
+  }
+
+  // 步骤 5:apply —— 依序执行全部步骤(真实副作用)。
+  const applied: TxApplyOutcome = await txApplyFn(txId);
+  if (!applied.ok) {
+    await io.writeStderr(t("tx.error.run", "apply", applied.error) + "\n");
+    await recordAuditFn(
+      "copilot_error",
+      { query, tx_id: txId, stage: "apply", error: applied.error },
+      "error",
+    );
+    return applied.returncode || 1;
+  }
+  await io.writeStdout(t("tx.result.applied", txId) + "\n");
+  await recordAuditFn(
+    "copilot_tx_apply",
+    {
+      query,
+      tx_id: txId,
+      target: txIntent.target,
+      desired_state: txIntent.desiredState,
+      // auto:true = -y / 非 TTY 自动授权;false = y/n 循环显式 "y"
+      auto: !requireConfirmation,
+    },
+    "success",
+  );
+  return 0;
+}
+
+/**
  * 执行单次查询轮次：转换 -> 解析并验证 -> 可选 verbose/dryRun -> 可选 interactive 确认 -> 执行。
  */
 async function runQueryTurn(ctx: TurnContext): Promise<number> {
@@ -464,7 +984,19 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     execFn,
     recordAuditFn,
     readConfigFn,
+    readStateFn,
   } = ctx;
+
+  // 步骤 0(todo 28):翻译前先查 state 记忆缓存。readStateSummary 永不 throw,
+  // 错误分类呈现:PermissionDenied 等真实 I/O 错逐路径打 stderr(t() 渲染,
+  // 开发者可见)后继续;NotFound 静默(v1 新镜像/demo 正常态)。两者都不写
+  // 审计——state 是派生缓存不是证据。entries 为空时 stateBlock 恒空串,
+  // 绝不把兜底文案注入 prompt(空态不污染)。
+  const stateSummary = await readStateFn();
+  for (const deniedPath of stateSummary.errors) {
+    await io.writeStderr(t("state.summary.error", deniedPath) + "\n");
+  }
+  const stateBlock = stateSummary.entries.length > 0 ? stateSummary.text : "";
 
   // 解析配置以获取提供商标识和设置
   let config: Config;
@@ -477,10 +1009,12 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 1;
   }
 
-  // 步骤 1：将查询转换为 LLM 提议
+  // 步骤 1：将查询转换为 LLM 提议。stateBlock 作为 system prompt 追加段
+  // (KNOWN STATE 块)传入,让 LLM 基于"当前服务状态"生成提议;空块传
+  // undefined,提示词与 todo 28 之前逐字节一致。
   let rawLlmOutput: string;
   try {
-    rawLlmOutput = await translateFn(query, configOverrides);
+    rawLlmOutput = await translateFn(query, configOverrides, stateBlock || undefined);
   } catch (err: unknown) {
     // W1 结构化错误 → W2 i18n 可操作文案(哪个端点、等了多久、怎么办);
     // 审计带 error_kind 及条件性 endpoint/timeout_ms/status 供链上检索
@@ -509,14 +1043,26 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 1;
   }
 
+  // 步骤 2.3:事务意图探测(todo 27)。命中保留动词(tx.propose/tx.apply/
+  // tx.rollback)→ 分类改走 classifyTxProposal(todo 24),shell 分类器与
+  // L0_WHITELIST 绝不参与事务定级(竞态条款:两通道互不抢占)。
+  const txIntent = detectTxIntent(proposal);
+
   // 步骤 2.4：本地静态风险分级（决策 2：LLM 不参与风险自标注）。
-  // L0 = safe 且命中 15 命令白名单 → 唯一可能进入沙箱执行的分级;
+  // shell 路径:L0 = safe 且命中 15 命令白名单 → 唯一可能进入沙箱执行的分级;
   // safe-outside / caution / danger 一律走展示路径,永不执行。
+  // tx 路径:分级来自 classifyTxProposal(intent × desired_state 静态表);
+  // tx_propose / tx_apply(started|stopped)= safe → 事务通道;
+  // 其余(tx_apply caution/danger、tx_rollback caution)→ 展示路径,绝不 apply。
   let risk: RiskAssessment;
   try {
-    risk = classifyProposal(proposal);
+    risk = txIntent
+      ? classifyTxProposal(txIntent.intent, txIntent.target, txIntent.desiredState)
+      : classifyProposal(proposal);
   } catch (err: unknown) {
-    // classifyProposal 的入参防御分支:parseProposal 已保证 schema,理论不可达
+    // classifyProposal / classifyTxProposal 的入参防御分支:
+    // 空 target("classifyTxProposal: target is empty")与未知 intent 在此
+    // fail-closed 拒绝——事务连 begin 都不发起,零 CLI spawn、零副作用。
     const msg = err instanceof Error ? err.message : String(err);
     await io.writeStderr(t("error.policy_reject", msg) + "\n");
     await recordAuditFn(
@@ -527,14 +1073,22 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 126;
   }
 
+  // T24 归一契约:shell 路径不携带 tx_kind,缺省即 "shell"(勿写字面比较)。
+  const txKind = risk.tx_kind ?? "shell";
+  // 事务执行通道准入:必须显式 tx_kind 且定级 safe;caution/danger 事务走展示。
+  const isTxChannel = txKind !== "shell" && risk.level === "safe";
+
   const proposedStr = proposal.args.length > 0
     ? `${proposal.command} ${proposal.args.join(" ")}`
     : proposal.command;
 
-  // 展示路径:caution / danger / safe(白名单外)。
+  // 展示路径:caution / danger / safe(白名单外)/ caution-danger 事务。
   // 架构上不可执行:daedalus-shell 拒白名单外命令,这里也不给 y 选项——模式分离的物理保障。
+  // 事务提议只按 classifyTxProposal 定级分流:safe 事务绕开本块进事务通道,
+  // caution/danger 事务(tx_apply 重启/启停使能、tx_rollback)在此仅展示,
+  // 永不进执行通道(L1/L2 绝不 apply)。
   // (danger 的 reasonKey 必非空;safe-outside / caution 亦带 i18n reasonKey)
-  if (risk.level !== "safe" || !L0_WHITELIST.has(proposal.command)) {
+  if (!isTxChannel && (risk.level !== "safe" || !L0_WHITELIST.has(proposal.command))) {
     if (risk.level === "safe") {
       // 白名单外 safe:✓ 标签 + 手动执行提示(pivot 核心场景,如 git --version)
       await io.writeStdout(t("risk.banner.safe") + "\n");
@@ -561,9 +1115,22 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     await io.writeStdout(t("risk.manual_hint") + "\n");
     // 展示路径落 copilot_reject/denied:证据边界完整——哪怕仅展示也记录
     // (F3 验收:dry-run 下同样落此条目);reason 字段存原始 i18n key。
+    // 事务提议附加 tx 判别三元组(intent/target/desired_state),链上可检索。
     await recordAuditFn(
       "copilot_reject",
-      { command: proposal.command, args: proposal.args, risk: risk.level, reason: risk.reasonKey },
+      {
+        command: proposal.command,
+        args: proposal.args,
+        risk: risk.level,
+        reason: risk.reasonKey,
+        ...(txIntent
+          ? {
+            tx_kind: txKind,
+            target: txIntent.target,
+            desired_state: txIntent.desiredState,
+          }
+          : {}),
+      },
       "denied",
     );
     return 0;
@@ -587,7 +1154,12 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
   // (决策 11);审计哈希链对 args 序列化整体摘要,新增 key 天然兼容。
   await recordAuditFn(
     "copilot_translate",
-    { query, round: 0, risk_level: risk.level },
+    {
+      query,
+      round: 0,
+      risk_level: risk.level,
+      ...(txIntent ? { tx_kind: txKind } : {}),
+    },
     "success",
   );
 
@@ -599,7 +1171,14 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     }
     await recordAuditFn(
       "copilot_confirm",
-      { command: proposal.command, args: proposal.args, mode: "dry-run", risk_level: "safe" },
+      {
+        command: proposal.command,
+        args: proposal.args,
+        mode: "dry-run",
+        risk_level: "safe",
+        // dry-run 对事务同样零副作用:不开账(begin)、不 propose、不 apply
+        ...(txIntent ? { tx_kind: txKind } : {}),
+      },
       "success",
     );
     return 0;
@@ -612,6 +1191,14 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
   // 唯一跳过 y/n 的方式,给 CI / 管道用。-i + 非 TTY 已在 runCopilot
   // 入口处报错拦截,不会到达这里。
   const requireConfirmation = isTerminal && !yes;
+
+  // 步骤 4.5:事务通道分流(todo 27)。safe 事务(tx_propose /
+  // tx_apply started|stopped)改走 execTxPropose/Preview/Apply
+  // (begin→propose→preview→y/n→apply),不再经 execAllowlisted;
+  // caution/danger 事务已在上方展示分流处返回,apply 函数对它们不可达。
+  if (isTxChannel && txIntent) {
+    return await runTxTurn(ctx, proposal, txIntent);
+  }
 
   if (!requireConfirmation) {
     // 沙箱执行路径(仅 L0 白名单只读诊断可达)
@@ -640,12 +1227,19 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
   }
 
   // 走到这里说明 requireConfirmation === true（隐含 isTerminal === true）
-  // 设置多轮修订状态
+  // 设置多轮修订状态。system 消息与步骤 1 的 translate 保持同构:
+  // 基础提示词 + (非空时)KNOWN STATE 追加段,修订轮 LLM 看到的上下文
+  // 与首轮翻译一致(todo 28 注入对称性)。
   const history: Array<{
     role: "system" | "user" | "assistant";
     content: string;
   }> = [
-    { role: "system", content: buildSystemPrompt(currentLocale()) },
+    {
+      role: "system",
+      content: stateBlock
+        ? `${buildSystemPrompt(currentLocale())}\n\n${stateBlock}`
+        : buildSystemPrompt(currentLocale()),
+    },
     { role: "user", content: query },
     { role: "assistant", content: rawLlmOutput },
   ];
@@ -878,6 +1472,14 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
   const execFn = options?.execFn ?? execAllowlisted;
   const recordAuditFn = options?.recordAuditFn ?? recordAudit;
   const readConfigFn = options?.readConfigFn ?? readConfig;
+  // 事务通道依赖(todo 27):propose/preview/apply 直承 T26 execTx* 实现;
+  // begin 由本文件 defaultTxBegin spawn `daedalus-tx begin`(exec.ts 无 begin)。
+  const txBeginFn = options?.txBeginFn ?? defaultTxBegin;
+  const txProposeFn = options?.txProposeFn ?? execTxPropose;
+  const txPreviewFn = options?.txPreviewFn ?? execTxPreview;
+  const txApplyFn = options?.txApplyFn ?? execTxApply;
+  // state 记忆读取(todo 28):默认直读 state.jsonl 缓存,测试注入假摘要。
+  const readStateFn = options?.readStateFn ?? readStateSummary;
 
   if (help) {
     await io.writeStdout(getHelpMessage());
@@ -921,6 +1523,11 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
       execFn,
       recordAuditFn,
       readConfigFn,
+      txBeginFn,
+      txProposeFn,
+      txPreviewFn,
+      txApplyFn,
+      readStateFn,
     });
   }
 
@@ -940,6 +1547,11 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
       execFn,
       recordAuditFn,
       readConfigFn,
+      txBeginFn,
+      txProposeFn,
+      txPreviewFn,
+      txApplyFn,
+      readStateFn,
     });
   }
 
@@ -975,6 +1587,11 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
       execFn,
       recordAuditFn,
       readConfigFn,
+      txBeginFn,
+      txProposeFn,
+      txPreviewFn,
+      txApplyFn,
+      readStateFn,
     });
   }
 }

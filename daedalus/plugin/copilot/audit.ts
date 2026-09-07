@@ -16,6 +16,12 @@ export const ALLOWED_AUDIT_TOOLS = new Set([
   "copilot_edit",
   "copilot_cancel",
   "copilot_error",
+  // 事务通道专属审计事件族(决策 25 落地,plan todo 27 起由 main.ts runTxTurn 发出):
+  // copilot_tx_propose = 事务开账并快照步骤提议;copilot_tx_apply = 用户授权后真实应用;
+  // copilot_tx_reject = 用户在 y/n 处放弃(日志留 proposed 态,零副作用)。
+  "copilot_tx_propose",
+  "copilot_tx_apply",
+  "copilot_tx_reject",
 ]);
 
 export type AuditTool =
@@ -24,7 +30,10 @@ export type AuditTool =
   | "copilot_confirm"
   | "copilot_edit"
   | "copilot_cancel"
-  | "copilot_error";
+  | "copilot_error"
+  | "copilot_tx_propose"
+  | "copilot_tx_apply"
+  | "copilot_tx_reject";
 
 export type AuditOutcome = "success" | "denied" | "error";
 

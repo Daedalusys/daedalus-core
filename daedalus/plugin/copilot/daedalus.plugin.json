@@ -8,9 +8,9 @@
   "entrypoint": [
     "--allow-env",
     "--allow-net",
-    "--allow-read=/opt/daedalus,/home,/var/log,/tmp,/proc,/sys,/etc/os-release,/usr/lib/os-release,/etc/fedora-release,/etc/almalinux-release,$HOME/.config/daedalus",
+    "--allow-read=/opt/daedalus,/home,/var/log,/tmp,/proc,/sys,/etc/os-release,/usr/lib/os-release,/etc/fedora-release,/etc/almalinux-release,$HOME/.config/daedalus,/var/lib/daedalus,$HOME/.local/share/daedalus",
     "--allow-write=/var/log/daedalus,/tmp,$HOME/.local/share/daedalus",
-    "--allow-run=/usr/local/bin/deno,/usr/local/bin/daedalus-audit,/usr/local/bin/daedalus-shell"
+    "--allow-run=/usr/local/bin/deno,/usr/local/bin/daedalus-audit,/usr/local/bin/daedalus-shell,/usr/local/bin/daedalus-tx"
   ],
   "permissions": {
     "read": [
@@ -24,7 +24,9 @@
       "/usr/lib/os-release",
       "/etc/fedora-release",
       "/etc/almalinux-release",
-      "$HOME/.config/daedalus"
+      "$HOME/.config/daedalus",
+      "/var/lib/daedalus",
+      "$HOME/.local/share/daedalus"
     ],
     "write": [
       "/var/log/daedalus",
@@ -34,7 +36,8 @@
     "run": [
       "/usr/local/bin/deno",
       "/usr/local/bin/daedalus-audit",
-      "/usr/local/bin/daedalus-shell"
+      "/usr/local/bin/daedalus-shell",
+      "/usr/local/bin/daedalus-tx"
     ]
   },
   "tools": [],

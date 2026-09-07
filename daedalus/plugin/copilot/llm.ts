@@ -443,12 +443,19 @@ async function callProvider(
 /**
  * 将自然语言查询转换为原始 LLM 响应。
  * 单轮非流式请求。
+ * systemContext（计划 todo 28）：可选的 system prompt 追加段（state 记忆
+ * KNOWN STATE 块）；非空时以空行拼接到基础提示词之后，空/缺省时提示词
+ * 逐字节保持不变（向后兼容，既有调用方与测试零回归）。
  */
 export async function translate(
   query: string,
   configOverrides?: Partial<Config>,
+  systemContext?: string,
 ): Promise<string> {
-  const systemPrompt = buildSystemPrompt();
+  const baseSystemPrompt = buildSystemPrompt();
+  const systemPrompt = systemContext
+    ? `${baseSystemPrompt}\n\n${systemContext}`
+    : baseSystemPrompt;
   const messages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
     { role: "user", content: query },

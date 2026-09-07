@@ -79,11 +79,23 @@ type Audit struct {
 	LogPath string `toml:"log_path"`
 }
 
+// ObjectModel 对应 TOML [objectmodel] 表:对象模型资源 kind 的正向启用白名单。
+// 与 [shell]/[fs]/[audit] 并列的第四策略节——声明式列出**启用**哪些资源
+// kind(未列入即未启用,fail-closed);具体 kind 的语义与校验规则由对象模型
+// schema 的单一事实源 daedalus/core/internal/objectmodel/objectmodel.go 定义
+// (v1 仅 service 有 provider)。设计决策与执行模型见计划
+// .omo/plans/aios-object-model-alignment.md 的 Object Model 段与决策 25。
+type ObjectModel struct {
+	// EnabledKinds 是启用的资源 kind 白名单(对应 enabled_kinds)。
+	EnabledKinds []string `toml:"enabled_kinds"`
+}
+
 // Policy 是 policy.toml 的完整解析结果,字段与 TOML 一一对应。
 type Policy struct {
-	Shell Shell `toml:"shell"`
-	FS    FS    `toml:"fs"`
-	Audit Audit `toml:"audit"`
+	Shell       Shell       `toml:"shell"`
+	FS          FS          `toml:"fs"`
+	Audit       Audit       `toml:"audit"`
+	ObjectModel ObjectModel `toml:"objectmodel"`
 }
 
 // ResolvePath 按文档优先级解析策略文件路径。
@@ -172,6 +184,10 @@ func (p *Policy) validate() error {
 	requireList("shell.allowed_path_prefixes", p.Shell.AllowedPathPrefixes)
 	requireList("shell.blocked_paths", p.Shell.BlockedPaths)
 	requireList("fs.allowed_dirs", p.FS.AllowedDirs)
+	// [objectmodel].enabled_kinds 只是放行网关;kind 词表与 Resource 形态的
+	// 单一事实源在 daedalus/core/internal/objectmodel/objectmodel.go
+	// (计划 .omo/plans/aios-object-model-alignment.md 决策 25),三点漂移测试钉死两侧一致。
+	requireList("objectmodel.enabled_kinds", p.ObjectModel.EnabledKinds)
 
 	if len(p.Shell.CleanEnv) == 0 {
 		missing = append(missing, "shell.clean_env")
@@ -228,8 +244,8 @@ func commandSet(cmds []string) map[string]struct{} {
 
 // Default 返回内嵌的出厂默认策略,值与 internal/shellpolicy、
 // internal/pathguard 的既有硬编码常量逐项一致(15 命令 / 4 bin 目录 /
-// 9 前缀 / 5 blocked / CLEAN_ENV / 30000ms / fs 3 目录 / 审计路径),
-// 由 policy 包测试跨包比对钉死,防止双源漂移。
+// 9 前缀 / 5 blocked / CLEAN_ENV / 30000ms / fs 3 目录 / 审计路径 /
+// objectmodel 启用 1 kind),由 policy 包测试跨包比对钉死,防止双源漂移。
 //
 // 返回的是全新构造的实例(集合/映射均为独立副本),调用方可安全改动。
 func Default() *Policy {
@@ -258,6 +274,11 @@ func Default() *Policy {
 		},
 		Audit: Audit{
 			LogPath: "/var/log/daedalus/audit.jsonl",
+		},
+		ObjectModel: ObjectModel{
+			// v1 仅 service kind 有 provider;其余保留枚举成员须经此白名单启用。
+			// kind 词表的单一事实源:daedalus/core/internal/objectmodel/objectmodel.go(决策 25)。
+			EnabledKinds: []string{"service"},
 		},
 	}
 }

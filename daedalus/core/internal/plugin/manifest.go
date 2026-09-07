@@ -8,6 +8,10 @@
 // 设计边界(决策 21/22、Metis M2/M5):
 //   - permissions 是"请求能力"的声明式字段,校验器只检查其 JSON 形态,
 //     不与 policy.toml 的强制执行值比对;
+//   - resources(Object Model 资源声明)的 schema 单一事实源在
+//     daedalus/core/internal/objectmodel/objectmodel.go(计划
+//     .omo/plans/aios-object-model-alignment.md 的 Object Model 段与决策 25),
+//     本包只逐条目委托校验,不复制形态规则;
 //   - 完整性仅 sha256,不做签名;不做运行时联网安装。
 package plugin
 
@@ -18,6 +22,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+
+	"github.com/daedalus-os/daedalus/core/internal/objectmodel"
 )
 
 // ManifestFileName 是插件清单在包根目录的固定文件名。
@@ -58,17 +64,18 @@ type Permissions struct {
 // Manifest 对应 daedalus.plugin.json 的完整 schema。
 // Checksums 由打包器自动注入(条目路径 → "sha256:<hex>"),手写清单可省略。
 type Manifest struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Version     string            `json:"version"`
-	Type        string            `json:"type"`
-	Runtime     string            `json:"runtime"`
-	Executable  string            `json:"executable"`
-	Entrypoint  []string          `json:"entrypoint,omitempty"`
-	Permissions *Permissions      `json:"permissions,omitempty"`
-	Tools       []string          `json:"tools,omitempty"`
-	I18N        []string          `json:"i18n,omitempty"`
-	Checksums   map[string]string `json:"checksums,omitempty"`
+	ID          string                  `json:"id"`
+	Name        string                  `json:"name"`
+	Version     string                  `json:"version"`
+	Type        string                  `json:"type"`
+	Runtime     string                  `json:"runtime"`
+	Executable  string                  `json:"executable"`
+	Entrypoint  []string                `json:"entrypoint,omitempty"`
+	Permissions *Permissions            `json:"permissions,omitempty"`
+	Tools       []string                `json:"tools,omitempty"`
+	Resources   []*objectmodel.Resource `json:"resources,omitempty"` // 条目 schema 单一事实源见 daedalus/core/internal/objectmodel/objectmodel.go
+	I18N        []string                `json:"i18n,omitempty"`
+	Checksums   map[string]string       `json:"checksums,omitempty"`
 }
 
 // ParseManifest 从 JSON 字节解析 manifest。除标准语法检查外,
@@ -111,7 +118,9 @@ func LoadManifestFile(path string) (*Manifest, error) {
 //  6. executable 必填、相对路径、不得含 '..'/空字节/绝对路径/以 '/' 开头;
 //  7. entrypoint 元素非空且不含空字节;
 //  8. tools 元素为非空字符串;
-//  9. checksums(若存在)键为安全相对路径、值为 "sha256:<64hex>"。
+//  9. resources(若存在)逐条目经 objectmodel.ValidateResource 校验
+//     (schema 见 daedalus/core/internal/objectmodel/objectmodel.go);
+//  10. checksums(若存在)键为安全相对路径、值为 "sha256:<64hex>"。
 func (m *Manifest) Validate() error {
 	if m.ID == "" {
 		return fmt.Errorf("字段 id 缺失:必填,如 \"daedalus.copilot\"")
@@ -148,6 +157,16 @@ func (m *Manifest) Validate() error {
 	for i, tool := range m.Tools {
 		if tool == "" {
 			return fmt.Errorf("字段 tools[%d] 非法:工具名必须是非空字符串", i)
+		}
+	}
+	// resources 逐条目委托 objectmodel.ValidateResource 校验(形态规则归
+	// 资源模式层,单一事实源:daedalus/core/internal/objectmodel/objectmodel.go,
+	// 计划 .omo/plans/aios-object-model-alignment.md 决策 25);错误消息统一带
+	// resources[i] 字段路径,与 tools 同风格。
+	// 字段缺席/为空数组时零迭代,旧清单行为完全不变(向后兼容)。
+	for i, res := range m.Resources {
+		if err := objectmodel.ValidateResource(res); err != nil {
+			return fmt.Errorf("字段 resources[%d] 非法:%w", i, err)
 		}
 	}
 	if err := validatePermList("permissions.read", m.permissionsRead()); err != nil {

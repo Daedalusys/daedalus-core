@@ -8,9 +8,9 @@
   "entrypoint": [
     "--allow-env",
     "--allow-net",
-    "--allow-read=/opt/daedalus,/home,/var/log,/tmp,/proc,/sys,/etc/os-release,/usr/lib/os-release,/etc/fedora-release,/etc/almalinux-release,$HOME/.config/daedalus",
+    "--allow-read=/opt/daedalus,/home,/var/log,/tmp,/proc,/sys,/etc/os-release,/usr/lib/os-release,/etc/fedora-release,/etc/almalinux-release,$HOME/.config/daedalus,/var/lib/daedalus,$HOME/.local/share/daedalus",
     "--allow-write=/var/log/daedalus,/tmp,$HOME/.local/share/daedalus",
-    "--allow-run=/usr/local/bin/deno,/usr/local/bin/daedalus-audit,/usr/local/bin/daedalus-shell"
+    "--allow-run=/usr/local/bin/deno,/usr/local/bin/daedalus-audit,/usr/local/bin/daedalus-shell,/usr/local/bin/daedalus-tx"
   ],
   "permissions": {
     "read": [
@@ -24,7 +24,9 @@
       "/usr/lib/os-release",
       "/etc/fedora-release",
       "/etc/almalinux-release",
-      "$HOME/.config/daedalus"
+      "$HOME/.config/daedalus",
+      "/var/lib/daedalus",
+      "$HOME/.local/share/daedalus"
     ],
     "write": [
       "/var/log/daedalus",
@@ -34,7 +36,8 @@
     "run": [
       "/usr/local/bin/deno",
       "/usr/local/bin/daedalus-audit",
-      "/usr/local/bin/daedalus-shell"
+      "/usr/local/bin/daedalus-shell",
+      "/usr/local/bin/daedalus-tx"
     ]
   },
   "i18n": [
@@ -42,14 +45,14 @@
     "zh_CN"
   ],
   "checksums": {
-    "audit.ts": "sha256:48bd7f6791b56ef0d438cd04a01fdff48e3b68e1d472cf4b0c582ad796c378ba",
-    "daedalus.plugin.json": "sha256:4d9dd380ae231990a0744fb9aa64d1fbcd25bb125013ce18bfd30fb2147f51da",
-    "exec.ts": "sha256:57d955a2911be2cee64ce64a0b03b6f3a200ac43f8d86421b8f0fb0ae7d6a43c",
+    "audit.ts": "sha256:81f2a87c4555204568410d7561f22e7efe7d2435b2eda63a79160956e1b9f8ff",
+    "daedalus.plugin.json": "sha256:d8099f41508b88d911e7bb0c4a6be6eccbc872f6c03ba1e09ec9d8dbe6c57152",
+    "exec.ts": "sha256:f2b7cd7109ee475ac44d62e1b82e6940188679ccf6f8ffd86444ed0846833d8f",
     "i18n.ts": "sha256:f4733b30d083dc2629afb0a615843eae0f745388a36d6b86f67065dd17c04862",
-    "i18n/en_US.json": "sha256:75343fb5770864dd58e79154a3e3f43ab42e0726e5d0e6ad794db1340e12190c",
-    "i18n/zh_CN.json": "sha256:8f2a1cdcfbdb6d8d87782cb6fb60d89d8ebda4b55584132f5d3e1d23b95fcaca",
-    "llm.ts": "sha256:9aa6d48bc93ec90093ec900bc53116f3a563536522caf889c0d9c55936792a10",
-    "main.ts": "sha256:928d2b53951c515fba4764b6ff79029a597ee9b07a052ddc6307b8dbc082c009",
-    "policy.ts": "sha256:81ec52d9822520ba6a7f622112cc2b78ca62478b12b6e7225853dfdf6156b34c"
+    "i18n/en_US.json": "sha256:a45af61604d5c6357c7c1a34c30336ca4a3dfd90181190eb5df57c81be215efd",
+    "i18n/zh_CN.json": "sha256:c2e32ae3087d9a1048a835ceaf085510294e86d801faf34a8b6c073a996e9c7b",
+    "llm.ts": "sha256:88ae8f177ed0d26d673db808dad3d5c16372a4004090d87e68798c50b45a3ab0",
+    "main.ts": "sha256:6b3aae703afac92d1b259ae47a128dd84540279446472fe642f5b9058b8cb337",
+    "policy.ts": "sha256:bd60afd5f19c255440d57322cafc52832d9d0c58e1430a4339bdde50643da861"
   }
 }

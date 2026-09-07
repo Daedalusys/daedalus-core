@@ -9,6 +9,12 @@
 // (internal/policy)读取并注入 pathguard;文件缺失回退 Default(),
 // 损坏则拒绝启动(fail-closed)。
 //
+// 清单交叉引用:本插件 manifest(daedalus.plugin.json)的 resources 声明字段
+// (本插件 v1 未声明)schema 单一事实源见
+// daedalus/core/internal/objectmodel/objectmodel.go
+// (计划 .omo/plans/aios-object-model-alignment.md 决策 25;
+// JSON 清单不能携带注释,故引用住本文件头)。
+//
 // 工具描述、参数名(path/content/src/dst)、required 列表与 ToolAnnotations
 // 与 fs_server.ts:210-299 逐字一致;错误结果对应 handleJsonRpcMessage 的
 // catch 分支(440-454 行):isError=true 且文本以 "Error: " 开头。

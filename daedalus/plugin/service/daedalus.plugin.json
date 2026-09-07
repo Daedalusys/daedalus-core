@@ -1,0 +1,17 @@
+{
+  "id": "daedalus.service",
+  "name": "Daedalus Service",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": "native",
+  "executable": "bin/daedalus-service",
+  "tools": ["service.query", "service.list"],
+  "resources": [
+    { "kind": "service", "name": "*" }
+  ],
+  "permissions": {
+    "read": ["/etc/systemd", "/run/systemd", "/proc/1/cmdline"],
+    "write": [],
+    "run": ["/usr/bin/systemctl"]
+  }
+}

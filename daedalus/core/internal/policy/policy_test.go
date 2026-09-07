@@ -59,6 +59,9 @@ func TestLoad_Happy(t *testing.T) {
 	if p.Audit.LogPath != "/tmp/daedalus-policy-test-audit.jsonl" {
 		t.Errorf("audit.log_path = %q", p.Audit.LogPath)
 	}
+	if !slices.Equal(p.ObjectModel.EnabledKinds, []string{"service", "package"}) {
+		t.Errorf("objectmodel.enabled_kinds = %v", p.ObjectModel.EnabledKinds)
+	}
 }
 
 // TestLoad_CorruptTOML 钉死损坏语法 → 报错(服务器据此拒绝启动)。
@@ -78,7 +81,7 @@ func TestLoad_MissingFields(t *testing.T) {
 	if err == nil {
 		t.Fatal("缺字段策略竟然 Load 成功")
 	}
-	for _, want := range []string{"shell.blocked_paths", "shell.clean_env", "shell.timeout_ms", "fs.allowed_dirs", "audit.log_path"} {
+	for _, want := range []string{"shell.blocked_paths", "shell.clean_env", "shell.timeout_ms", "fs.allowed_dirs", "audit.log_path", "objectmodel.enabled_kinds"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("错误消息未点名缺失字段 %s: %v", want, err)
 		}
@@ -94,6 +97,80 @@ func TestLoad_UnknownKey(t *testing.T) {
 	if !strings.Contains(err.Error(), "未知键") ||
 		!strings.Contains(err.Error(), "shell.allowed_commandz") ||
 		!strings.Contains(err.Error(), "fs.allowed_directorys") {
+		t.Errorf("未知键报错形态漂移: %v", err)
+	}
+}
+
+// TestPolicy_ObjectModel 钉死 [objectmodel] 段的端到端解析:
+// 夹具(valid.toml)与仓库真实 shared/policy.toml(经 DevRelPath 开发态回溯)
+// 都必须把 enabled_kinds 解进 Policy.ObjectModel,且真实策略与 Default() 零漂移。
+func TestPolicy_ObjectModel(t *testing.T) {
+	p, err := policy.Load(testdataPath(t, "valid.toml"))
+	if err != nil {
+		t.Fatalf("Load 含 [objectmodel] 的合法策略失败: %v", err)
+	}
+	if !slices.Equal(p.ObjectModel.EnabledKinds, []string{"service", "package"}) {
+		t.Errorf("夹具 enabled_kinds 未逐字段透传: %v", p.ObjectModel.EnabledKinds)
+	}
+
+	t.Setenv(policy.EnvPolicyPath, "")
+	st, err := os.Stat(policy.ProductionPath)
+	if err == nil && !st.IsDir() {
+		t.Skipf("本机存在 %s,无法演练开发态回溯", policy.ProductionPath)
+	}
+	repoPolicy, err := policy.ResolvePath()
+	if err != nil {
+		t.Fatalf("开发态回溯未命中仓库 policy.toml: %v", err)
+	}
+	real, err := policy.Load(repoPolicy)
+	if err != nil {
+		t.Fatalf("镜像 policy.toml 未通过自身校验: %v", err)
+	}
+	if len(real.ObjectModel.EnabledKinds) == 0 {
+		t.Fatal("真实 policy.toml 的 [objectmodel].enabled_kinds 解析为空")
+	}
+	if !slices.Contains(real.ObjectModel.EnabledKinds, "service") {
+		t.Errorf("v1 真实策略应启用 service kind: %v", real.ObjectModel.EnabledKinds)
+	}
+	if !slices.Equal(real.ObjectModel.EnabledKinds, policy.Default().ObjectModel.EnabledKinds) {
+		t.Errorf("policy.toml 与 Default() 的 enabled_kinds 漂移: %v vs %v",
+			real.ObjectModel.EnabledKinds, policy.Default().ObjectModel.EnabledKinds)
+	}
+}
+
+// TestPolicy_ObjectModel_RejectsEmpty 钉死 fail-closed:空 enabled_kinds
+// 列表视为损坏策略,Load 必须点名 objectmodel.enabled_kinds 拒绝。
+func TestPolicy_ObjectModel_RejectsEmpty(t *testing.T) {
+	_, err := policy.Load(testdataPath(t, "objectmodel_empty.toml"))
+	if err == nil {
+		t.Fatal("空 enabled_kinds 竟然 Load 成功(fail-closed 失效)")
+	}
+	if !strings.Contains(err.Error(), "objectmodel.enabled_kinds") {
+		t.Errorf("报错未点名 objectmodel.enabled_kinds: %v", err)
+	}
+}
+
+// TestPolicy_ObjectModel_RejectsMissingSection 钉死:文件存在但 [objectmodel]
+// 段整体缺失同样属于损坏策略(与其他必需列表同等的 fail-closed 语义)。
+func TestPolicy_ObjectModel_RejectsMissingSection(t *testing.T) {
+	_, err := policy.Load(testdataPath(t, "objectmodel_missing.toml"))
+	if err == nil {
+		t.Fatal("缺 [objectmodel] 段的策略竟然 Load 成功")
+	}
+	if !strings.Contains(err.Error(), "objectmodel.enabled_kinds") {
+		t.Errorf("报错未点名 objectmodel.enabled_kinds: %v", err)
+	}
+}
+
+// TestPolicy_ObjectModel_UnknownKeyRejected 证明新增解码字段没有旁路
+// undecoded-keys 防线:[objectmodel] 内的拼写错误键仍被拒绝。
+func TestPolicy_ObjectModel_UnknownKeyRejected(t *testing.T) {
+	_, err := policy.Load(testdataPath(t, "objectmodel_unknown_key.toml"))
+	if err == nil {
+		t.Fatal("[objectmodel] 含未知键的策略竟然 Load 成功")
+	}
+	if !strings.Contains(err.Error(), "未知键") ||
+		!strings.Contains(err.Error(), "objectmodel.enabled_kindz") {
 		t.Errorf("未知键报错形态漂移: %v", err)
 	}
 }
@@ -293,5 +370,8 @@ func assertPolicyEqual(t *testing.T, got, want *policy.Policy, label string) {
 	}
 	if got.Audit.LogPath != want.Audit.LogPath {
 		t.Errorf("%s: audit.log_path 漂移", label)
+	}
+	if !eqList(got.ObjectModel.EnabledKinds, want.ObjectModel.EnabledKinds) {
+		t.Errorf("%s: objectmodel.enabled_kinds 漂移 %v vs %v", label, got.ObjectModel.EnabledKinds, want.ObjectModel.EnabledKinds)
 	}
 }

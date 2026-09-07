@@ -21,9 +21,17 @@
 #      不拦截读取;DynamicUser 能否读到 policy.toml 取决于文件 o+r 位与祖先目录 o+x 位,
 #      逐项验证即可,**无需**任何 BindReadOnlyPaths/ReadWritePaths 放宽(放宽反而破坏
 #      "整盘只读 + 单点策略"的沙箱语义)。不满足即构建失败,防止服务器开机 fail-closed。
+#   8. 对象模型资源门禁(aios 计划 todo 10):CAPS 扩至 5 能力(fs/shell/pkg/sysinfo/service,
+#      daedalus.service 单元同样经 render-unit 渲染回写并幂等自校验);策略预检额外断言
+#      [objectmodel].enabled_kinds 非空且包含 service(service 资源的唯一授权来源,
+#      缺失/剔除即 fail-closed 拒构建);逐插件交叉核对 manifest.resources[].kind ⊆
+#      enabled_kinds(jq 解析安装态清单;无 resources 字段视为空集恒过 —— 现有 4 能力即此形态);
+#      声明未启用的 kind = 越权,fail-closed。daedalus-service 与其余非 shell 能力一样,
+#      单元不得携带 Environment=ALLOW_COMMANDS / DAEDALUS_POLICY_PATH(第 6 条既有规则覆盖)。
 #
 # 失败语义(对抗面):宿主二进制缺失、manifest 缺失/损坏/被篡改、checksums 不符、
-# executable 不存在或缺可执行位、tools 漂移、ExecStart 复读不一致、policy.toml 缺失/损坏、
+# executable 不存在或缺可执行位、tools 漂移、resources kind 未在 enabled_kinds 启用、
+# enabled_kinds 缺 service、ExecStart 复读不一致、policy.toml 缺失/损坏、
 # 单元 ALLOW_COMMANDS 与策略漂移、策略对 DynamicUser 不可读 —— 一律 exit 1,构建失败。
 #
 # 开发态模拟:DAEDALUS_PLUGIN_GEN_ROOT=<暂存根> 可把四个绝对路径前缀
@@ -36,11 +44,16 @@ PLUGINS="${ROOT%/}/opt/daedalus/plugins"
 UNIT_DIR="${ROOT%/}/usr/lib/systemd/system"
 HOST="${ROOT%/}/usr/local/bin/daedalus-host"
 POLICY="${ROOT%/}/opt/daedalus/shared/policy.toml"
-CAPS="fs shell pkg sysinfo"
+# 能力清单(aios 计划 todo 10 新增 service):循环按 cap 推导 id=daedalus.<cap>、
+# 单元=daedalus-<cap>.service、drop-in 目录=daedalus-<cap>.service.d。
+CAPS="fs shell pkg sysinfo service"
 
 fail() { echo "76-daedalus-plugin-gen: 错误: $*" >&2; exit 1; }
 
 [ -x "$HOST" ] || fail "宿主二进制缺失或不可执行: $HOST(插件接线必须先安装 daedalus-host)"
+# 资源 kind 交叉核对用 jq(仓库处理 JSON 的约定工具,与 scripts/plugin-i18n-sync.sh 同源);
+# 缺失即 fail-closed 拒构建,不得静默跳过门禁。
+command -v jq >/dev/null || fail "构建环境缺 jq:resources[].kind 与 enabled_kinds 交叉核对无法执行"
 
 # manifest_tools <清单文件> —— 抽取 tools 数组元素并排序。
 # 安装包内 manifest 由打包器 MarshalIndent 生成(多行数组),源目录手写为单行;
@@ -92,6 +105,16 @@ grep -Eq '^[[:space:]]*log_path[[:space:]]*=' "$POLICY" || fail "policy.toml 损
 POLICY_ALLOW="$(policy_toml_list allowed_commands "$POLICY")"
 [ -n "$POLICY_ALLOW" ] || fail "policy.toml 损坏: [shell].allowed_commands 无法解析出任何命令项"
 
+# —— 0+') 对象模型资源门禁预检(aios 计划 todo 10):[objectmodel] 节与
+# enabled_kinds 键必须存在,且启用集合必须包含 service —— daedalus-service
+# provider 与 daedalus.service 插件声明的唯一授权来源。fail-closed:
+# 空列表/缺 service 一律拒构建(与 Go 侧 internal/policy 的 requireList 语义同向)。
+grep -q '^\[objectmodel\]' "$POLICY" || fail "policy.toml 损坏: 缺节 ^[objectmodel] (对象模型策略节必须存在,todo 10)"
+grep -Eq '^[[:space:]]*enabled_kinds[[:space:]]*=' "$POLICY" || fail "policy.toml 损坏: [objectmodel] 缺 enabled_kinds"
+OM_KINDS="$(policy_toml_list enabled_kinds "$POLICY")"
+printf '%s\n' "$OM_KINDS" | grep -qx 'service' \
+    || fail "policy.toml enabled_kinds does not include 'service'([objectmodel].enabled_kinds{$(echo "$OM_KINDS" | tr '\n' ' ')},fail-closed:service 资源种类未授权,daedalus.service 单元拒绝渲染)"
+
 # —— 0a) DynamicUser 策略可读性(todo 13):ProtectSystem=strict 不拦读,
 # 读取可行性 = 文件 o+r 位 + ROOT 子树内祖先目录 o+x 位(DynamicUser 以
 # world/other 身份访问)。不满足即构建失败,而非部署后开机 fail-closed。
@@ -111,7 +134,7 @@ done
 # 显式指向策略:让 shell/fs 二进制的启动握手顺带充当"真实解析器可加载性"校验
 # (TOML 语法损坏/未知键/字段缺失 → internal/policy fail-closed → 服务器拒启 → 握手失败)。
 export DAEDALUS_POLICY_PATH="$POLICY"
-echo "76-daedalus-plugin-gen: policy.toml 预检通过($(echo "$POLICY_ALLOW" | wc -l) 项 shell 白名单,DynamicUser 可读)"
+echo "76-daedalus-plugin-gen: policy.toml 预检通过($(echo "$POLICY_ALLOW" | wc -l) 项 shell 白名单,DynamicUser 可读,objectmodel 启用 kinds:$(echo "$OM_KINDS" | tr '\n' ' '))"
 
 for cap in $CAPS; do
     id="daedalus.${cap}"
@@ -141,6 +164,21 @@ for cap in $CAPS; do
     [ -n "$want" ] || fail "$id: manifest tools 为空,能力服务器必须声明工具"
     got="$(binary_tools "$exe")" || fail "$id: 二进制未应答 tools/list(启动失败、30s 超时,或 DAEDALUS_POLICY_PATH 指向的策略被 Go 解析器拒绝): $exe"
     [ "$want" = "$got" ] || fail "$id: tools 与二进制不符 —— manifest{$(echo "$want" | tr '\n' ' ')} vs 二进制{$(echo "$got" | tr '\n' ' ')}"
+
+    # —— 3b) 资源 kind 交叉核对(aios 计划 todo 10):manifest.resources[].kind 必须
+    # 全部落在 policy.toml [objectmodel].enabled_kinds 内。resources 条目 schema 的
+    # 单一事实源:daedalus/core/internal/objectmodel/objectmodel.go(计划
+    # .omo/plans/aios-object-model-alignment.md 决策 25)——本处只做授权核对,不重复校验规则。
+    # jq 解析安装态清单(JSON 权威形态),
+    # 无 resources 字段 → 空集恒过(现有 fs/shell/pkg/sysinfo 即此形态);
+    # 任一 kind 未启用 → 该 provider 越权声明资源,fail-closed 拒构建。——
+    res_kinds="$(jq -r '.resources // [] | .[] | .kind' "$manifest" 2>/dev/null)" \
+        || fail "$id: manifest resources 字段无法被 jq 解析(损坏): $manifest"
+    while IFS= read -r kind; do
+        [ -n "$kind" ] || continue
+        printf '%s\n' "$OM_KINDS" | grep -qx "$kind" \
+            || fail "$id: manifest 声明的资源 kind '$kind' 不在 policy.toml [objectmodel].enabled_kinds{$(echo "$OM_KINDS" | tr '\n' ' ')} 中(fail-closed:未授权资源种类)"
+    done <<< "$res_kinds"
 
     # —— 4) 沙箱语义防回归:单元主体行 + drop-in 必须原样存在 ——
     grep -qx 'DynamicUser=yes' "$unit" || fail "$id: 单元主体丢失 DynamicUser=yes(沙箱语义不可变)"

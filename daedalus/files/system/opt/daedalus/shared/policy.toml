@@ -14,6 +14,10 @@
 #
 # ALLOW_COMMANDS 环境变量语义为整体替换(REPLACE,非并集):
 # 存在且非空时,逗号分隔的命令集合整体取代 [shell].allowed_commands。
+#
+# Object Model 字段([objectmodel].enabled_kinds 及各 kind 的资源 schema)的
+# 语义与校验规则单一事实源见 daedalus/core/internal/objectmodel/objectmodel.go;
+# 三点漂移测试(policy.toml ↔ policy.Default() ↔ objectmodel 常量)钉死三侧一致。
 # =============================================================================
 
 [shell]
@@ -42,3 +46,13 @@ allowed_dirs = ["/home", "/var/log", "/tmp"]
 [audit]
 # 哈希链审计日志路径(运行时仍可被 DAEDALUS_AUDIT_LOG_PATH 环境变量覆盖)。
 log_path = "/var/log/daedalus/audit.jsonl"
+
+[objectmodel]
+# 对象模型资源 kind 的正向启用白名单(与 [shell]/[fs]/[audit] 并列的第四策略节):
+# 声明式列出**启用**哪些 kind,未列入即未启用;具体 kind 语义与校验规则由
+# 单一事实源 daedalus/core/internal/objectmodel/objectmodel.go 定义
+# (计划 .omo/plans/aios-object-model-alignment.md 的 Object Model 段与决策 25;
+# v1 仅 service 有 provider,其余为保留枚举成员)。
+# fail-closed:空列表视为损坏策略,Go 服务器启动时拒绝加载。
+# 本值与 internal/policy.Default() 及 objectmodel 常量由防漂移测试三点钉死。
+enabled_kinds = ["service"]

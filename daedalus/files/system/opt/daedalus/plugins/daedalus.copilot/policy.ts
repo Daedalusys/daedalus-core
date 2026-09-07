@@ -427,14 +427,25 @@ Rules:
 }
 
 /**
+ * 事务分类维度（aios-object-model-alignment 计划 todo 24）。
+ * RiskAssessment.tx_kind 的取值集合。
+ */
+export type RiskTxKind = "shell" | "tx_propose" | "tx_apply" | "tx_rollback";
+
+/**
  * 风险评估结果（QQ pivot）。
  * level：L0=safe / L1=caution / L2=danger；
  * reasonKey：i18n key（risk.pattern.* / risk.reason.*），UI 层经 t() 渲染；
  * safe/null 表示白名单内且无危险模式命中。
+ * tx_kind：事务分类扩展字段（todo 24），**可选**——classifyProposal 的全部
+ * 既有 shell 路径不携带该键，缺省（undefined）即视为 "shell"（消费方按
+ * `risk.tx_kind ?? "shell"` 归一），保证既有输出逐对象不变、向后兼容；
+ * classifyTxProposal 则恒显式设置三类 tx 意图之一。
  */
 export type RiskAssessment = {
   level: "safe" | "caution" | "danger";
   reasonKey: string | null;
+  tx_kind?: RiskTxKind;
 };
 
 /**
@@ -456,6 +467,9 @@ const GIT_READONLY_SUBCOMMANDS = new Set([
  *   3. L1 集（git 只读子命令豁免后）→ caution/"risk.reason.caution_command"；
  *   4. 白名单外、非 caution/danger → safe/"risk.reason.outside_sandbox"
  *      （不可执行，但无害；用户手动执行）。
+ * ★ todo 24 竞态条款 ★ 事务意图绝不进入本 shell 路径：tx_propose /
+ * tx_apply / tx_rollback 由 classifyTxProposal 独立定级（不查 L0_WHITELIST），
+ * 消费方据此跳过 shell_exec 分派，L0 路径与 tx 路径互不抢占（no race）。
  */
 export function classifyProposal(proposal: CommandProposal): RiskAssessment {
   if (!proposal || typeof proposal !== "object") {
@@ -502,6 +516,80 @@ export function classifyProposal(proposal: CommandProposal): RiskAssessment {
   // 4. 白名单外、非 caution/danger → safe（不可执行；风险来源是
   //    daedalus-shell 拒 → 用户得手动复制）
   return { level: "safe", reasonKey: "risk.reason.outside_sandbox" };
+}
+
+// v1 事务动词集与 daedalus-tx service.set 适配器（todo 22）保持一致：
+// started|stopped|restarted|enabled|disabled；分类器与适配器若漂移，
+// 会出现"分类放行 / 执行拒绝"或反向的分裂语义，改一侧必查另一侧。
+const TX_APPLY_SAFE_STATES: ReadonlySet<string> = new Set(["started", "stopped"]);
+
+/**
+ * 事务提议风险分类器（aios-object-model-alignment 计划 todo 24）。
+ *
+ * ★ L0_WHITELIST 竞态条款（镜像 plan 措辞）★
+ * 本分类器把 L0_WHITELIST 推理扩展到事务：当意图是事务时跳过 shell_exec
+ * 分派（事务性意图绝不走 shell 路径），使 L0 执行路径与 tx 执行路径
+ * 互不竞争——tx_* 提议永不被当作白名单 shell 命令重复定级。
+ *
+ * 规则表（plan todo 24 钉死，纯静态查表，与 classifyProposal 同样不读
+ * LLM 风险自标注，决策 2）：
+ *   tx_propose              → safe/null（仅展示 + 记录，不落任何变更）
+ *   tx_apply:
+ *     started | stopped     → safe/null（启停意图明确、事务快照可回滚）
+ *     restarted/enabled/
+ *     disabled              → caution/risk.reason.caution_command
+ *     reload                → danger（daemon-reload 中断在途服务；todo 22
+ *                             适配器已在 propose 时逐字拒绝 reload，v1 不
+ *                             存在 apply 路径——danger 标注仅保持动词表对齐
+ *                             与展示层兜底，分类先行于执行）
+ *     其余未知动词           → caution（fail-closed：不进 safe 执行通道）
+ *   tx_rollback             → caution/risk.reason.caution_command
+ *
+ * intent 不在 tx_propose/tx_apply/tx_rollback 集合 → 抛错（静态表无此
+ * 行的 neither-safe 兜底，配置期 bug 必须响亮暴露，fail-closed）。
+ * target 为空 → 抛错（plan QA 断言字面量 "classifyTxProposal: target is
+ * empty"，钉死文案勿改）。
+ *
+ * reasonKey 仅复用已落地 i18n 键：reload→danger 借用语义最近的
+ * "risk.pattern.shutdown"（中断在途服务）；tx.* 专用键族由 todo 30 落地
+ * 后替换，本文件届时同步——在此之前不得引用不存在的键。
+ */
+export function classifyTxProposal(
+  intent: string,
+  target: string,
+  desiredState: string,
+): RiskAssessment {
+  if (typeof target !== "string" || target.trim().length === 0) {
+    throw new Error("classifyTxProposal: target is empty");
+  }
+
+  const intentNorm = typeof intent === "string" ? intent.trim() : "";
+  switch (intentNorm) {
+    case "tx_propose":
+      return { level: "safe", reasonKey: null, tx_kind: "tx_propose" };
+
+    case "tx_apply": {
+      const state = typeof desiredState === "string" ? desiredState.trim() : "";
+      if (TX_APPLY_SAFE_STATES.has(state)) {
+        return { level: "safe", reasonKey: null, tx_kind: "tx_apply" };
+      }
+      if (state === "reload") {
+        // danger 借用 risk.pattern.shutdown 文案（中断会话/服务）；适配器已拒
+        // reload（todo 22），此处无 apply 通道，仅定级展示。todo 30 换 tx.* 键。
+        return { level: "danger", reasonKey: "risk.pattern.shutdown", tx_kind: "tx_apply" };
+      }
+      // restarted / enabled / disabled 及一切未知动词 → caution（fail-closed，
+      // 只展示不执行）
+      return { level: "caution", reasonKey: "risk.reason.caution_command", tx_kind: "tx_apply" };
+    }
+
+    case "tx_rollback":
+      // 状态回退：意图驱动、可预期，但仍改系统状态 → caution
+      return { level: "caution", reasonKey: "risk.reason.caution_command", tx_kind: "tx_rollback" };
+
+    default:
+      throw new Error(`classifyTxProposal: unknown intent '${intent}'`);
+  }
 }
 
 /**

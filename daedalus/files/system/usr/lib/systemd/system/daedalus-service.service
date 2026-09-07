@@ -1,0 +1,27 @@
+[Unit]
+Description=Daedalus 服务状态查询 MCP 沙箱配置文件
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.service)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性(aios 计划 todo 10,决策 16/22);手工漂移将导致构建失败。
+# 策略消费约定(aios 计划 todo 10):资源种类开关的单一事实源是 /opt/daedalus/shared/policy.toml
+# 的 [objectmodel].enabled_kinds,本服务启动时运行时读取;单元不得注入 DAEDALUS_POLICY_PATH 改指策略,
+# 构建期 76 脚本校验策略可读性(0644/o+r,ProtectSystem=strict 只读不拦读)。
+ExecStart=/opt/daedalus/plugins/daedalus.service/bin/daedalus-service
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
