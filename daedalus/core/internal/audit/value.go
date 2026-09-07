@@ -11,6 +11,8 @@
 // 测试重放每一条并断言 entry_hash 逐字节相等。
 package audit
 
+import "strconv"
+
 // valueKind 是 JSON 值的判别标签(替代 interface{} 逃逸, 保证解析后无 any 类型)。
 type valueKind uint8
 
@@ -62,6 +64,14 @@ func NewString(s string) *Value {
 	return &Value{kind: kindString, text: s}
 }
 
+// NewInt64 返回一个 JSON 整数值: 无引号规范化十进制文本, 与解析器整数路径
+// (scan.go parseNumber 的 strconv.FormatInt 规范化)逐字节一致, 即
+// Python json.dumps(int) 的上线形态。kindNumber 此前仅由解析器产出,
+// 本函数是唯一的导出生成器(tx_step 等数值记录字段专用)。
+func NewInt64(n int64) *Value {
+	return &Value{kind: kindNumber, text: strconv.FormatInt(n, 10)}
+}
+
 // IsObject 报告该值是否为 JSON 对象。
 func (v *Value) IsObject() bool { return v.kind == kindObject }
 
@@ -102,6 +112,25 @@ func (v *Value) set(key string, val *Value) {
 		}
 	}
 	v.members = append(v.members, Member{Key: key, Val: val})
+}
+
+// setIfNonEmpty 条件发射: 仅当值"有内容"时才写入键。
+//
+// 抑制规则(发射端防漂移, 与 lastNonTxRecord/Verify 的回读判据配套):
+//   - val == nil → no-op;
+//   - kindString 且 text 为空 → no-op(空字符串键不落盘);
+//   - 其余 kind(含 NewInt64(0) 这类无"空值"形态的数字)→ 恒 set。
+//
+// 仅供 Record.toValue 的三个 tx 扩展键使用: 非 tx 记录据此保持原 8 键,
+// 磁盘行与金样逐字节一致(载荷扩展见 payloadFor, 判据同为 TxID 非空)。
+func (v *Value) setIfNonEmpty(key string, val *Value) {
+	if val == nil {
+		return
+	}
+	if val.kind == kindString && val.text == "" {
+		return
+	}
+	v.set(key, val)
 }
 
 // ArgsString 计算参与哈希的 args_str, 字节级复刻 audit-log.py:30-34:
