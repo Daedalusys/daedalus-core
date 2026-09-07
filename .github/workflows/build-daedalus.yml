@@ -11,10 +11,8 @@ on:
       - 'scripts/sync-daedalus.sh'
       - '.github/workflows/build-daedalus.yml'
   push:
-    # 触发器:任何 push(命中路径过滤)都跑完整 CI(build/test/verify/lint);
-    # publish 步骤(ghcr + qcow2 artifact)由 job 级 SHOULD_PUBLISH env 闸门
-    # 限定到 feat/* 分支推送与任何 tag 推送;workflow_dispatch 勾选 PUSH=true
-    # 作为手动兜底。
+    # 触发器:任何 push(命中路径过滤)都至少跑 ci job;镜像构建与发布(build-image
+    # job)由其自身 if: 限定到 feat/* 分支推送、任何 tag 推送、workflow_dispatch。
     # 发版:合并到 feat/<name> 后 push,或 git tag v0.2.0 && git push --tags。
     paths:
       - 'base_image/**'
@@ -37,80 +35,60 @@ on:
         default: 'false'
         type: boolean
 
+# 并发:同一 ref 同一 workflow 同时只跑一个;新 push 自动取消旧 run(两个 job 都取消)。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
   cancel-in-progress: true
 
-# ghcr.io 推送需要 packages:write(OCI 镜像发布主渠道, 免费无 2GiB 硬限);
-# qcow2 供本地 KVM 测试, 走 artifact(单工件上限 10GB, 保留期默认 90 天)。
+# 最小权限默认 contents:read;packages:write 仅在 build-image job 内升级。
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  build-daedalus-image:
-    name: Build & Lint Daedalus Image
+  # ---- 日常 CI:任何 push / PR / dispatch 都跑(无镜像构建,反馈快) ----
+  ci:
+    name: CI (i18n / go / deno / integration)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [kde]
-    # 发布闸门:仅在 feat/* 分支推送、任何 tag 推送、workflow_dispatch 勾选
-    # PUSH=true 时为 true;其他情况(普通分支 push、PR)走 build+verify 即可,
-    # 不消耗 ghcr 存储/带宽/artifact 配额。下方 5 个 publish 步骤统一引用此 env。
-    env:
-      SHOULD_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true' || startsWith(github.ref, 'refs/heads/feat/') || startsWith(github.ref, 'refs/tags/') }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Podman / Buildah
-        shell: bash
-        run: |
-          sudo apt-get update -y || true
-          sudo apt-get install -y podman qemu-user-static just
-
       - name: Set Up Go Toolchain
-        # daedalus/core/go.mod pins `go 1.25.0`; the runner image may ship an older
-        # Go, so pin 1.25.x explicitly. setup-go caches modules based on
-        # daedalus/core/go.sum; deps are NOT vendored (vendor/ gitignored) so each
-        # fresh build downloads from the Go module proxy on first miss.
+        # daedalus/core/go.mod pins `go 1.25.0`;runner image 可能更老,显式 pin。
+        # setup-go 缓存 daedalus/core/go.sum;vendor/ 不入库,首次构建走 module proxy。
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
           cache-dependency-path: daedalus/core/go.sum
 
       - name: Set Up Deno Runtime
-        # Runs the copilot test suite (tests/deno/) in the `just test` gate below.
+        # copilot 测试套件 (tests/deno/) 由 deno 跑。
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
+      - name: Set up just
+        # ci job 多个 gate(i18n-sync / go test / deno test / 集成测试)都用 just
+        # 编排;build-image job 在 Set up Podman 一步里顺带装了,统一 apt 源避免
+        # just 二进制版本漂移。ubuntu-latest 默认不带 just,必须显式装。
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          sudo apt-get update -y || true
+          sudo apt-get install -y just
+          just --version
+
       - name: i18n Manifest Gate (strict)
         # 计划 todo 30 接线:严模式校验 copilot 清单 "i18n" 声明 ↔ i18n/ 目录实物
         # (外加 Go 侧 i18n.T() key ↔ locales 交叉核对),漂移 exit 1 拒构建。
-        # 放在 deno test(下方 Full Test Suite Gate)之前尽早失败,不浪费镜像构建。
+        # 放在 deno test 之前尽早失败,不浪费镜像构建。
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
           just i18n-sync daedalus/plugin/copilot
 
-      - name: Build Plugin Install-State (Go binaries + plugin packaging)
-        # 必须在 just build 之前: plugin-pack 把 Go 静态二进制与插件安装态
-        # 落到 daedalus/files/system/(usr/local/bin + opt/daedalus/plugins),
-        # 这些构建产物不入库(.gitignore), sync 后构成容器构建上下文。
-        # 76-daedalus-plugin-gen.sh 在容器内硬依赖 daedalus-host 二进制。
-        shell: bash
-        run: |
-          just go-build
-          just plugin-pack
-
-      - name: Build Daedalus Container Image
-        shell: bash
-        run: |
-          just build
-
       - name: Go Build & Test Gate
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
           # Full Go module compile (static binaries) + unit tests (plan todo 15)
@@ -118,17 +96,19 @@ jobs:
           just go-test
 
       - name: Full Test Suite Gate
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
           # `just test` = go test ./... + deno test --allow-all tests/deno/
           just test
 
-      - name: Tx Service Roundtrip Integration (todo 30 CI 接线)
-        # daedalus-tx 全链路端到端(todo 23 脚本):begin→propose→apply→status→
-        # rollback→审计双链 verify + ActiveState 实感断言,跑在 runner 的 user
-        # systemd 会话上。脚本自带就绪门:无用户管理器 → exit 77(SKIP 约定,
-        # automake 惯例)。**仅 0 / 77 放行**,其余非零退出(含 FAIL=1)原样上抛,
-        # 绝不把实现失败读成跳过。二进制构建由脚本自身 ensure_binaries 兜底。
+      - name: Tx Service Roundtrip Integration
+        # daedalus-tx 全链路端到端(begin→propose→apply→status→rollback→审计双链
+        # verify + ActiveState 实感断言),跑在 runner 的 user systemd 会话上。
+        # 脚本自带就绪门:无用户管理器 → exit 77(SKIP 约定,automake 惯例)。
+        # **仅 0 / 77 放行**,其余非零退出(含 FAIL=1)原样上抛,绝不把实现失败读
+        # 成跳过。二进制构建由脚本自身 ensure_binaries 兜底。
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
           set +e
@@ -144,29 +124,78 @@ jobs:
             exit "$rc"
           fi
 
-      - name: Verify Image Zero-Residue
+  # ---- 镜像构建与发布:仅 feat/* 分支 / 任何 tag / workflow_dispatch 才跑 ----
+  # 依赖 ci 通过;日常 PR 与普通分支 push 不到此处,反馈快。
+  build-image:
+    name: Build & Publish Daedalus Image
+    runs-on: ubuntu-latest
+    needs: ci
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/feat/') || startsWith(github.ref, 'refs/tags/') }}
+    # 升级 packages:write 权限(仅本 job 需要;ghcr.io 推送)。
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [kde]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Podman / Buildah
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          # Assert no source/test/module residue leaked into the image rootfs
-          # (Python servers and Deno servers were replaced by Go plugins).
-          # Same predicate as `just verify-image`.
+          sudo apt-get update -y || true
+          sudo apt-get install -y podman qemu-user-static just
+
+      - name: Set Up Go Toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: daedalus/core/go.sum
+
+      - name: Build Plugin Install-State (Go binaries + plugin packaging)
+        # plugin-pack 把 Go 静态二进制与插件安装态落到 daedalus/files/system/
+        # (usr/local/bin + opt/daedalus/plugins),这些构建产物不入库(.gitignore),
+        # sync 后构成容器构建上下文。76-daedalus-plugin-gen.sh 在容器内硬依赖
+        # daedalus-host 二进制。
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          just go-build
+          just plugin-pack
+
+      - name: Build Daedalus Container Image
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          just build
+
+      - name: Verify Image Zero-Residue
+        # 断言镜像 /opt 内无 Python 源码/字节码、__pycache__、Deno 测试文件、
+        # Go 模块/依赖残留。任一新布局构建产物泄漏进 rootfs 即 exit 1;干净时
+        # 打印 OK。与 `just verify-image` 同义。
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
           podman run --rm localhost/daedalus-os:latest sh -c 'test -z "$(find /opt -name "*.py" -o -name "*.pyc" -o -name "__pycache__" -o -name "*.test.ts" -o -name "go.mod" -o -type d -name vendor 2>/dev/null)"' || { echo "ERROR: residue found in image /opt"; exit 1; }
 
       - name: Verify Image & Bootc Container Lint
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          # Test image inspection and os-release verification
           podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release || true
-          # Verify bootc version
           podman run --rm localhost/daedalus-os:latest bootc --version || true
           echo "Daedalus bootc container verification completed successfully."
 
-      # ---- 发布: OCI 镜像 → ghcr.io (bootc 原生分发形态; 公开包免费无 2GiB 硬限) ----
-      # 由 job 级 SHOULD_PUBLISH env 统一闸门:feat/* 分支 / 任何 tag / dispatch PUSH。
-      # PR 与普通分支 push 走到这里直接 skip,不消耗 ghcr 存储/带宽/配额。
+      # ---- 发布:OCI 镜像 → ghcr.io (bootc 原生分发形态;公开包免费无 2GiB 硬限) ----
+      # job 级 if: 已限定到 feat/* 分支 / 任何 tag / workflow_dispatch;此处再过滤
+      # workflow_dispatch.PUSH=false 的纯构建(只构建+验证不推)场景。
       - name: Log in to ghcr.io
-        # GITHUB_TOKEN 自动注入, 无需手动 secret
-        if: ${{ env.SHOULD_PUBLISH == 'true' }}
+        # GITHUB_TOKEN 自动注入,无需手动 secret
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
         uses: redhat-actions/podman-login@v1
         with:
           registry: ghcr.io
@@ -174,39 +203,39 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push OCI image to ghcr.io
-        if: ${{ env.SHOULD_PUBLISH == 'true' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
+        working-directory: ${{ github.workspace }}
         shell: bash
         env:
           OWNER_LOWER: ${{ github.repository_owner }}
         run: |
-          # repository_owner 可能含大写, ghcr 要求全小写路径
+          # repository_owner 可能含大写,ghcr 要求全小写路径
           IMAGE="ghcr.io/${OWNER_LOWER,,}/daedalus-os"
           podman tag localhost/daedalus-os:latest "${IMAGE}:latest"
           podman tag localhost/daedalus-os:latest "${IMAGE}:${{ github.sha }}"
           podman push "${IMAGE}:latest"
           podman push "${IMAGE}:${{ github.sha }}"
           # :upstream 是 bootc 原地升级 (KVM guest 上 `bootc upgrade ghcr.io/<owner>/daedalus-os:upstream`)
-          # 的稳定别名, 与 :latest/:sha 共存, 指向同一镜像内容。
+          # 的稳定别名,与 :latest/:sha 共存,指向同一镜像内容。
           podman tag localhost/daedalus-os:latest "${IMAGE}:upstream"
           podman push "${IMAGE}:upstream"
           echo "Pushed: ${IMAGE}:latest (+ sha tag, + upstream tag)"
 
-      # ---- 发布: qcow2 → artifact (本地 KVM 测试用; bootc-image-builder 产出) ----
-      # 同样由 job 级 SHOULD_PUBLISH env 闸门:仅 feat/* 分支 / 任何 tag / dispatch
-      # PUSH=true 才构建并上传。PR 与普通分支 push 直接 skip,不浪费 rootful builder
-      # 资源与 10GB artifact 配额。
-      # 限额说明: GitHub Release 单文件硬限 2GiB, KDE qcow2 可能超; artifact 上限 10GB 更稳。
-      # 若未来要挂 Release, 先 gzip 或分卷。
+      # ---- 发布:qcow2 → artifact (本地 KVM 测试用;bootc-image-builder 产出) ----
+      # 限额说明:GitHub Release 单文件硬限 2GiB,KDE qcow2 可能超;artifact 上限 10GB 更稳。
+      # 若未来要挂 Release,先 gzip 或分卷。
       - name: Export OCI archive (rootless → rootful handoff)
-        if: ${{ env.SHOULD_PUBLISH == 'true' }}
         # bootc-image-builder 的 --local 模式硬性要求 rootful podman
-        # ("this command must be run in rootful"), 而 Actions 的构建在
+        # ("this command must be run in rootful"),而 Actions 的构建在
         # rootless 存储里。用 save/load 把镜像从用户存储转交 root 存储。
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: podman save --format oci-archive -o /tmp/daedalus-os.oci.tar localhost/daedalus-os:latest
 
       - name: Build qcow2 disk image (bootc-image-builder, rootful)
-        if: ${{ env.SHOULD_PUBLISH == 'true' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
           sudo podman load -i /tmp/daedalus-os.oci.tar
@@ -220,16 +249,16 @@ jobs:
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             quay.io/centos-bootc/bootc-image-builder:latest \
             --local --type qcow2 --output /output localhost/daedalus-os:latest
-          # builder 以 root 写产物, 归还属主给 runner 用户(artifact 上传需要)
+          # builder 以 root 写产物,归还属主给 runner 用户(artifact 上传需要)
           sudo chown -R $(id -u):$(id -g) output/qcow2
           ls -lh output/qcow2/
 
       - name: Upload qcow2 artifact
-        if: ${{ env.SHOULD_PUBLISH == 'true' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: daedalus-os-qcow2-${{ matrix.variant }}
           path: output/qcow2/
-          # 默认保留 90 天; qcow2 预计 3-6GB, 远低于 artifact 10GB 上限
+          # 默认保留 90 天;qcow2 预计 3-6GB,远低于 artifact 10GB 上限
           if-no-files-found: error
           compression-level: 0

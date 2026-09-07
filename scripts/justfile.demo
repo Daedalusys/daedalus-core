@@ -103,6 +103,9 @@ cli-copilot *args:
 # 用法: just i18n-sync [plugin-dir]            严模式
 #       just i18n-sync-autofix [plugin-dir]    以 i18n/ 目录为准改写 manifest
 i18n-sync plugin-dir='.':
-    ./scripts/plugin-i18n-sync.sh "{{plugin-dir}}"
+    # 用绝对路径(justfile_directory())绕开 recipe body 的 cwd 不确定性:CI runner
+    # 中 sh 执行 recipe 时 cwd 可能不是 repo 根,相对路径 ./scripts/... 会 not found。
+    # 显式 bash + 绝对路径双保险。
+    bash "{{justfile_directory()}}/scripts/plugin-i18n-sync.sh" "{{plugin-dir}}"
 i18n-sync-autofix plugin-dir='.':
-    ./scripts/plugin-i18n-sync.sh --autofix "{{plugin-dir}}"
+    bash "{{justfile_directory()}}/scripts/plugin-i18n-sync.sh" --autofix "{{plugin-dir}}"
