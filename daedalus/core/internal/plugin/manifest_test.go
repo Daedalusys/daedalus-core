@@ -34,6 +34,7 @@ func TestValidate_AcceptsLegalManifests(t *testing.T) {
 	}{
 		{"完整清单", func(*Manifest) {}},
 		{"capability 类型", func(m *Manifest) { m.Type = TypeCapability }},
+		{"controller 类型(声明性预留)", func(m *Manifest) { m.Type = TypeController }},
 		{"deno 运行时", func(m *Manifest) { m.Runtime = RuntimeDeno }},
 		{"省略可选 entrypoint", func(m *Manifest) { m.Entrypoint = nil }},
 		{"省略可选 permissions/tools", func(m *Manifest) { m.Permissions = nil; m.Tools = nil }},
