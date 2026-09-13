@@ -50,7 +50,7 @@ schema 与校验的单一事实源: `daedalus/core/internal/plugin/manifest.go`�
 |------|------|------|
 | `id` | ✔ | 文法 `^[a-z0-9]+(\.[a-z0-9]+)*$`(无连字符),目录名 = id(`daedalus.copilot`) |
 | `name` / `version` | ✔ | 展示名;version 为 semver 2.0.0 文法 |
-| `type` | ✔ | 枚举 `copilot` / `capability` |
+| `type` | ✔ | 枚举 `copilot` / `capability` / `controller` |
 | `runtime` | ✔ | 枚举 `native`(Go 静态二进制直接 exec)/ `deno`(宿主拼 `deno run <entrypoint> <executable>`) |
 | `executable` | ✔ | 包内相对路径(native 如 `bin/daedalus-shell`;deno 如 `main.ts`),打包时必须有可执行位 |
 | `entrypoint` | 可选 | deno runtime 的权限旗标列表;**不要写 `run`**(宿主已自动前置 `deno run`);`$HOME` 占位由 wrapper 在 argv 层展开 |
@@ -58,6 +58,14 @@ schema 与校验的单一事实源: `daedalus/core/internal/plugin/manifest.go`�
 | `tools` | capability 必填 | 声明的 MCP 工具名;76-daedalus-plugin-gen.sh 构建期与二进制 stdio `tools/list` 交叉核对,漂移即拒绝 |
 | `resources` | 可选 | Object Model 资源声明数组,条目为 `kind`/`name`/`desired_state` 三字段元组;schema 单一事实源 `daedalus/core/internal/objectmodel/objectmodel.go`。声明≠授权:kind 放行由 `policy.toml` `[objectmodel].enabled_kinds` 网关 fail-closed 强制;76-daedalus-plugin-gen.sh 构建期交叉核对声明 kind ⊆ 启用集,漂移即拒构建。写法详见下方「Object Model 与资源声明」 |
 | `checksums` | 安装态必填 | 由 `daedalus-plugin-pack` 注入(逐条目 sha256 + manifest 规范化自摘要);源码态清单**不得手填** |
+
+### type=`controller`:v1.5 声明性预留
+
+`controller` 是 v1.5 的**声明性预留**——`internal/plugin` Validate 三值枚举放行即全部语义:
+宿主(`daedalus-host`)与 `76-daedalus-plugin-gen.sh` 构建脚本对 controller **零处理**
+(type-agnostic,决策 16 零 spawn);`tools` 非必填;安装仍仅限构建期。
+**controller 插件的 authored 代码属外部仓库**,本仓库边界条款不松动。
+动词文法机器权威:`daedalus/core/internal/controller/types.go`;语义规范文本:仓库根 VISION.md(路径指针,互链由后续任务挂载)。
 
 ## Object Model 与资源声明(决策 25 落地)
 
@@ -147,6 +155,7 @@ v1 状态记忆按上下文隔离(DynamicUser 命名空间,决策 25 补充条�
   `just sync` 另有保守 leg 把本目录同步到 `base_image/plugin/` 仅作构建上下文,不进镜像。
 - 运行期消费方: 宿主 `daedalus-host list/verify/run-plugin`;systemd 单元由
   `76-daedalus-plugin-gen.sh` 经 `render-unit` 按 manifest 渲染。
+> 插件体系的设计定位与动词文法总览见 [VISION.md](VISION.md)。
 
 ## i18n 多语言支持(强制约定)
 

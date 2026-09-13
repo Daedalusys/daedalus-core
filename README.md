@@ -42,3 +42,4 @@ just -f justfile.local remote-all
 ```
 
 更多约定与结构见 `AGENTS.md`。
+> 项目愿景与架构总览见 [VISION.md](VISION.md)。

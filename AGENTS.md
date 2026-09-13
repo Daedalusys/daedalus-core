@@ -6,6 +6,7 @@
 
 ## OVERVIEW
 Immutable, atomic, AI-native desktop OS on AlmaLinux Bootc (KDE variant). Adds a Model Context Protocol (MCP) capability-middleware layer with three security boundaries (model/capability, enforcement/sandboxing, evidence/verification), tamper-evident audit logging, systemd credential isolation, and atomic rollback. OS capability servers (fs/shell/pkg/sysinfo), the hash-chained audit CLI, the plugin host (`daedalus-host`) and the plugin packer (`daedalus-plugin-pack`) are **Go static binaries** (single implementation; the former Python/Deno dual implementations are removed). A VSIX-like `daedalus-plugin` format (manifest `daedalus.plugin.json` + zip + sha256 checksums) makes every server and the Deno-based `daedalus` command advisor CLI (命令顾问 —— 非 agent: 生成命令 + L0/L1/L2 风险标注, 仅 L0 可经沙箱执行, 其余仅展示由用户手动执行) an installable, discoverable, verifiable plugin. Security policy lives in one `policy.toml` single source of truth consumed at runtime by the Go servers. Stack: bootc/OSTree + systemd units + Go static binaries + Deno copilot plugin + Just orchestration.
+> 愿景与设计层总览见 [VISION.md](VISION.md)；本文件是操作知识库，两层互补不重叠。
 
 ## STRUCTURE
 ```
