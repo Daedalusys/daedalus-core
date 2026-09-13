@@ -33,6 +33,7 @@ const ManifestFileName = "daedalus.plugin.json"
 const (
 	TypeCopilot    = "copilot"    // Copilot CLI 插件
 	TypeCapability = "capability" // OS 能力服务器插件
+	TypeController = "controller" // 声明性预留 v1.5：校验放行即全部语义，runtime 无分支（惰性=宿主 type-agnostic，见 internal/controller/doc.go）
 
 	RuntimeNative = "native" // Go 静态二进制,直接 exec
 	RuntimeDeno   = "deno"   // Deno 脚本,entrypoint 给出 deno run 参数
@@ -113,7 +114,7 @@ func LoadManifestFile(path string) (*Manifest, error) {
 //  1. id 必填且匹配 ^[a-z0-9]+(\.[a-z0-9]+)*$;
 //  2. name 必填;
 //  3. version 必填且为合法语义化版本;
-//  4. type ∈ {copilot, capability};
+//  4. type ∈ {copilot, capability, controller};
 //  5. runtime ∈ {native, deno};
 //  6. executable 必填、相对路径、不得含 '..'/空字节/绝对路径/以 '/' 开头;
 //  7. entrypoint 元素非空且不含空字节;
@@ -137,8 +138,8 @@ func (m *Manifest) Validate() error {
 	if !semverPattern.MatchString(m.Version) {
 		return fmt.Errorf("字段 version 非法:%q 不是合法语义化版本(要求 major.minor.patch)", m.Version)
 	}
-	if m.Type != TypeCopilot && m.Type != TypeCapability {
-		return fmt.Errorf("字段 type 非法:%q 不在枚举 {%s, %s} 内", m.Type, TypeCopilot, TypeCapability)
+	if m.Type != TypeCopilot && m.Type != TypeCapability && m.Type != TypeController {
+		return fmt.Errorf("字段 type 非法:%q 不在枚举 {%s, %s, %s} 内", m.Type, TypeCopilot, TypeCapability, TypeController)
 	}
 	if m.Runtime != RuntimeNative && m.Runtime != RuntimeDeno {
 		return fmt.Errorf("字段 runtime 非法:%q 不在枚举 {%s, %s} 内", m.Runtime, RuntimeNative, RuntimeDeno)
