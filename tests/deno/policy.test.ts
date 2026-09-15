@@ -397,6 +397,43 @@ Deno.test("classifyTxProposal - 8-cell intent x desired_state matrix", () => {
   );
 });
 
+Deno.test("classifyTxProposal - package domain present/absent/latest (daedalus-pkg-kind todo 16)", () => {
+  // package 域形态：target = "package <name>"，desiredState ∈ present|absent|latest
+  // （与 service 域完全同构，仅 target 首词不同；args[1] 期望态位置不变）。
+  // present / absent → safe（确定性操作，不依赖外部元数据，与 started/stopped 同档）
+  expectTxRisk(classifyTxProposal("tx_apply", "package htop", "present"), "safe", null, "tx_apply");
+  expectTxRisk(classifyTxProposal("tx_apply", "package htop", "absent"), "safe", null, "tx_apply");
+  // latest → caution（依赖 dnf 仓库元数据、可能拉网络）
+  expectTxRisk(
+    classifyTxProposal("tx_apply", "package htop", "latest"),
+    "caution",
+    "risk.reason.caution_command",
+    "tx_apply",
+  );
+  // tx_apply package 未知状态词 → caution（fail-closed，不进 safe 执行通道）
+  expectTxRisk(
+    classifyTxProposal("tx_apply", "package htop", "updated"),
+    "caution",
+    "risk.reason.caution_command",
+    "tx_apply",
+  );
+  // tx_propose package 恒 safe（与既有 tx_propose 同款：仅展示 + 记录）
+  expectTxRisk(classifyTxProposal("tx_propose", "package htop", "present"), "safe", null, "tx_propose");
+  // tx_rollback package → caution（与既有 tx_rollback 同档）
+  expectTxRisk(
+    classifyTxProposal("tx_rollback", "package htop", ""),
+    "caution",
+    "risk.reason.caution_command",
+    "tx_rollback",
+  );
+  // 空目标 → 抛 plan 钉死文案（fail-closed）。注意裸 "package"（无 name）
+  // 不在此拒：分类器不校验 name 形态（parseArgs 职责），裸词落入 service 域
+  // 既有 caution 兜底，语义等价 fail-closed。
+  expect(() => classifyTxProposal("tx_apply", "", "present")).toThrow(
+    "classifyTxProposal: target is empty",
+  );
+});
+
 Deno.test("classifyTxProposal - empty target rejected with plan-pinned message", () => {
   expect(() => classifyTxProposal("tx_apply", "", "started")).toThrow(
     "classifyTxProposal: target is empty",

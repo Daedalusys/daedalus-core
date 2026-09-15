@@ -200,7 +200,7 @@ func TestServiceState_JSONContract(t *testing.T) {
 //      objectmodel 常量集(AllKinds())中的合法 Kind;
 //  (b) 仓库真实 shared/policy.toml 经 policy.Load 解出的 enabled_kinds
 //      同样逐项合法,且与 Default() 集合相等(零漂移);
-//  (c) 金丝雀:冻结字面量 []string{"service"} 必须与两点集合精确相等——
+//  (c) 金丝雀:冻结字面量 []string{"service", "package"} 必须与两点集合精确相等——
 //      任何一侧改动(常量值、Default()、policy.toml)都会点亮金丝雀,
 //      未来激活新 kind 必须显式更新本测试(刻意的高摩擦设计,
 //      与 shellpolicy 三点防漂移链同构,见 AGENTS.md CONVENTIONS)。
@@ -283,7 +283,7 @@ func TestObjectModel_Drift(t *testing.T) {
 		registry:     AllKinds(),
 		defaultKinds: policy.Default().ObjectModel.EnabledKinds,
 		tomlKinds:    loaded.ObjectModel.EnabledKinds,
-		canary:       []string{"service"}, // v1 冻结字面量:仅 service 启用
+		canary:       []string{"service", "package"}, // v1 冻结字面量:service 与 package 启用
 	})
 
 	// --- 负例扩展(T1 已钉 "machine"/"Service",此处补足全部大小写变体) ---

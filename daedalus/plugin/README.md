@@ -37,6 +37,10 @@ plugin/
 ├── shell/              # 同上:shell_exec(15 命令白名单,权威在 core/internal/shellpolicy)
 ├── pkg/                # 同上:dnf/rpm 只读查询
 ├── sysinfo/            # 同上:os-release/hardware/network 只读探测
+├── blueprint/          # 同上:6 个参数化配置蓝图(渲染/应用,见下方「蓝图插件」段)
+│   ├── daedalus.plugin.json      # 6 工具 manifest(blueprint_list/inspect/render/apply/status/remove)
+│   ├── bin/daedalus-blueprint    # 由 just plugin-pack 构建拷入(zip 只含 manifest + bin/)
+│   └── blueprints/               # 6 个蓝图数据目录(源码侧唯一事实源;经 just blueprint-embed 复制进二进制 embed,不入 zip)
 └── service/            # 同上:service.query/service.list(systemd 单元只读观测)
     ├── daedalus.plugin.json      # 唯一在源码侧声明 resources 的官方清单
     └── bin/daedalus-service
@@ -87,6 +91,31 @@ schema 与校验的单一事实源: `daedalus/core/internal/plugin/manifest.go`�
   声明"我管理 service 类的全部实例";目前是**唯一**写 `resources` 的官方插件,
   其余 4 能力与 copilot 暂不声明。安装态清单里的 `resources` 补全与 checksums 注入
   同为 `just plugin-pack` 构建产物,勿手改。
+
+### package 资源种类的改动面:`daedalus.pkg`(type=capability, runtime=native)
+
+> 本小节由 plan `daedalus-pkg-kind` 增量追加,与上方 service 段镜像;四要点权威文本
+> 在根 `AGENTS.md` `## Object Model` 的 package 条目,此处不重复。
+
+- **只读观测**:工具 `dnf_query` / `dnf_list_installed` 走 `daedalus-pkg` MCP server
+  (实现在 `daedalus/core/cmd/daedalus-pkg/` + `internal/pkgquery`,rpm 优先、
+  dnf repoquery 兜底);本插件同样不暴露任何变更工具,manifest `permissions.write` 为空;
+  package 资源的**状态变更一律经 `daedalus-tx` 事务通道**(`package.set` 适配器,
+  begin→propose→apply→rollback),绕过即破坏审计链(根 `AGENTS.md` 反模式条款)。
+- **资源声明**:源码侧 manifest 用 `"resources": [{ "kind": "package", "name": "*" }]`
+  声明"我管理 package 类的全部实例",形态与 service 同款;安装态清单里 pack 会把条目
+  补全为 `{ "kind": "package", "name": "*", "desired_state": "" }`——空值即"声明不指定
+  期望态",补全与 checksums 注入同为 `just plugin-pack` 构建产物,勿手改。
+- **provider 语义**:`desired_state` 取值词汇归 provider 领域——package 为
+  `present`/`absent`/`latest` 三值冻结三元组(映射 dnf `install`/`remove`/`upgrade`);
+  `package.set` 适配器 euid==0 守门(与 `service.set` 的 user-scope-only 强制镜像对称),
+  回滚依托 `dnf history undo` + sidecar 写失败 Apply 整体判负的 fail-closed 设计,
+  四要点细节以根 `AGENTS.md` `## Object Model` 的 package 条目为准,此处不重复。
+- **改动面清单**(本 plan 实际触及,供后续新增 kind 参照):`[objectmodel].enabled_kinds`
+  三点链放行(`objectmodel.go` 常量登记 → `policy.Default()` → `policy.toml`,
+  三点漂移测试拒漏改)→ `cmd/daedalus-tx/package_set*.go` 适配器实现并注册 →
+  源码侧 pkg manifest 加 `resources` 声明 → copilot 侧 `policy.ts` 分类器 +
+  `main.ts` `runTxTurn` 路由识别 `package <name>` 目标形态。
 
 ### 资源声明怎么写(manifest `resources` 字段)
 
@@ -147,15 +176,41 @@ v1 状态记忆按上下文隔离(DynamicUser 命名空间,决策 25 补充条�
 - **copilot**: `./scripts/pack-copilot-plugin.sh` —— 暂存 5 个 `.ts`(排除 `.test.ts`)+ 清单
   → Pack 注入 checksums → `-verify --keep` 解压安装态(解压即完整校验,摘要不符拒绝安装)。
   命令顾问(command advisor)插件:L0 之外的风险级别仅展示、由用户手动执行。
-- **5 能力插件(fs/shell/pkg/sysinfo/service)**: `just plugin-pack` —— 构建 Go 二进制拷入各自 `bin/` → 同一 Pack→Verify 流程;
+- **6 能力插件(fs/shell/pkg/sysinfo/service/blueprint)**: `just plugin-pack` —— 构建 Go 二进制拷入各自 `bin/` → 同一 Pack→Verify 流程;
   顺带安装宿主与 copilot 运行期依赖的审计/执行/事务二进制到
   `daedalus/files/system/usr/local/bin/daedalus-{host,audit,shell,service,tx}`（task 21 + plan todo 17;
   `daedalus-tx` 即走该 out-of-band 安装位,见下方「Object Model 与资源声明」）。
+  **blueprint 特例**:源目录含 `blueprints/` 蓝图数据(已 `//go:embed` 进二进制,
+  源码侧为唯一事实源),打包经暂存目录排除——zip 只含 `manifest + bin/`,
+  蓝图数据不重复进 rootfs(plan §4 line 121)。
 - 安装态入库后经 `just sync`(rsync `files/system/` leg)进镜像 `/opt/daedalus/plugins/`;
   `just sync` 另有保守 leg 把本目录同步到 `base_image/plugin/` 仅作构建上下文,不进镜像。
 - 运行期消费方: 宿主 `daedalus-host list/verify/run-plugin`;systemd 单元由
   `76-daedalus-plugin-gen.sh` 经 `render-unit` 按 manifest 渲染。
 > 插件体系的设计定位与动词文法总览见 [VISION.md](VISION.md)。
+
+## 蓝图插件(`daedalus.blueprint`)
+
+> 本段由 plan `daedalus-blueprint-p1` 增量追加(todo 25 文档同步)。源码侧唯一事实源
+> 在 `daedalus/plugin/blueprint/`;执行模型、6 工具语义与 policy 节细节见仓库根
+> `AGENTS.md` 的 `### 4b. Blueprint Server` 段,此处不重复,只落 manifest 形态与
+> 扩展方式留位。
+
+- **manifest 形态**:`daedalus/plugin/blueprint/daedalus.plugin.json` —— `type: capability` /
+  `runtime: native` / `executable: bin/daedalus-blueprint` / 6 工具
+  (`blueprint_list` / `blueprint_inspect` / `blueprint_render` / `blueprint_apply` /
+  `blueprint_status` / `blueprint_remove`)/ `permissions` 与 `policy.toml [blueprints]`
+  镜像(output_dirs 读写 + post_check 命令 run)。**不声明 `resources`**(蓝图是
+  capability 不是 resource;`internal/blueprint` 校验器接受,策略网关不涉及)。
+- **6 个蓝图**:`blueprints/{nginx-vhost,nginx-reverse-proxy,postgres-db,postgres-user,
+  redis-acl,haproxy-backend}/`,每目录 `manifest.json + schema.json + template.tmpl +
+  pre_check.sh + post_check.sh + README.md`(36 文件)。数据经 `just blueprint-embed`
+  构建期 rsync 到 `daedalus/core/cmd/daedalus-blueprint/blueprints/`(go:embed 不能
+  越模块引用,复制产物 .gitignore),编译进二进制;源码侧目录是唯一事实源。
+- **扩展方式(留 P4)**:新增蓝图 = 在 `blueprints/` 下加新目录(6 文件齐备,
+  manifest `id` 与目录名一致),重跑 `just blueprint-embed` + `just plugin-pack`。
+  v1 不做运行时联网下载安装(与其余插件同款构建期内建约定);P4 规划见计划文档。
+
 
 ## i18n 多语言支持(强制约定)
 

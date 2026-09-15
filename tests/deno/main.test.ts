@@ -3,6 +3,9 @@ import { defaultReadStdinAll, defaultTxBegin, runCopilot, parseArgs, readStateSu
 import type { StateSummary, StateSummaryEntry } from "../../daedalus/plugin/copilot/main.ts";
 import type { TxApplyOutcome, TxJournal, TxPreviewOutcome, TxProposeOutcome, TxStep } from "../../daedalus/plugin/copilot/exec.ts";
 import { initI18n } from "../../daedalus/plugin/copilot/i18n.ts";
+// review M-2 契约测试专用:分类面观测直接调 policy.ts 的 classifyTxProposal
+// (只读 import,不为测试改动任何生产代码)。
+import { classifyTxProposal } from "../../daedalus/plugin/copilot/policy.ts";
 
 // 锁定 locale 为 en_US：本测试文件的断言基于 en_US 文案硬编码。
 // 如不锁定，在 zh_CN locale 的开发机上（LC_ALL/LANG 为 zh_CN.UTF-8）
@@ -2009,6 +2012,202 @@ Deno.test("Copilot Main - defaultTxBegin spawns DAEDALUS_TX_BIN fake binary (rea
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// daedalus-pkg-kind todo 17:package 域事务通道接线
+// (tx.propose/tx.apply "package <name>" <state> → package.set 适配器路由)
+//
+// 严格沿用上方 todo 27 service.set 测试组的 mock/stub 手法(4 个 tx mock
+// 经 CopilotOptions 注入),唯一增量是捕获 propose 的 (txId, adapter, args)
+// 实参:钉住「package 域 target 只把裸包名喂给 daedalus-tx,绝不泄漏
+// "package " 域前缀」与「before/after 走同款 tx.preview.diff 渲染管线」。
+// classifyTxProposal 的 package 分级(todo 16)由 policy.test.ts 钉,此处
+// 只验通道分流,不重复分级断言。
+// ═══════════════════════════════════════════════════════════════════════════
+
+// package.set 步骤夹具:键形态与 daedalus-tx 侧 packageSetBefore/After 的
+// JSON 一致(before = installed/version,after = name/desired_state/verb)。
+const TX_PKG_STEP: TxStep = {
+  index: 1,
+  adapter: "package.set",
+  args: { name: "htop", desired_state: "present" },
+  before_state: { installed: false, version: "" },
+  after_state: { name: "htop", desired_state: "present", verb: "install" },
+  op_result: { returncode: 0 },
+};
+
+/** package 版 tx mock 组:记录调用序 + 捕获 propose 实参(adapter/args 断言用)。 */
+function makePkgTxMocks() {
+  const calls: string[] = [];
+  const proposeCalls: Array<{ txId: string; adapter: string; args: unknown }> = [];
+  return {
+    calls,
+    proposeCalls,
+    txBeginFn: async () => {
+      calls.push("begin");
+      return { ok: true, txId: TX_ID } as const;
+    },
+    txProposeFn: async (txId: string, adapter: string, args: unknown): Promise<TxProposeOutcome> => {
+      calls.push("propose");
+      proposeCalls.push({ txId, adapter, args });
+      const journal = txJournalFixture("proposed", [TX_PKG_STEP]);
+      return { ok: true, journal, step: TX_PKG_STEP, beforeState: TX_PKG_STEP.before_state, afterState: TX_PKG_STEP.after_state };
+    },
+    txPreviewFn: async (_txId: string): Promise<TxPreviewOutcome> => {
+      calls.push("preview");
+      return {
+        ok: true,
+        journal: txJournalFixture("proposed", [TX_PKG_STEP]),
+        diff: [{
+          index: 1,
+          adapter: "package.set",
+          args: TX_PKG_STEP.args,
+          beforeState: TX_PKG_STEP.before_state,
+          afterState: TX_PKG_STEP.after_state,
+        }],
+      };
+    },
+    txApplyFn: async (_txId: string): Promise<TxApplyOutcome> => {
+      calls.push("apply");
+      return { ok: true, journal: txJournalFixture("applied", [TX_PKG_STEP]), opResults: [{ returncode: 0 }] };
+    },
+  };
+}
+
+Deno.test("Copilot Main - tx_propose package target routes package.set adapter with bare-name args (success)", async () => {
+  setup();
+  const tx = makePkgTxMocks();
+  const inputs = ["y"];
+
+  const code = await runCopilot({
+    query: "propose installing htop",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: async () => inputs.shift() ?? null,
+    // package 域提议:args[0] = "package <name>"(detectTxIntent 原样透传给分类器)
+    translateFn: txTranslate("tx.propose", ["package htop", "present"]),
+    execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  expect(code).toBe(0);
+  expect(tx.calls).toEqual(["begin", "propose", "preview", "apply"]);
+
+  // propose 实参路由钉死:package.set 适配器 + args 恰为裸包名二元组,
+  // "package htop" 前缀形态绝不进 daedalus-tx 的 args JSON
+  expect(tx.proposeCalls.length).toBe(1);
+  expect(tx.proposeCalls[0].txId).toBe(TX_ID);
+  expect(tx.proposeCalls[0].adapter).toBe("package.set");
+  expect(tx.proposeCalls[0].args).toEqual({ name: "htop", desired_state: "present" });
+
+  // 审计链:copilot_tx_propose 成功条目携带路由后的 adapter 与原样 target
+  // (target 保留域前缀供链上检索,args 收裸名——两形态各归其位)
+  const proposeLog = auditLogs.find((l) => l.tool === "copilot_tx_propose");
+  expect(proposeLog?.outcome).toBe("success");
+  expect(proposeLog?.args.adapter).toBe("package.set");
+  expect(proposeLog?.args.target).toBe("package htop");
+  expect(proposeLog?.args.desired_state).toBe("present");
+  const applyLog = auditLogs.find((l) => l.tool === "copilot_tx_apply");
+  expect(applyLog?.outcome).toBe("success");
+});
+
+Deno.test("Copilot Main - tx_apply package present enters apply channel; preview renders package before/after", async () => {
+  setup();
+  const tx = makePkgTxMocks();
+  let shellExecCalls = 0;
+  const inputs = ["y"];
+
+  const code = await runCopilot({
+    query: "install htop",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: async () => inputs.shift() ?? null,
+    translateFn: txTranslate("tx.apply", ["package htop", "present"]),
+    execFn: async () => {
+      shellExecCalls++;
+      return { stdout: "", stderr: "", returncode: 0, error: null };
+    },
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  expect(code).toBe(0);
+  expect(tx.calls).toEqual(["begin", "propose", "preview", "apply"]);
+  expect(shellExecCalls).toBe(0); // L0 事务走事务通道,绝不进 execAllowlisted
+  expect(tx.proposeCalls[0].adapter).toBe("package.set");
+  expect(tx.proposeCalls[0].args).toEqual({ name: "htop", desired_state: "present" });
+
+  // preview 渲染与 service.set 同款管线:args + before(installed/version)
+  // + after(name/desired_state/verb)逐字段来自事务日志步骤,JSON 原样呈现
+  const allStdout = stdoutChunks.join("");
+  expect(allStdout).toContain(`Planned changes (transaction ${TX_ID}`);
+  expect(allStdout).toContain("step 1 [package.set]");
+  expect(allStdout).toContain('args={"name":"htop","desired_state":"present"}');
+  expect(allStdout).toContain(
+    '{"installed":false,"version":""} -> {"name":"htop","desired_state":"present","verb":"install"}',
+  );
+  expect(allStdout).toContain(`Transaction ${TX_ID} applied`);
+
+  const applyLog = auditLogs.find((l) => l.tool === "copilot_tx_apply");
+  expect(applyLog?.outcome).toBe("success");
+  expect(applyLog?.args.auto).toBe(false); // y 显式授权
+  // shell 通道的 copilot_confirm 绝不出现在事务轮次
+  expect(auditLogs.some((l) => l.tool === "copilot_confirm")).toBe(false);
+});
+
+Deno.test("Copilot Main - tx_apply package latest is L1 caution: display-only, never enters propose/apply", async () => {
+  setup();
+  const tx = makePkgTxMocks();
+  let readLineCalls = 0;
+
+  const code = await runCopilot({
+    query: "upgrade htop to latest",
+    isTerminal: true,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    stdinReader: async () => {
+      readLineCalls++;
+      return "y";
+    },
+    // latest 依赖 dnf 仓库元数据 → todo 16 定级 caution → 展示分流,L1 绝不 apply
+    translateFn: txTranslate("tx.apply", ["package htop", "latest"]),
+    execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: txConfig,
+    txBeginFn: tx.txBeginFn,
+    txProposeFn: tx.txProposeFn,
+    txPreviewFn: tx.txPreviewFn,
+    txApplyFn: tx.txApplyFn,
+  });
+
+  expect(code).toBe(0);
+  expect(readLineCalls).toBe(0);
+  expect(tx.calls).toEqual([]); // 连 begin 都不发起
+  expect(tx.proposeCalls).toEqual([]);
+
+  const allStdout = stdoutChunks.join("");
+  expect(allStdout).toContain("⚠");
+  expect(allStdout).toContain("→ tx.apply package htop latest");
+  expect(allStdout).toContain("Please run this command in your terminal");
+
+  const rejectLog = auditLogs.find((l) => l.tool === "copilot_reject");
+  expect(rejectLog?.outcome).toBe("denied");
+  expect(rejectLog?.args.risk).toBe("caution");
+  expect(rejectLog?.args.tx_kind).toBe("tx_apply");
+  expect(rejectLog?.args.target).toBe("package htop");
+  expect(rejectLog?.args.desired_state).toBe("latest");
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // todo 28:state 记忆注入 runQueryTurn 测试组
 //
@@ -2295,4 +2494,90 @@ Deno.test("readStateSummary - PermissionDenied is classified into errors (never 
   });
 
   await Deno.remove(dir, { recursive: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// review M-2 域判定等价契约（plan daedalus-pkg-kind §D，零生产改动）
+//
+// 双侧双写正则锁步断言：
+//   · 分类面（policy.ts classifyTxProposal）：/^package\s+\S+$/ 判定 package 域
+//     → tx_apply + present（TX_APPLY_PACKAGE_L0_STATES）→ safe
+//   · 路由面（main.ts packageTargetName / runTxTurn）：/^package\s+(\S+)$/ 命中
+//     → proposeCalls[0].adapter === "package.set"
+// 契约等价式（双向 iff）：classifyTxProposal(...).level === "safe"
+//   ⇔ 路由 proposeCalls[0].adapter === "package.set"。
+// 六个样本行中：package 域（1/2/6）两侧同真；非 package 域（3/4/5，含裸名、
+// 无包名、多词）分类 caution（服务域 + 未知态 present 亦非 service 安全态）
+// 且路由 service.set —— 等价式双侧同假。failure 时 try/catch 重抛携带
+// row.target，精确定位分叉样本行。
+// ─────────────────────────────────────────────────────────────────────────────
+Deno.test("Copilot Main - review M-2: package 域判定等价契约 (classifier ⇔ router 双写正则锁步)", async () => {
+  // 样本表 = plan §D 冻结六行（含前后空白、无包名、多词等边界形态）
+  const rows: Array<{ target: string }> = [
+    { target: "package htop" },
+    { target: "package python3.11" },
+    { target: "htop" },
+    { target: "package" },
+    { target: "package a b" },
+    { target: "  package htop  " },
+  ];
+
+  for (const { target } of rows) {
+    // ① 分类面观测：直接调 policy.ts 的 classifyTxProposal（文件顶部已为
+    //    本契约预置 import，review M-2）。tx_apply + present：
+    //    package 域 → safe；服务域 + present（非 started/stopped）→ caution。
+    const classifierSafe = classifyTxProposal("tx_apply", target, "present").level === "safe";
+
+    // ② 路由面观测：复用 makePkgTxMocks/txTranslate 既有 harness 跑一轮
+    //    runCopilot，读取 proposeCalls[0].adapter。
+    //    注意：caution 分类的样本（3/4/5）在 runTxTurn 之前就被展示路径
+    //    截走（main.ts:1112），连 begin 都不发起 → proposeCalls 保持为空，
+    //    routedPackage 恒 false，与分类面 false 同侧成立。此谓"路由不设
+    //    service.set"即可，不必真跑 service.set 事务。
+    setup();
+    const tx = makePkgTxMocks();
+    const inputs = ["y"];
+    const code = await runCopilot({
+      query: `apply package target ${JSON.stringify(target)}`,
+      isTerminal: true,
+      stdout: mockStdout,
+      stderr: mockStderr,
+      stdinReader: async () => inputs.shift() ?? null,
+      translateFn: txTranslate("tx.apply", [target, "present"]),
+      execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
+      recordAuditFn: mockRecordAudit,
+      readConfigFn: txConfig,
+      txBeginFn: tx.txBeginFn,
+      txProposeFn: tx.txProposeFn,
+      txPreviewFn: tx.txPreviewFn,
+      txApplyFn: tx.txApplyFn,
+    });
+    expect(code).toBe(0);
+    const routedPackage = tx.proposeCalls[0]?.adapter === "package.set";
+
+    // 守卫：进入事务通道的行必须恰好 propose 一次（防路由歧义/误走多步）
+    if (classifierSafe) {
+      expect(tx.proposeCalls.length).toBe(1);
+    }
+
+    // ③ 双向 iff 断言：safe ⇔ package.set。失败时重抛并嵌入 target 定位行。
+    if (classifierSafe !== routedPackage) {
+      const detail = `target=${JSON.stringify(target)} classifierSafe=${classifierSafe} routedPackage=${routedPackage} adapters=${JSON.stringify(tx.proposeCalls.map((c) => c.adapter))}`;
+      try {
+        expect(classifierSafe === routedPackage).toBe(true);
+      } catch (err) {
+        throw new Error(`review M-2 域判定等价契约分叉: ${detail}\n  ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // ④ 方向性半断（更强约束，非空转）：
+    //    · 分类 safe → 路由必 package.set（绝不 service.set）
+    //    · 路由 package.set → 分类必 safe（绝无"分类 caution 却路由 package"）
+    if (classifierSafe) {
+      expect(routedPackage).toBe(true);
+    }
+    if (routedPackage) {
+      expect(classifierSafe).toBe(true);
+    }
+  }
 });

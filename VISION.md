@@ -374,7 +374,7 @@ Daedalus 的每个事务自带 before/after 快照与逆序回滚计划。
 一行一锚，锚点指向权威实现路径；内容取材于 AGENTS.md 与插件 README，
 此处只盘点现状，不新增叙事。
 
-1. **事务状态机与三道路径安全门**（`daedalus/core/internal/tx/`）：begin→propose→apply→rollback 全程落 journal，tx.Status 沿 proposed→applying→applied→rolled_back/failed 迁移、表外迁移一律拒绝，每笔事务自带 before/after 快照与逆序回滚计划。
+1. **事务状态机与三道路径安全门**（`daedalus/core/internal/tx/`）：begin→propose→apply→rollback 全程落 journal，tx.Status 沿 proposed→applying→applied→rolled_back/failed 迁移、表外迁移一律拒绝，每笔事务自带 before/after 快照与逆序回滚计划。package.set 适配器已落地（plan daedalus-pkg-kind）。
 2. **service 参考 kind：query/list 只读观测**（`daedalus/core/cmd/daedalus-service/`）：`service.query`/`service.list` 对 systemd 单元严格只读（show 限定 curated 属性），回包载荷为 ServiceState 四字段；service 的状态变更不经本插件，一律走 `daedalus-tx` 事务通道。
 3. **audit 哈希链，含事务二级链**（`daedalus/core/internal/audit/`）：genesis 起点加 SHA-256 逐条 chaining，追加持 syscall.Flock 互斥，begin/apply/rollback 盖 TxID+TxStep 形成事务二级链，金样向量钉住字节级兼容。
 4. **state.jsonl 观测缓存**（`daedalus/core/internal/state/`）：StateEntry 追加式最新值缓存，payload 为序列化的 ServiceState；state 是派生缓存、与哈希链证据层分离，v1 状态记忆按上下文隔离（DynamicUser 命名空间）。
@@ -389,7 +389,7 @@ Daedalus 的每个事务自带 before/after 快照与逆序回滚计划。
 
 | 阶段 | 内容 | 选型理由（一句） |
 | --- | --- | --- |
-| P2 | package kind + 事务适配器（路线文字非承诺） | dnf history 天然是事务日志、undo 天然是 rollback，第二个 kind 是对事务契约的第一次外部压测 |
+| P2 | package kind + 事务适配器（路线文字非承诺） | dnf history 天然是事务日志、undo 天然是 rollback，第二个 kind 是对事务契约的第一次外部压测 **已交付 v1.1（plan: daedalus-pkg-kind，含 review critical #1 fail-closed 修复，2026-09-15）** |
 | P3 | 契约类型被真实消费（路线文字非承诺） | Condition 写回 + Generation 落地，让 §8 盘点的 A 层字段从类型存在升为语义在场，对象模型升维 |
 | P4 | daedalus-controller runtime + 外部 controller 插件加载（路线文字非承诺） | list-watch/reconcile/workqueue 把 §5 钉死的契约缝长出行为，实现接的是缝不是新协议 |
 | P5 | 各得其所的运营化（路线文字非承诺） | 文档/示例/评估 harness 让既有边界自己说话，无强制迁移，万物仍各守边界 |
