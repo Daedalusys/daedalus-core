@@ -18,3 +18,11 @@ log_path = "/tmp/daedalus-policy-test-audit.jsonl"
 # 证明 [objectmodel].enabled_kinds 逐字段透传解析。
 [objectmodel]
 enabled_kinds = ["service", "package"]
+
+# blueprints 段取值同样刻意偏离 Default()(output_dirs 用 /tmp 而非真实目录等),
+# 证明 [blueprints] 各字段逐字段透传解析。
+[blueprints]
+output_dirs = ["/tmp"]
+post_check_commands = ["nginx"]
+reload_services = ["nginx"]
+secret_sources = ["kwallet"]

@@ -37,6 +37,15 @@ const execTimeout = 30 * time.Second
 // py 的 `$` 允许尾随换行、Go 不允许,但两版都先做 strip,无实际差异)。
 var packagePattern = regexp.MustCompile(`^[a-zA-Z0-9_\-\.\*\+\:]+$`)
 
+// IsValidPackageName 报告 name 是否匹配 PACKAGE_PATTERN 白名单（防命令行参数注入）。
+// 这是 package_set.go 等跨包消费者的单一事实源：任何对包名做合法性校验的代码
+// 必须调用本函数，不允许内联 packagePattern 副本。sanitizeQuery 内部仍以
+// packagePattern.MatchString 实现（保持既有行为不变），不替换为 IsValidPackageName
+// 调用，避免回退路径的语义变化。
+func IsValidPackageName(name string) bool {
+	return packagePattern.MatchString(name)
+}
+
 // ExecRunner 是外部命令执行器的注入签名:按 argv 直接执行 name + args
 // (绝不经过 shell 解释,对应 py 的 asyncio.create_subprocess_exec)。
 // err 非 nil 当且仅当进程无法启动/等待(对应 py 中 except 捕获的异常),

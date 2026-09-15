@@ -16,3 +16,10 @@ log_path = "/tmp/daedalus-policy-test-audit.jsonl"
 
 [objectmodel]
 enabled_kinds = []
+
+# [blueprints] 段取合法值(该夹具只演练 [objectmodel] 空列表的 fail-closed)。
+[blueprints]
+output_dirs = ["/tmp"]
+post_check_commands = ["nginx"]
+reload_services = ["nginx"]
+secret_sources = ["kwallet"]

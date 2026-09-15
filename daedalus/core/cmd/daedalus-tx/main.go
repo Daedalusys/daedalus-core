@@ -35,6 +35,8 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/daedalus-os/daedalus/core/internal/version"
 )
@@ -156,7 +158,20 @@ func usage() string {
 		"      不给时按 $HOME/.config/systemd/user 解析; 只影响解析目录, 守卫恒生效)。\n" +
 		"输出: 每条子命令向 stdout 打印恰一份机器可读 JSON 文档;\n" +
 		"      begin → {\"tx_id\":\"<16hex>\"}; 其余 → 事务日志全文; 错误 → {\"error\":\"...\"}。\n" +
+		"可用 adapter: " + strings.Join(registeredAdapterNames(), ", ") + "\n" +
 		"退出码: 0 成功 / 1 运行期 / 2 用法错误。\n"
+}
+
+// registeredAdapterNames 从 registry 动态列出已注册 adapter 名(review minor #6
+// fix: propose --help 一眼可见可用 adapter), 升序排序保证 help 文本确定性
+// (map 遍历序随机, 不排序则非确定性输出)。package.set 待 todo 11 注册后自动出现。
+func registeredAdapterNames() []string {
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // i18nUsageErr 保留一个稳定的未知子命令消息钩子(当前直接英文/中文内联, 不引 i18n

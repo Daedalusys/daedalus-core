@@ -84,6 +84,7 @@ func cmdApply(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return code
 	}
+	ctx = withTxID(ctx, id) // D-1 裁决第 1 条: package.set Apply 的 sidecar 寻址需要 tx-id(对 service.set 透明)
 	t, code, ok := mustLoad(id, stdout, stderr)
 	if !ok {
 		return code
@@ -141,6 +142,7 @@ func cmdRollback(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return code
 	}
+	ctx = withTxID(ctx, id) // 同 cmdApply 的注入点(todo 10 Rollback 经同通道读 sidecar 命名)
 	t, code, ok := mustLoad(id, stdout, stderr)
 	if !ok {
 		return code

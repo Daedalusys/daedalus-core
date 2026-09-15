@@ -34,6 +34,8 @@ var registry = map[string]Adapter{}
 func init() {
 	// service.set —— 用户域 systemd 单元生命周期适配器(todo 22, 见 service_set.go)。
 	RegisterAdapter("service.set", serviceSetAdapter{})
+	// package.set —— 包生命周期适配器,Propose/Apply/Rollback 三段已由 plan daedalus-pkg-kind todo 8/9/10 落地(见 package_set.go),本行完成注册(todo 11)。
+	RegisterAdapter("package.set", packageSetAdapter{})
 }
 
 // RegisterAdapter 注册一个适配器(重复注册覆盖)。仅供 todo 22 与测试调用。

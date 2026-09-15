@@ -4,3 +4,10 @@
 allowed_commands = ["df", "ls"]
 binary_dirs = ["/usr/bin"]
 allowed_path_prefixes = ["/tmp"]
+
+# [blueprints] 段保留(该夹具只演练 shell/fs/audit/objectmodel 缺字段)。
+[blueprints]
+output_dirs = ["/tmp"]
+post_check_commands = ["nginx"]
+reload_services = ["nginx"]
+secret_sources = ["kwallet"]

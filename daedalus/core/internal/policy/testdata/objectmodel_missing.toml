@@ -13,3 +13,10 @@ allowed_dirs = ["/tmp"]
 
 [audit]
 log_path = "/tmp/daedalus-policy-test-audit.jsonl"
+
+# [blueprints] 段保留(该夹具只缺 [objectmodel],其余结构完整)。
+[blueprints]
+output_dirs = ["/tmp"]
+post_check_commands = ["nginx"]
+reload_services = ["nginx"]
+secret_sources = ["kwallet"]

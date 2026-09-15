@@ -62,6 +62,18 @@ func TestLoad_Happy(t *testing.T) {
 	if !slices.Equal(p.ObjectModel.EnabledKinds, []string{"service", "package"}) {
 		t.Errorf("objectmodel.enabled_kinds = %v", p.ObjectModel.EnabledKinds)
 	}
+	if !slices.Equal(p.Blueprints.OutputDirs, []string{"/tmp"}) {
+		t.Errorf("blueprints.output_dirs = %v", p.Blueprints.OutputDirs)
+	}
+	if !slices.Equal(p.Blueprints.PostCheckCommands, []string{"nginx"}) {
+		t.Errorf("blueprints.post_check_commands = %v", p.Blueprints.PostCheckCommands)
+	}
+	if !slices.Equal(p.Blueprints.ReloadServices, []string{"nginx"}) {
+		t.Errorf("blueprints.reload_services = %v", p.Blueprints.ReloadServices)
+	}
+	if !slices.Equal(p.Blueprints.SecretSources, []string{"kwallet"}) {
+		t.Errorf("blueprints.secret_sources = %v", p.Blueprints.SecretSources)
+	}
 }
 
 // TestLoad_CorruptTOML 钉死损坏语法 → 报错(服务器据此拒绝启动)。
@@ -172,6 +184,111 @@ func TestPolicy_ObjectModel_UnknownKeyRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "未知键") ||
 		!strings.Contains(err.Error(), "objectmodel.enabled_kindz") {
 		t.Errorf("未知键报错形态漂移: %v", err)
+	}
+}
+
+// TestPolicy_Blueprints 钉死 [blueprints] 段的三点漂移(计划 todo 9):
+//  1. policy.toml 的 4 个键值 ↔ Default().Blueprints 完全一致(读仓库真实
+//     shared/policy.toml,经 DevRelPath 开发态回溯,与 TestPolicy_ObjectModel
+//     同款写法);
+//  2. Default().Blueprints.PostCheckCommands 的每条命令都命中 shellpolicy 的
+//     post_check 白名单(三点中的第三点:shellpolicy.DefaultPostCheckAllowCommands());
+//  3. 失败注入 canary:临时改 Default 返回值,测试必须能抓住漂移(证明测试
+//     本身不是"永远绿"的摆设)。
+func TestPolicy_Blueprints(t *testing.T) {
+	t.Run("policy.toml [blueprints] 与 Default() 零漂移", func(t *testing.T) {
+		t.Setenv(policy.EnvPolicyPath, "")
+		st, err := os.Stat(policy.ProductionPath)
+		if err == nil && !st.IsDir() {
+			t.Skipf("本机存在 %s,无法演练开发态回溯", policy.ProductionPath)
+		}
+		repoPolicy, err := policy.ResolvePath()
+		if err != nil {
+			t.Fatalf("开发态回溯未命中仓库 policy.toml: %v", err)
+		}
+		real, err := policy.Load(repoPolicy)
+		if err != nil {
+			t.Fatalf("镜像 policy.toml 未通过自身校验(含 [blueprints] 段): %v", err)
+		}
+		if len(real.Blueprints.OutputDirs) == 0 || len(real.Blueprints.PostCheckCommands) == 0 ||
+			len(real.Blueprints.ReloadServices) == 0 || len(real.Blueprints.SecretSources) == 0 {
+			t.Fatal("真实 policy.toml 的 [blueprints] 有字段解析为空(fail-closed 应已拒绝)")
+		}
+		def := policy.Default()
+		if !slices.Equal(real.Blueprints.OutputDirs, def.Blueprints.OutputDirs) {
+			t.Errorf("blueprints.output_dirs 漂移: %v vs %v", real.Blueprints.OutputDirs, def.Blueprints.OutputDirs)
+		}
+		if !slices.Equal(real.Blueprints.PostCheckCommands, def.Blueprints.PostCheckCommands) {
+			t.Errorf("blueprints.post_check_commands 漂移: %v vs %v", real.Blueprints.PostCheckCommands, def.Blueprints.PostCheckCommands)
+		}
+		if !slices.Equal(real.Blueprints.ReloadServices, def.Blueprints.ReloadServices) {
+			t.Errorf("blueprints.reload_services 漂移: %v vs %v", real.Blueprints.ReloadServices, def.Blueprints.ReloadServices)
+		}
+		if !slices.Equal(real.Blueprints.SecretSources, def.Blueprints.SecretSources) {
+			t.Errorf("blueprints.secret_sources 漂移: %v vs %v", real.Blueprints.SecretSources, def.Blueprints.SecretSources)
+		}
+	})
+
+	t.Run("Default().Blueprints.PostCheckCommands 命中 shellpolicy post_check 白名单", func(t *testing.T) {
+		allow := shellpolicy.DefaultPostCheckAllowCommands()
+		for _, cmd := range policy.Default().Blueprints.PostCheckCommands {
+			if _, ok := allow[cmd]; !ok {
+				t.Errorf("post_check 命令 %q 不在 shellpolicy.DefaultPostCheckAllowCommands() 中: %v",
+					cmd, policy.Default().Blueprints.PostCheckCommands)
+			}
+		}
+	})
+
+	t.Run("失败注入 canary:改 Default 返回值必被抓", func(t *testing.T) {
+		orig := policy.Default()
+		orig.Blueprints.PostCheckCommands = append([]string(nil), orig.Blueprints.PostCheckCommands...)
+		orig.Blueprints.PostCheckCommands = append(orig.Blueprints.PostCheckCommands, "evil")
+
+		// 注入的 evil 不在 shellpolicy 默认 post_check 白名单 → 第二点必须失败。
+		allow := shellpolicy.DefaultPostCheckAllowCommands()
+		injected := false
+		for _, cmd := range orig.Blueprints.PostCheckCommands {
+			if _, ok := allow[cmd]; !ok {
+				injected = true
+				break
+			}
+		}
+		if !injected {
+			t.Fatal("canary 注入失败:evil 竟然在白名单里,测试前提不成立")
+		}
+
+		// 反证:把 policy.toml 的 post_check_commands 改成带 evil 的形态,
+		// 用与第一点相同的比对逻辑应能抓住漂移(模拟漂移测试的真实失败)。
+		t.Setenv(policy.EnvPolicyPath, "")
+		st, err := os.Stat(policy.ProductionPath)
+		if err == nil && !st.IsDir() {
+			t.Skipf("本机存在 %s,跳过 canary 反证", policy.ProductionPath)
+		}
+		repoPolicy, err := policy.ResolvePath()
+		if err != nil {
+			t.Fatalf("开发态回溯未命中仓库 policy.toml: %v", err)
+		}
+		real, err := policy.Load(repoPolicy)
+		if err != nil {
+			t.Fatalf("镜像 policy.toml 未通过自身校验: %v", err)
+		}
+		// 直接比对"被注入的 Default"与真实策略,预期不一致(证明比对逻辑
+		// 能抓住漂移;真实 policy.toml 不含 evil,因此这里必然触发 fail)。
+		if slices.Equal(real.Blueprints.PostCheckCommands, orig.Blueprints.PostCheckCommands) {
+			t.Error("canary 失败:注入 evil 后仍与真实策略相等,漂移比对抓不住变化")
+		}
+	})
+}
+
+// TestPolicy_Blueprints_RejectsEmpty 钉死 fail-closed:空 post_check_commands
+// 列表视为损坏策略,Load 必须点名 blueprints.post_check_commands 拒绝。
+func TestPolicy_Blueprints_RejectsEmpty(t *testing.T) {
+	_, err := policy.Load(testdataPath(t, "blueprints_empty.toml"))
+	if err == nil {
+		t.Fatal("空 post_check_commands 竟然 Load 成功(fail-closed 失效)")
+	}
+	if !strings.Contains(err.Error(), "blueprints.post_check_commands") {
+		t.Errorf("报错未点名 blueprints.post_check_commands: %v", err)
 	}
 }
 
@@ -373,5 +490,17 @@ func assertPolicyEqual(t *testing.T, got, want *policy.Policy, label string) {
 	}
 	if !eqList(got.ObjectModel.EnabledKinds, want.ObjectModel.EnabledKinds) {
 		t.Errorf("%s: objectmodel.enabled_kinds 漂移 %v vs %v", label, got.ObjectModel.EnabledKinds, want.ObjectModel.EnabledKinds)
+	}
+	if !eqList(got.Blueprints.OutputDirs, want.Blueprints.OutputDirs) {
+		t.Errorf("%s: blueprints.output_dirs 漂移 %v vs %v", label, got.Blueprints.OutputDirs, want.Blueprints.OutputDirs)
+	}
+	if !eqList(got.Blueprints.PostCheckCommands, want.Blueprints.PostCheckCommands) {
+		t.Errorf("%s: blueprints.post_check_commands 漂移 %v vs %v", label, got.Blueprints.PostCheckCommands, want.Blueprints.PostCheckCommands)
+	}
+	if !eqList(got.Blueprints.ReloadServices, want.Blueprints.ReloadServices) {
+		t.Errorf("%s: blueprints.reload_services 漂移 %v vs %v", label, got.Blueprints.ReloadServices, want.Blueprints.ReloadServices)
+	}
+	if !eqList(got.Blueprints.SecretSources, want.Blueprints.SecretSources) {
+		t.Errorf("%s: blueprints.secret_sources 漂移 %v vs %v", label, got.Blueprints.SecretSources, want.Blueprints.SecretSources)
 	}
 }

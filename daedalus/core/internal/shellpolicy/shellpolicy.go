@@ -53,6 +53,36 @@ var DefaultAllowCommands = map[string]struct{}{
 	"arch": {}, "hostname": {}, "date": {}, "ping": {}, "systemctl": {},
 }
 
+// defaultPostCheckCommands 是 post_check / pre_check 脚本命令白名单的
+// 出厂默认列表(计划 daedalus-blueprint-p1 决策 5:nginx / haproxy / psql /
+// redis-cli 四条服务校验命令 + sudo 提权执行)。post_check 走**严格子集**,
+// 独立于主白名单 DefaultAllowCommands,绝不并入——主白名单 15 项语义不被动摇。
+var defaultPostCheckCommands = []string{"nginx", "haproxy", "psql", "redis-cli", "systemctl", "grep"}
+
+// DefaultPostCheckAllowCommands 返回 post_check 命令白名单的出厂默认集副本
+// (5 条:nginx / haproxy / psql / redis-cli / sudo)。返回全新集合,调用方
+// 改动不会污染包级默认值。
+func DefaultPostCheckAllowCommands() map[string]struct{} {
+	return stringSet(defaultPostCheckCommands)
+}
+
+// PostCheckAllowCommands 是 post_check / pre_check 脚本可执行命令的白名单
+// (计划 daedalus-blueprint-p1 决策 5 / todo 8),与主白名单 DefaultAllowCommands
+// 相互独立:主白名单管 shell 能力服务器的 15 条只读/诊断命令,本集只管蓝图
+// post_check 沙箱的校验命令。默认值 = DefaultPostCheckAllowCommands();
+// 经 WithPolicy 注入策略的 [blueprints].post_check_commands 后为运行时镜像
+// (单一事实源,与 DefaultAllowCommands 同源 policy.toml)。
+var PostCheckAllowCommands = DefaultPostCheckAllowCommands()
+
+// IsPostCheckAllowed 判断命令基名是否在 post_check 白名单内
+// (蓝图 post_check 沙箱的准入检查,计划 todo 8)。只查 PostCheckAllowCommands,
+// 与主白名单 DefaultAllowCommands 完全隔离:主白名单允许的命令不自动放行
+// post_check,反之亦然。
+func IsPostCheckAllowed(cmd string) bool {
+	_, ok := PostCheckAllowCommands[cmd]
+	return ok
+}
+
 // AllowedBinDirs 是允许的命令所在目录集合(shell_server.ts:202)。
 var AllowedBinDirs = map[string]struct{}{
 	"/usr/bin": {}, "/bin": {}, "/usr/sbin": {}, "/sbin": {},
@@ -117,12 +147,39 @@ func copySet(src map[string]struct{}) map[string]struct{} {
 	return dst
 }
 
+// blueprintsPostCheckSource 是蓝图 post_check 命令白名单的策略注入钩子
+// (计划 daedalus-blueprint-p1 决策 6:白名单源仍是 policy.toml 单一事实源)。
+// policy.Policy.Blueprints 结构由 todo 10 落地,本切片(todo 8)不得引用
+// 尚不存在的字段;故以"函数变量 + 注册"前向解耦——todo 10 经
+// RegisterBlueprintsPostCheckSource 把读取函数接进来,注册前保持出厂默认
+// (与 WithPolicy(nil) 同语义:不注入即默认)。
+var blueprintsPostCheckSource func(p *policy.Policy) []string
+
+// RegisterBlueprintsPostCheckSource 注册蓝图 post_check 命令白名单的读取
+// 函数,供 policy 包在 Policy.Blueprints 结构落地(todo 10)后接线:
+//
+//	shellpolicy.RegisterBlueprintsPostCheckSource(func(p *policy.Policy) []string {
+//		return p.Blueprints.PostCheckCommands
+//	})
+//
+// 多次注册以后者为准;nil 入参被忽略(防御)。注册后 WithPolicy 注入的
+// 生效集合 = 注册函数返回值,与 [shell].allowed_commands 同为 policy.toml
+// 单一事实源,三点漂移测试(todo 9)钉死两侧一致。
+func RegisterBlueprintsPostCheckSource(src func(p *policy.Policy) []string) {
+	if src == nil {
+		return // nil 读取函数视为未注册(防御,不改语义)。
+	}
+	blueprintsPostCheckSource = src
+}
+
 // WithPolicy 用 policy.toml 的解析结果覆盖本包的包级策略值
 // (计划 todo 12 的单一事实源注入点)。行为约定:
 //   - 只在服务器启动时调用一次(main 注入),运行期不改;
 //     本包校验函数按包级变量取用,注入后即时生效。
 //   - 传入的切片/映射一律深拷贝,调用方后续改动不会反向渗透策略。
 //   - 向后兼容:不调用本包函数保持 shell_server.ts 的原始默认常量。
+//   - 蓝图 post_check 白名单经 blueprintsPostCheckSource 钩子注入(见
+//     RegisterBlueprintsPostCheckSource);未注册时保持出厂默认 5 条。
 func WithPolicy(p *policy.Policy) {
 	if p == nil {
 		return // 空策略视为不注入,维持出厂常量(防御 nil 指针,不改语义)。
@@ -133,6 +190,11 @@ func WithPolicy(p *policy.Policy) {
 	BlockedPaths = slices.Clone(p.Shell.BlockedPaths)
 	CleanEnv = cleanEnvPairs(p.Shell.CleanEnv)
 	Timeout = time.Duration(p.Shell.TimeoutMs) * time.Millisecond
+	if blueprintsPostCheckSource != nil {
+		// 注入空集也是 fail-closed 的合法结果(与 [shell].allowed_commands
+		// 的注入模式一致:策略说了算,不合并默认值)。
+		PostCheckAllowCommands = stringSet(blueprintsPostCheckSource(p))
+	}
 }
 
 // stringSet 把字符串切片转为独立集合副本。

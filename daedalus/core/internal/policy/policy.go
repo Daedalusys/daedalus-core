@@ -90,12 +90,32 @@ type ObjectModel struct {
 	EnabledKinds []string `toml:"enabled_kinds"`
 }
 
+// Blueprints 对应 TOML [blueprints] 表:蓝图(blueprint)渲染/校验/重载/
+// 密钥来源的全部强制策略值(计划 daedalus-blueprint-p1 决策 5 / todo 10)。
+// 与 [shell]/[fs]/[audit]/[objectmodel] 并列的第五策略节,由 Go 能力服务器
+// 与未来的 blueprint 插件在启动/运行期读取。
+type Blueprints struct {
+	// OutputDirs 是蓝图渲染输出的允许目录(前缀白名单,与 pathguard 联动,
+	// 对应 output_dirs)。
+	OutputDirs []string `toml:"output_dirs"`
+	// PostCheckCommands 是 post_check / pre_check 可执行的命令白名单
+	// (对应 post_check_commands;消费方经 shellpolicy 的
+	// RegisterBlueprintsPostCheckSource 钩子注入,见 todo 16)。
+	PostCheckCommands []string `toml:"post_check_commands"`
+	// ReloadServices 是 reload 允许触发的服务名
+	// (经 daedalus-tx 的 service.set 通道,对应 reload_services)。
+	ReloadServices []string `toml:"reload_services"`
+	// SecretSources 是 secret 引用解析来源(用户态,对应 secret_sources)。
+	SecretSources []string `toml:"secret_sources"`
+}
+
 // Policy 是 policy.toml 的完整解析结果,字段与 TOML 一一对应。
 type Policy struct {
 	Shell       Shell       `toml:"shell"`
 	FS          FS          `toml:"fs"`
 	Audit       Audit       `toml:"audit"`
 	ObjectModel ObjectModel `toml:"objectmodel"`
+	Blueprints  Blueprints  `toml:"blueprints"`
 }
 
 // ResolvePath 按文档优先级解析策略文件路径。
@@ -188,6 +208,13 @@ func (p *Policy) validate() error {
 	// 单一事实源在 daedalus/core/internal/objectmodel/objectmodel.go
 	// (计划 .omo/plans/aios-object-model-alignment.md 决策 25),三点漂移测试钉死两侧一致。
 	requireList("objectmodel.enabled_kinds", p.ObjectModel.EnabledKinds)
+	// [blueprints] 四字段一律非空(fail-closed):任一空列表视为损坏策略,
+	// 拒绝启动。语义与 [shell]/[fs]/[audit] 的其它必需列表一致——配置事故
+	// (误删整行)不得静默放宽蓝图输出目录或校验命令边界。
+	requireList("blueprints.output_dirs", p.Blueprints.OutputDirs)
+	requireList("blueprints.post_check_commands", p.Blueprints.PostCheckCommands)
+	requireList("blueprints.reload_services", p.Blueprints.ReloadServices)
+	requireList("blueprints.secret_sources", p.Blueprints.SecretSources)
 
 	if len(p.Shell.CleanEnv) == 0 {
 		missing = append(missing, "shell.clean_env")
@@ -276,9 +303,20 @@ func Default() *Policy {
 			LogPath: "/var/log/daedalus/audit.jsonl",
 		},
 		ObjectModel: ObjectModel{
-			// v1 仅 service kind 有 provider;其余保留枚举成员须经此白名单启用。
+			// v1 service 与 package kind 有 provider;其余保留枚举成员须经此白名单启用。
 			// kind 词表的单一事实源:daedalus/core/internal/objectmodel/objectmodel.go(决策 25)。
-			EnabledKinds: []string{"service"},
+			EnabledKinds: []string{"service", "package"},
+		},
+		Blueprints: Blueprints{
+			// 蓝图渲染输出目录 / post_check 命令 / reload 服务 / secret 来源,
+			// 值与 shared/policy.toml [blueprints] 节逐字一致
+			// (计划 daedalus-blueprint-p1 决策 5),由三点漂移测试(todo 9)钉死。
+			// post_check 白名单消费方:shellpolicy.RegisterBlueprintsPostCheckSource
+			// (todo 16 MCP server 启动时注册;本包不 import shellpolicy,避免循环)。
+			OutputDirs:        []string{"/etc/nginx/conf.d", "/etc/haproxy", "/etc/postgresql", "/etc/redis"},
+			PostCheckCommands: []string{"nginx", "haproxy", "psql", "redis-cli", "systemctl", "grep"},
+			ReloadServices:    []string{"nginx", "haproxy", "postgresql", "redis"},
+			SecretSources:     []string{"kwallet", "credstore"},
 		},
 	}
 }

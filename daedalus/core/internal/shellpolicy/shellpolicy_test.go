@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/daedalus-os/daedalus/core/internal/policy"
 )
 
 // TestConstantsPinDenoSource 钉死所有规格常量:数量与内容必须与
@@ -90,6 +92,153 @@ func TestResolveAllowCommands(t *testing.T) {
 			t.Fatalf("纯空白必须替换为空集(ts 真值分支), got %v", got)
 		}
 	})
+}
+
+// TestPostCheckAllowCommands 钉死蓝图 post_check 命令白名单(计划
+// daedalus-blueprint-p1 决策 5 / todo 8):出厂默认 7 条、与主白名单
+// DefaultAllowCommands 相互独立、IsPostCheckAllowed 命中/未命中语义。
+// (orchestrator 修复:systemctl/grep 是合法校验命令,post_check 脚本
+// 用到;白名单从 5 扩到 7,三处同步由漂移测试守护。)
+func TestPostCheckAllowCommands(t *testing.T) {
+	t.Run("出厂默认 7 条", func(t *testing.T) {
+		want := []string{"nginx", "haproxy", "psql", "redis-cli", "systemctl", "grep"}
+		if len(PostCheckAllowCommands) != len(want) {
+			t.Fatalf("post_check 默认数量 = %d, want %d: %v",
+				len(PostCheckAllowCommands), len(want), PostCheckAllowCommands)
+		}
+		for _, c := range want {
+			if _, ok := PostCheckAllowCommands[c]; !ok {
+				t.Errorf("post_check 默认缺少 %q", c)
+			}
+		}
+	})
+	t.Run("与主白名单相互独立", func(t *testing.T) {
+		// post_check 命令不得并入主白名单(主白名单仍是 15 项)。
+		if len(DefaultAllowCommands) != 15 {
+			t.Fatalf("主白名单被污染: 数量 = %d, want 15(必须保持 15 项)",
+				len(DefaultAllowCommands))
+		}
+		for _, c := range []string{"nginx", "haproxy", "psql", "redis-cli"} {
+			if _, ok := DefaultAllowCommands[c]; ok {
+				t.Errorf("主白名单混入 post_check 命令 %q", c)
+			}
+		}
+		// 反向:主白名单命令也不得自动放行 post_check(仅显式列入才放行)。
+		if IsPostCheckAllowed("df") {
+			t.Error("主白名单命令不应命中 post_check 白名单")
+		}
+	})
+	t.Run("IsPostCheckAllowed 命中/未命中", func(t *testing.T) {
+		hits := []string{"nginx", "haproxy", "psql", "redis-cli", "systemctl", "grep"}
+		for _, c := range hits {
+			if !IsPostCheckAllowed(c) {
+				t.Errorf("IsPostCheckAllowed(%q) = false, want true", c)
+			}
+		}
+		misses := []string{"df", "bash", "rm", "whoami", "nginx -t", ""}
+		for _, c := range misses {
+			if IsPostCheckAllowed(c) {
+				t.Errorf("IsPostCheckAllowed(%q) = true, want false", c)
+			}
+		}
+	})
+	t.Run("DefaultPostCheckAllowCommands 返回独立副本", func(t *testing.T) {
+		got := DefaultPostCheckAllowCommands()
+		got["injected"] = struct{}{}
+		if _, ok := PostCheckAllowCommands["injected"]; ok {
+			t.Error("改动默认集副本渗透了包级 PostCheckAllowCommands")
+		}
+		if len(DefaultPostCheckAllowCommands()) != 6 {
+			t.Error("DefaultPostCheckAllowCommands() 数量被污染, want 6")
+		}
+	})
+}
+
+// TestRegisterBlueprintsPostCheckSource 钉死蓝图 post_check 注入钩子:
+// 注册后 WithPolicy 注入的生效集合 = 读取函数返回值(空集也是合法结果,
+// fail-closed);未注册时 WithPolicy 保持出厂默认;nil 注册被忽略。
+func TestRegisterBlueprintsPostCheckSource(t *testing.T) {
+	t.Cleanup(func() {
+		blueprintsPostCheckSource = nil
+		PostCheckAllowCommands = DefaultPostCheckAllowCommands()
+	})
+
+	t.Run("未注册时 WithPolicy 保持出厂默认", func(t *testing.T) {
+		blueprintsPostCheckSource = nil
+		WithPolicy(policy.Default())
+		if len(PostCheckAllowCommands) != 6 {
+			t.Fatalf("未注册钩子时 post_check 被改动: %v", PostCheckAllowCommands)
+		}
+		if !IsPostCheckAllowed("nginx") {
+			t.Error("未注册钩子时 nginx 应仍在默认白名单")
+		}
+	})
+	t.Run("注册后注入生效且空集 fail-closed", func(t *testing.T) {
+		RegisterBlueprintsPostCheckSource(func(p *policy.Policy) []string {
+			return []string{"nginx", "psql"}
+		})
+		WithPolicy(policy.Default())
+		if len(PostCheckAllowCommands) != 2 {
+			t.Fatalf("注册后注入数量 = %d, want 2: %v", len(PostCheckAllowCommands), PostCheckAllowCommands)
+		}
+		if !IsPostCheckAllowed("nginx") || !IsPostCheckAllowed("psql") {
+			t.Error("注册注入的 nginx/psql 应命中")
+		}
+		if IsPostCheckAllowed("haproxy") || IsPostCheckAllowed("sudo") {
+			t.Error("注册注入后默认命令应被整体替换(REPLACE,非并集)")
+		}
+
+		RegisterBlueprintsPostCheckSource(func(p *policy.Policy) []string {
+			return nil // 空集:策略说了算,一律拒(fail-closed)。
+		})
+		WithPolicy(policy.Default())
+		if len(PostCheckAllowCommands) != 0 {
+			t.Fatalf("注入空集后数量 = %d, want 0: %v", len(PostCheckAllowCommands), PostCheckAllowCommands)
+		}
+		if IsPostCheckAllowed("nginx") {
+			t.Error("注入空集后 nginx 应被拒")
+		}
+	})
+	t.Run("nil 注册被忽略", func(t *testing.T) {
+		RegisterBlueprintsPostCheckSource(nil)
+		if blueprintsPostCheckSource == nil {
+			t.Fatal("nil 注册不得清空已注册的钩子")
+		}
+	})
+}
+
+// TestBlueprintsPolicyContract 钉死 todo 10 的钩子契约:构造一个带
+// Blueprints 的 Policy,注册读取函数后 WithPolicy 注入的生效集合 =
+// p.Blueprints.PostCheckCommands(即 policy.toml 单一事实源的取值,
+// 三点漂移测试的消费方侧证明)。生产接线归 todo 16(MCP server 启动时
+// 注册);本测试只证明"Policy.Blueprints 字段 → 钩子 → 生效白名单"的
+// 链路成立,避免 policy↔shellpolicy 循环依赖(policy 不 import shellpolicy)。
+func TestBlueprintsPolicyContract(t *testing.T) {
+	t.Cleanup(func() {
+		blueprintsPostCheckSource = nil
+		PostCheckAllowCommands = DefaultPostCheckAllowCommands()
+	})
+
+	// 使用真实 Default() 的 Blueprints(其 PostCheckCommands 与 policy.toml
+	// 由 TestPolicy_Blueprints 钉死一致),确保契约测试吃的是单一事实源取值。
+	RegisterBlueprintsPostCheckSource(func(p *policy.Policy) []string {
+		return p.Blueprints.PostCheckCommands
+	})
+	WithPolicy(policy.Default())
+
+	want := policy.Default().Blueprints.PostCheckCommands
+	if len(PostCheckAllowCommands) != len(want) {
+		t.Fatalf("钩子注入数量 = %d, want %d: %v", len(PostCheckAllowCommands), len(want), PostCheckAllowCommands)
+	}
+	for _, cmd := range want {
+		if !IsPostCheckAllowed(cmd) {
+			t.Errorf("钩子注入后 %q 应命中白名单", cmd)
+		}
+	}
+	// 注入是整体替换(REPLACE):主白名单命令不得混入 post_check 集。
+	if IsPostCheckAllowed("df") {
+		t.Error("主白名单命令 df 混入了 post_check 白名单(应 REPLACE 隔离)")
+	}
 }
 
 func TestValidateCommand(t *testing.T) {
