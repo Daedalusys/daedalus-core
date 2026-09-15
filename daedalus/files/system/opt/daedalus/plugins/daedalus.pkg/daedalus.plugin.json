@@ -20,8 +20,15 @@
     "dnf_query",
     "dnf_list_installed"
   ],
+  "resources": [
+    {
+      "kind": "package",
+      "name": "*",
+      "desired_state": ""
+    }
+  ],
   "checksums": {
-    "bin/daedalus-pkg": "sha256:db8f52434e2bb3c766b30aebf290679253da0b685b50dd2848dc03458411a256",
-    "daedalus.plugin.json": "sha256:80fb5272379adc5b4bdd6a0ba3fec283b72ceaed34d19c04cbcdcea5dfb2c0a9"
+    "bin/daedalus-pkg": "sha256:a0faa19c55e8d39c8c53638bd0e307ab5c7b0f879afa28e8067c5f9be67d5a21",
+    "daedalus.plugin.json": "sha256:638c9f2ad1b30d5098657c67087dc05c49a9363b26e0bbe0a68c05efca096e41"
   }
 }

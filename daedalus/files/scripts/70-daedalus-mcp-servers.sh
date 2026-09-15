@@ -22,7 +22,7 @@ for bin in daedalus-host daedalus-audit daedalus-shell; do
         echo "NOTE: /usr/local/bin/${bin} 尚未安装（由 just plugin-pack 提供）"
     fi
 done
-for cap in fs shell pkg sysinfo; do
+for cap in fs shell pkg sysinfo blueprint; do
     if [ ! -x "/opt/daedalus/plugins/daedalus.${cap}/bin/daedalus-${cap}" ]; then
         echo "NOTE: /opt/daedalus/plugins/daedalus.${cap}/bin/daedalus-${cap} 尚未安装（由 just plugin-pack 提供）"
     fi

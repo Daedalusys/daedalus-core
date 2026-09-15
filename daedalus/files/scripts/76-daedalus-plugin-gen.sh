@@ -44,9 +44,13 @@ PLUGINS="${ROOT%/}/opt/daedalus/plugins"
 UNIT_DIR="${ROOT%/}/usr/lib/systemd/system"
 HOST="${ROOT%/}/usr/local/bin/daedalus-host"
 POLICY="${ROOT%/}/opt/daedalus/shared/policy.toml"
-# 能力清单(aios 计划 todo 10 新增 service):循环按 cap 推导 id=daedalus.<cap>、
-# 单元=daedalus-<cap>.service、drop-in 目录=daedalus-<cap>.service.d。
-CAPS="fs shell pkg sysinfo service"
+# 能力清单(aios 计划 todo 10 新增 service;blueprint-p1 todo 22 新增 blueprint):
+# 循环按 cap 推导 id=daedalus.<cap>、单元=daedalus-<cap>.service、drop-in 目录=daedalus-<cap>.service.d。
+# daedalus.blueprint 与既有能力完全同构:manifest → render-unit → ExecStart 幂等回写 +
+# tools/list 交叉核对 + landlock/credentials drop-in 沙箱语义防回归。blueprint 的
+# ReadWritePaths 输出目录由单元自带(76 脚本第 7 条只禁 shell/fs 的 /opt 遮蔽/重绑定,
+# ReadWritePaths 不拦 policy 读取,保留放行合法)。
+CAPS="fs shell pkg sysinfo service blueprint"
 
 fail() { echo "76-daedalus-plugin-gen: 错误: $*" >&2; exit 1; }
 

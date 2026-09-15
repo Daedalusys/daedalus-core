@@ -6,6 +6,9 @@
   "runtime": "native",
   "executable": "bin/daedalus-pkg",
   "tools": ["dnf_query", "dnf_list_installed"],
+  "resources": [
+    { "kind": "package", "name": "*" }
+  ],
   "permissions": {
     "read": ["/var/lib/rpm", "/etc/yum.repos.d"],
     "write": [],

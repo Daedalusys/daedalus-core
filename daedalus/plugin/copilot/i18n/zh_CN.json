@@ -78,5 +78,17 @@
   "help.example.run": "  daedalus check memory",
   "help.example.dry_run": "  daedalus --dry-run delete temp files",
   "help.example.interactive": "  daedalus -i remove old logs",
-  "help.example.repl": "  daedalus (starts interactive REPL mode)"
+  "help.example.repl": "  daedalus (starts interactive REPL mode)",
+  "blueprint.list.title": "Daedalus 蓝图",
+  "blueprint.list.empty": "暂无可用的蓝图。",
+  "blueprint.inspect.missing": "蓝图 \"{0}\" 不存在。",
+  "blueprint.render.ok": "蓝图 \"{0}\" 已渲染为计划 {1}(目标:{2})。",
+  "blueprint.render.schemaError": "参数未通过蓝图 \"{0}\" 的 schema 校验:{1}",
+  "blueprint.apply.ok": "蓝图计划 {0} 已应用至 {1}。",
+  "blueprint.apply.error": "蓝图计划 {0} 应用失败:{1}",
+  "blueprint.apply.confirm": "应用蓝图计划 {0}?[y]是 / [n]否: ",
+  "blueprint.remove.ok": "蓝图计划 {0} 已移除。",
+  "blueprint.status.installed": "蓝图计划 {0} 已安装:{1}",
+  "blueprint.status.absent": "蓝图计划 {0} 未安装。",
+  "blueprint.error.not_plan": "计划 {0} 不存在或已被消费;请先重新渲染。"
 }

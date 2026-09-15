@@ -16,7 +16,9 @@
 # 把 /opt/daedalus 与 /usr/local/bin 在 entrypoint 字符串里重写到 dev 树。
 # 与默认 go-build 产物同名覆盖,切换 prod/demo 二者取其一,默认即 prod。
 # 与 go-build 同款 fallback:SSH 远端非交互 shell 不 source rc 时自找 go。
-go-build-demo:
+# 依赖 blueprint-embed:daedalus-blueprint 的 //go:embed 需要嵌入数据在
+# cmd 目录下就位(同根 justfile go-build / go-test 的依赖链)。
+go-build-demo: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
     cd daedalus/core

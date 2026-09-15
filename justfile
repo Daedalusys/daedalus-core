@@ -65,7 +65,7 @@ verify-image:
 # 打包 5 个能力服务器(fs/shell/pkg/sysinfo/service)为 daedalus-plugin 并安装进镜像树
 # (计划 todo 9;service 腿 = aios 计划 todo 11;构建镜像前执行)
 # 同时安装带外 CLI 到 /usr/local/bin: host/audit/shell/service/tx(计划 todo 17 补 tx)
-plugin-pack:
+plugin-pack: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
     # 与 go-build / go-test 同款 fallback:SSH 远端非交互 shell 不 source rc,asdf
@@ -90,16 +90,31 @@ plugin-pack:
     root="$PWD"
     cd "$root/daedalus/core"
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
-    # 能力循环(aios 计划 todo 11 扩 service):源目录 daedalus/plugin/<cap>、
-    # 安装态 plugins/daedalus.<cap>/,与 70 编号脚本"仅 chmod+提示"的分工互补——复制职责恒在本 recipe。
-    for cap in fs shell pkg sysinfo service; do
+    # 能力循环(aios 计划 todo 11 扩 service;blueprint-p1 todo 23 扩 blueprint):
+    # 源目录 daedalus/plugin/<cap>、安装态 plugins/daedalus.<cap>/,与 70 编号脚本
+    # "仅 chmod+提示"的分工互补——复制职责恒在本 recipe。
+    # blueprint 特例:源目录含 blueprints/ 蓝图数据(36 文件,已 //go:embed 进二进制,
+    # 计划 §4 line 121:蓝图目录不在 rootfs 单独存在),经暂存目录排除出 zip——
+    # 只打 manifest + bin/,避免 rootfs 出现重复蓝图数据(零残留断言亦依赖此)。
+    stage="${TMPDIR:-/tmp}/daedalus-plugin-pack-stage"
+    find "${stage}" -mindepth 1 -delete 2>/dev/null || true
+    for cap in fs shell pkg sysinfo service blueprint; do
         id="daedalus.${cap}"
         src="$root/daedalus/plugin/${cap}"
         dest="$root/daedalus/files/system/opt/daedalus/plugins/${id}"
         mkdir -p "${src}/bin"
         cp -f "bin/daedalus-${cap}" "${src}/bin/daedalus-${cap}"
         chmod 0755 "${src}/bin/daedalus-${cap}"
-        "./bin/daedalus-plugin-pack" -in "${src}" -out "bin/${id}.plugin.zip"
+        if [ "${cap}" = "blueprint" ]; then
+            rm -rf "${stage}"
+            mkdir -p "${stage}/bin"
+            cp -f "${src}/daedalus.plugin.json" "${stage}/daedalus.plugin.json"
+            cp -f "${src}/bin/daedalus-blueprint" "${stage}/bin/daedalus-blueprint"
+            pack_in="${stage}"
+        else
+            pack_in="${src}"
+        fi
+        "./bin/daedalus-plugin-pack" -in "${pack_in}" -out "bin/${id}.plugin.zip"
         mkdir -p "${dest}"
         # 解压器要求空目录(O_EXCL 不覆盖既有文件);本机权限面禁 rm,用 find -delete 清空。
         find "${dest}" -mindepth 1 -delete
@@ -123,13 +138,13 @@ plugin-pack:
     #   不进 76 脚本 render/handshake 环路)——与 audit/shell 同款 task-21 形态仅落
     #   /usr/local/bin,服务 copilot spawn 与用户直接 CLI(v1 执行模型 = 调用者进程)。
     install -Dm0755 "bin/daedalus-tx" "$root/daedalus/files/system/usr/local/bin/daedalus-tx"
-    echo "plugin-pack: 5 个能力插件(fs/shell/pkg/sysinfo/service)已安装 -> daedalus/files/system/opt/daedalus/plugins/; host/audit/shell/service/tx 已安装 -> daedalus/files/system/usr/local/bin/"
+    echo "plugin-pack: 6 个能力插件(fs/shell/pkg/sysinfo/service/blueprint)已安装 -> daedalus/files/system/opt/daedalus/plugins/; host/audit/shell/service/tx 已安装 -> daedalus/files/system/usr/local/bin/"
 
 # 开发态本地安装(计划 checkbox 1):把 dev 产物装进用户前缀,免镜像即可使用全套 CLI。
 # 用法: just dev-install [前缀] (亦兼容 --prefix=X 形式);默认前缀 = $HOME/.local。
 # 产物: <prefix>/bin/{daedalus-host,daedalus-audit,daedalus-shell}
 #       <prefix>/share/daedalus/plugins/{5 个插件安装态} (消费 daedalus/core/bin/*.plugin.zip,不重新打包)
-dev-install prefix='':
+dev-install prefix='': blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
     # 与 go-build / go-test / plugin-pack 同款 fallback:SSH 远端非交互 shell
@@ -224,6 +239,21 @@ host-list prefix='':
     echo "错误: 找不到 daedalus-host(既无 ${host},也不在 PATH);请先跑 just dev-install" >&2
     exit 1
 
+# 构建期把蓝图源码侧数据复制到 embed 目录(计划 todo 15,方案 D)。
+# daedalus/plugin/blueprint/blueprints/ 在 core Go 模块之外,go:embed 不能
+# 引用 `..` 越界路径也不能跟随符号链接;故经 rsync 复制到
+# daedalus/core/cmd/daedalus-blueprint/blueprints/ 再 `//go:embed all:blueprints/*`。
+# 复制产物不入库(.gitignore),源码侧 blueprints/ 是唯一事实源。
+# 所有会编译 Go 代码的 recipe(go-build / go-test / test / plugin-pack /
+# dev-install / go-build-demo)都以本 recipe 为依赖,保证裸 `go build` / `go test`
+# 之前蓝图数据已就位。
+blueprint-embed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(pwd)"
+    mkdir -p "${root}/daedalus/core/cmd/daedalus-blueprint/blueprints"
+    rsync -a --delete "${root}/daedalus/plugin/blueprint/blueprints/" "${root}/daedalus/core/cmd/daedalus-blueprint/blueprints/"
+
 # 构建全部 Go 静态二进制到 daedalus/core/bin/(计划 todo 15;对齐 core/Makefile 的 build 语义:
 # CGO_ENABLED=0 纯静态、GOTOOLCHAIN=local 禁用工具链自动下载、-trimpath 可复现路径)
 #
@@ -235,7 +265,7 @@ host-list prefix='':
 #   - GitHub Actions ubuntu-latest(apt 装 go 在 /usr/local/go/bin):走 fallback
 #   - SSH 远端 asdf 用户:走 fallback 找到 ~/.asdf/shims/go
 #   - SSH 远端裸系统 go:走 fallback 找到 /usr/local/go/bin/go
-go-build:
+go-build: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
     cd daedalus/core
@@ -253,7 +283,7 @@ go-build:
 # Go 全量单元测试(纯模块级,不依赖镜像;just test 的 Go 腿即此命令)
 # 与 go-build 同款 fallback:SSH 远端非交互 shell 不 source rc,asdf/mise
 # 用户的 go 不在 PATH,recipe 自带多源兜底(asdf → .local → 系统 go)。
-go-test:
+go-test: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
     cd daedalus/core
@@ -289,7 +319,7 @@ deps:
 # Run test suite
 # go test 那行同款 fallback(SSH 远端 asdf/mise 自找 go);deno + bash 走 PATH
 # 已有,demo build 路径不影响。
-test:
+test: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
     if ! command -v go >/dev/null 2>&1; then

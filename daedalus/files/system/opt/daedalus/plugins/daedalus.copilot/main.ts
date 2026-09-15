@@ -114,8 +114,22 @@ interface TxIntent {
   desiredState: string;
 }
 
-/** v1 唯一事务适配器（todo 22）;与 daedalus-tx 侧 service.set 词汇逐字一致。 */
+/** v1 事务适配器之一（todo 22）;与 daedalus-tx 侧 service.set 词汇逐字一致。 */
 const TX_ADAPTER_SERVICE_SET = "service.set";
+
+/** v1 事务适配器之二（daedalus-pkg-kind todo 17）;与 daedalus-tx 侧 package.set 适配器名逐字一致。 */
+const TX_ADAPTER_PACKAGE_SET = "package.set";
+
+/**
+ * 判定事务目标是否属于 package 域（daedalus-pkg-kind todo 17）。
+ * classifyTxProposal 用 `/^package\s+\S+$/` 区分域（todo 16 落地），本函数
+ * 用同款正则识别，命中即剥掉 "package " 前缀返回裸包名——后续 propose 的
+ * args JSON `{name, desired_state}` 只收裸名，不收 "package <name>" 前缀形态。
+ */
+function packageTargetName(target: string): string | null {
+  const m = /^package\s+(\S+)$/.exec(target.trim());
+  return m ? m[1] : null;
+}
 
 /** begin 看门狗毫秒数:与 execAllowlisted / execTx* 缺省 40s 同源常量。 */
 const TX_BEGIN_TIMEOUT_MS = 40000;
@@ -861,9 +875,15 @@ async function runTxTurn(
   }
   const txId = begun.txId;
 
-  // 步骤 2:propose —— 追加 service.set 适配器步骤(仅快照 Before/AfterState,无副作用)
-  const proposed: TxProposeOutcome = await txProposeFn(txId, TX_ADAPTER_SERVICE_SET, {
-    name: txIntent.target,
+  // 步骤 2:propose —— 按域路由适配器（daedalus-pkg-kind todo 17）:
+  // target 形如 "package <name>" 走 package.set 适配器（args 只收裸包名）,
+  // 其余维持 service.set 既有路由（args 收裸单元名,零变化）。
+  // 两类 propose 均仅快照 Before/AfterState,无副作用。
+  const pkgName = packageTargetName(txIntent.target);
+  const txAdapter = pkgName !== null ? TX_ADAPTER_PACKAGE_SET : TX_ADAPTER_SERVICE_SET;
+  const txTargetName = pkgName ?? txIntent.target;
+  const proposed: TxProposeOutcome = await txProposeFn(txId, txAdapter, {
+    name: txTargetName,
     desired_state: txIntent.desiredState,
   });
   if (!proposed.ok) {
@@ -880,7 +900,7 @@ async function runTxTurn(
     {
       query,
       tx_id: txId,
-      adapter: TX_ADAPTER_SERVICE_SET,
+      adapter: txAdapter,
       target: txIntent.target,
       desired_state: txIntent.desiredState,
     },

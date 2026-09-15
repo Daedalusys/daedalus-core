@@ -1,0 +1,36 @@
+[Unit]
+Description=Daedalus Blueprint MCP Sandbox Profile
+# 蓝图能力服务器(daedalus.blueprint):MCP stdio 服务器,提供 6 个蓝图工具
+# (blueprint_list / inspect / render / apply / status / remove),把可复用的
+# 参数化配置模板(nginx/haproxy/postgres/redis 蓝图)以"渲染预览 → 确认令牌 →
+# 事务应用"的安全流程交付。蓝图数据经 //go:embed 编入二进制;策略(输出目录
+# 白名单 / post_check 命令白名单 / reload 服务白名单)运行时读取
+# /opt/daedalus/shared/policy.toml 单一事实源(与其余能力服务器同款约定)。
+After=network.target
+
+[Service]
+Type=exec
+# ExecStart 内容由插件 manifest(daedalus.blueprint)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性(决策 16/22);手工漂移将导致构建失败。
+# 提交态即渲染态(render-unit 输出 = <插件安装目录>/bin/daedalus-blueprint),构建期
+# sed 幂等回写不产生 git 噪音(与 daedalus-shell/fs 等 5 个既有单元同款形态)。
+ExecStart=/opt/daedalus/plugins/daedalus.blueprint/bin/daedalus-blueprint
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+CPUQuota=50%
+MemoryMax=256M
+# 蓝图渲染输出落盘目录(与 policy.toml [blueprints].output_dirs 镜像):
+# ProtectSystem=strict 下 /etc 只读,写入必须经 ReadWritePaths 显式放行。
+# 76 脚本不检查本行(只禁 shell/fs 的遮蔽/重绑定 /opt 挂载),保留即可。
+ReadWritePaths=/etc/nginx/conf.d /etc/haproxy /etc/postgresql /etc/redis
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

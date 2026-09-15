@@ -523,6 +523,12 @@ export function classifyProposal(proposal: CommandProposal): RiskAssessment {
 // 会出现"分类放行 / 执行拒绝"或反向的分裂语义，改一侧必查另一侧。
 const TX_APPLY_SAFE_STATES: ReadonlySet<string> = new Set(["started", "stopped"]);
 
+// v1 事务状态词与 daedalus-tx package.set 适配器（daedalus-pkg-kind todo 6/8）
+// 保持一致：present|absent|latest；present/absent 是确定性操作（与 service 的
+// started/stopped 同档 L0），latest 依赖 dnf 仓库元数据、可能拉网络 → L1。
+// 分类器与适配器若漂移，同样出现"分类放行 / 执行拒绝"分裂语义，改一侧必查另一侧。
+const TX_APPLY_PACKAGE_L0_STATES: ReadonlySet<string> = new Set(["present", "absent"]);
+
 /**
  * 事务提议风险分类器（aios-object-model-alignment 计划 todo 24）。
  *
@@ -535,6 +541,15 @@ const TX_APPLY_SAFE_STATES: ReadonlySet<string> = new Set(["started", "stopped"]
  * LLM 风险自标注，决策 2）：
  *   tx_propose              → safe/null（仅展示 + 记录，不落任何变更）
  *   tx_apply:
+ *     target = "package <name>"（package 域，daedalus-pkg-kind todo 16）:
+ *       tx_apply package <name> present → safe/null（确定性操作）
+ *       tx_apply package <name> absent  → safe/null（确定性、不依赖外部元数据，
+ *                              与 service 的 started/stopped 同档）
+ *       tx_apply package <name> latest  → caution/risk.reason.caution_command
+ *                              （依赖 dnf 仓库元数据、可能拉网络）
+ *       其余未知状态词                   → caution（fail-closed：不进 safe
+ *                              执行通道）
+ *     其余（service 域）:
  *     started | stopped     → safe/null（启停意图明确、事务快照可回滚）
  *     restarted/enabled/
  *     disabled              → caution/risk.reason.caution_command
@@ -549,6 +564,12 @@ const TX_APPLY_SAFE_STATES: ReadonlySet<string> = new Set(["started", "stopped"]
  * 行的 neither-safe 兜底，配置期 bug 必须响亮暴露，fail-closed）。
  * target 为空 → 抛错（plan QA 断言字面量 "classifyTxProposal: target is
  * empty"，钉死文案勿改）。
+ *
+ * ★ package 域形态 ★ 形态与 service 域完全同构（args[1] 期望态位置不变），
+ * 仅 target 首词不同：`package <name>`。name 的合法性（单段、无 `@` 组语法、
+ * 字符集白名单）由 daedalus-tx 侧 parsePackageSetArgs/sanitizePackageName
+ * 把关（daedalus-pkg-kind todo 6），分类器**不校验 name 形态**——那是
+ * parseArgs 的职责，分类器只按 (域 × 期望态) 查表定级。
  *
  * reasonKey 仅复用已落地 i18n 键：reload→danger 借用语义最近的
  * "risk.pattern.shutdown"（中断在途服务）；tx.* 专用键族由 todo 30 落地
@@ -570,6 +591,20 @@ export function classifyTxProposal(
 
     case "tx_apply": {
       const state = typeof desiredState === "string" ? desiredState.trim() : "";
+      // package 域：target 形如 "package <name>"（detectTxIntent 传
+      // args[0]→target、args[1]→desiredState，形态与 service 域同构）。
+      // 按 (域 × 期望态) 查表：present/absent → safe，latest → caution，
+      // 未知状态词 → caution（fail-closed）。name 形态校验归 daedalus-tx
+      // 侧 parsePackageSetArgs，分类器不越权。
+      if (/^package\s+\S+$/.test(target.trim())) {
+        if (TX_APPLY_PACKAGE_L0_STATES.has(state)) {
+          return { level: "safe", reasonKey: null, tx_kind: "tx_apply" };
+        }
+        // latest（依赖 dnf 仓库元数据，可能拉网络）及一切未知状态词 →
+        // caution（fail-closed，只展示不执行）
+        return { level: "caution", reasonKey: "risk.reason.caution_command", tx_kind: "tx_apply" };
+      }
+      // 以下为既有 service 域分支（保持原行为零变化）
       if (TX_APPLY_SAFE_STATES.has(state)) {
         return { level: "safe", reasonKey: null, tx_kind: "tx_apply" };
       }

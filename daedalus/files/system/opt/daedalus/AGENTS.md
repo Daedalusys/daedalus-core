@@ -27,9 +27,10 @@ opt/daedalus/
 │   ├── daedalus.fs/         # 能力插件安装态（manifest + bin/daedalus-fs）
 │   ├── daedalus.shell/
 │   ├── daedalus.pkg/
-│   └── daedalus.sysinfo/
+│   ├── daedalus.sysinfo/
+│   └── daedalus.blueprint/  # 蓝图能力插件（manifest + bin/daedalus-blueprint；蓝图数据已 embed 进二进制，不入本目录）
 └── shared/
-    └── policy.toml          # 安全策略单一事实源（[shell]/[fs]/[audit]，Go internal/policy 运行时读取）
+    └── policy.toml          # 安全策略单一事实源（[shell]/[fs]/[audit]/[blueprints]，Go internal/policy 运行时读取）
 ```
 
 源码侧对应关系（三层结构，决策 23/24）：
@@ -50,6 +51,7 @@ opt/daedalus/
 | Copilot CLI 源码 / 单元测试 | `daedalus/plugin/copilot/`（源码）+ 仓库根 `tests/deno/`（测试, todo 14 迁出镜像树） |
 | 审计哈希链算法 | `daedalus/core/internal/audit/`（Go，与 Python 金样字节级兼容） |
 | 能力服务器行为（fs/shell/pkg/sysinfo） | `daedalus/core/cmd/daedalus-<cap>/`（Go） |
+| 蓝图能力服务器（daedalus.blueprint） | `daedalus/core/cmd/daedalus-blueprint/`（Go，数据经 //go:embed 编入二进制） |
 | 插件格式说明 | `daedalus/plugin/README.md` + `daedalus/core/internal/plugin/` |
 | 单元 ExecStart 渲染/自校验（构建期） | `daedalus/files/scripts/76-daedalus-plugin-gen.sh`（manifest + policy.toml → unit, tools 交叉核对） |
 | 沙箱 / systemd 集成 | `daedalus/files/system/usr/lib/systemd/system/daedalus-*.service`（ExecStart 指向插件内二进制） |
@@ -126,3 +128,27 @@ daedalus/core/bin/daedalus-host -dir "$plugdir" render-unit daedalus.fs  # 仅�
 - `render-unit` 只输出 `[Service]` + `ExecStart=` 单元片段文本，不落盘、不启停任何单元。
 - degraded 插件（sha256 不匹配、id 与目录名不一致、manifest 损坏）会被 `run-plugin`/`render-unit` 拒绝（退出码 1），不产出启动命令。
 - 宿主每次子命令执行都会经 `daedalus-audit` 写一条 `host_*` 哈希链审计条目（`host_list` / `host_inspect` / `host_verify` / `host_run_plugin` / `host_render_unit`），写失败静默忽略（尽力而为）。
+
+## Object Model
+
+> 本段由 plan `daedalus-pkg-kind` 增量追加（此前本文件无 Object Model 段；全局对象模型决策、`资源种类` 总览与 `service` 条目见仓库根 `AGENTS.md` 的 `## Object Model` 段，此处不重复，只落 `package` 条目；本条目文字与根侧逐字一致）。
+
+- **package kind (plan `daedalus-pkg-kind` 增量追加)**: `package` 自此有 provider——只读观测走 `daedalus-pkg` 能力插件的 `dnf_query`/`dnf_list_installed` (`internal/pkgquery`), 状态变更一律经 `daedalus-tx` 的 `package.set` 适配器 (事务通道, begin→propose→apply→rollback); `desired_state` 为 `present`/`absent`/`latest` 三值冻结三元组, 映射 dnf `install`/`remove`/`upgrade` (`packageSetVerbs`, 表外值拒绝, 错串 `unknown desired_state %q (v1 支持 present|absent|latest)`); 适配器 euid==0 守门 (错串 `package.set requires root (euid=0); re-run via sudo`, 与 `service.set` 的 user-scope-only 强制镜像对称——package 强制 root, service 拒绝 root 单元); 回滚依托 `dnf history undo`, Apply 以"捕获 dnf history id + sidecar 落盘 (`<txID>-<step.Index>.dnf_history_id`, tx-id 经 D-1 裁决的 ctx 侧路透传给适配器, `tx.Step` 六键线上契约不动)"为**成功必要条件**——捕获或落盘任一失败都整体判 Apply 失败, 杜绝"Apply 成功但 Rollback 不可用" (fail-closed 哲学); Rollback 读侧 sidecar 缺失/不可读→严格 error, 不兜底、绝不猜 history id, history 已清理时 `present`/`latest` best-effort `remove` 兜底、`absent` 严格 error 且 dnf 物理零调用 (不可逆)。源码侧 `daedalus/plugin/pkg/daedalus.plugin.json` 声明 `resources` (`{ "kind": "package", "name": "*" }`), pack 产物补全 `desired_state` 为 `""`。
+
+## Blueprint 蓝图能力插件
+
+> 本段由 plan `daedalus-blueprint-p1` 增量追加(todo 25 文档同步)。镜像安装态
+> `plugins/daedalus.blueprint/` 只含 `manifest + bin/`(蓝图数据已 `//go:embed`
+> 编入二进制,**不在 rootfs 单独存在**,plan §4 line 121);执行模型、6 工具语义、
+> `[blueprints]` policy 节与 post_check 白名单细节见仓库根 `AGENTS.md` 的
+> `### 4b. Blueprint Server` 段,此处不重复。
+
+- **安装态形态**:`plugins/daedalus.blueprint/` = `daedalus.plugin.json`(6 工具
+  manifest)+ `bin/daedalus-blueprint`(Go 静态二进制)。源码侧 `daedalus/plugin/blueprint/`
+  是唯一事实源,安装态为 `just plugin-pack` 构建产物(打包走暂存目录排除 `blueprints/` 数据)。
+- **systemd**:`daedalus-blueprint.service` 经 76 脚本 render-unit 渲染 ExecStart,
+  沙箱语义同其余能力(DynamicUser/Landlock/seccomp drop-in),`ReadWritePaths`
+  放行 `[blueprints].output_dirs` 落盘目录。
+- **策略消费**:`[blueprints]` 节(输出目录/post_check/reload/secret 四字段)由
+  服务器启动时读取;post_check 白名单经 `RegisterBlueprintsPostCheckSource` 钩子注入。
+- **零残留**:本目录及 `bin/` 均为构建产物,勿手改;变更走 `just plugin-pack` 重生成。
