@@ -23,6 +23,11 @@
       "command": "/opt/daedalus/plugins/daedalus.sysinfo/bin/daedalus-sysinfo",
       "args": [],
       "description": "Daedalus OS System Information Capability Server (Go binary; read-only hardware, os-release, network)"
+    },
+    "daedalus-dupe": {
+      "command": "/opt/daedalus/plugins/daedalus.dupe/bin/daedalus-dupe",
+      "args": [],
+      "description": "Daedalus OS large & duplicate file scanner (Go binary; read-only scan of /home, /var/log, /tmp; sha256 / size-only / first-1mb algorithms)"
     }
   }
 }
