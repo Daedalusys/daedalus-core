@@ -1,45 +1,32 @@
-# Diva-OS
+# daedalus-core
 
-AI-native 桌面操作系统：在 AlmaLinux 10 bootc（KDE 变体）的不可变、原子、可回滚底座上，
-叠加一层 Model Context Protocol（MCP）能力中间件，含三道安全边界（模型/能力、执行/沙箱、
-证据/审计）、哈希链审计、systemd credential 隔离与原子回滚。能力服务器与插件宿主是 Go
-静态二进制，安全策略集中在单一 `policy.toml`。
+Daedalus 核心仓：镜像编排（`files/` 构建树 + 根 `Containerfile`）+ 5 个 core runtime
+（`cmd/daedalus-{host,audit,tx,smoke,plugin-pack}`）+ copilot 插件源码（`plugin/copilot/`）。
 
-构建/测试/发布统一用 `just` 编排（见 `justfile`）。
+与 `daedalus-sdk`（11 个安全核心包）、`daedalus-plugins`（6 个 Go 能力插件 monorepo）
+构成 3 仓体系；本地开发以**平级目录**形态共存，经 `go.work` 桥接。
 
-## ⚠️ 开发默认登录账号（本地开发镜像专用）
+## 本地开发
 
-bootc 基础镜像出厂**没有任何普通用户、root 锁定**（`almalinux-bootc` 的不可变约定），
-且本项目 KVM 用的是 `bootc-image-builder` 直烧 qcow2，不走 Anaconda 建用户向导。为了本机
-dev（KVM 控制台 / RDP / SSH）能直接登录，构建脚本 `daedalus/files/scripts/78-dev-user.sh`
-会在镜像里**注入一个 dev 账号**（凭据经环境变量在构建时注入，仓库不含明文）：
-
-| 项 | 值 |
-|----|----|
-| 用户名 | 由 `DAEDALUS_DEV_USER` 环境变量指定（默认建议 `daedalus`） |
-| 密码 | 由 `DAEDALUS_DEV_PASS` 环境变量指定（构建时注入，不进仓库） |
-| 权限 | `wheel` 组成员 + `/etc/sudoers.d/daedalus-dev` 免密 `NOPASSWD:ALL` sudo |
-| root | 密码与 `DAEDALUS_DEV_PASS` 同值（便于 `virsh console` 救援，root 已解锁，构建时设置） |
-
-登录方式：
-- **KVM 控制台 / VNC**：`daedalus` / `<DAEDALUS_DEV_PASS>`
-- **RDP（xrdp，3389）**：用 `daedalus` 账号（xrdp 拒 root 直登；VM 在 libvirt NAT，dev 机
-  经 SSH 隧道连：`ssh -N -L 3390:<vm-ip>:3389 <构建机>` → `xfreerdp /v:localhost:3390`）
-- **SSH**：`ssh daedalus@<vm-ip>`（VM 在宿主 `192.168.122.x`，从构建机直连或 dev 机隧道）
-
-> 🔒 **仅供本地开发**。凭据仅经 `DAEDALUS_DEV_USER` / `DAEDALUS_DEV_PASS` 环境变量在构建时
-> 注入，仓库与镜像均不含明文密码；未设置环境变量时构建不注入任何账号。**对外分发 / 上生产 /
-> 推公开 ghcr 镜像前**请确认未在构建环境中遗留真实凭据。
-
-## 快速上手
+**前置**：3 仓以平级目录形态 clone（`go.work` 本地 dev 桥依赖兄弟仓路径）：
 
 ```bash
-just --list              # 所有编排 recipe
-just build               # 同步 vendor 树 + podman build 出 localhost/daedalus-os:latest
-just test                # Go 单测 + Deno 测试
-# 本机构建 → qcow2 → 装 KVM → RDP 一条龙(私有,见 justfile.local):
-just -f justfile.local remote-all
+mkdir -p ~/work/daedalusys && cd ~/work/daedalusys
+git clone <core> && git clone <sdk> && git clone <plugins>
 ```
 
-更多约定与结构见 `AGENTS.md`。
-> 项目愿景与架构总览见 [VISION.md](VISION.md)。
+仓名必须为 `daedalus-core` / `daedalus-sdk` / `daedalus-plugins`（与 `go.work` 路径对应）。
+
+clone 完成后，在 `daedalus-core/` 根执行：
+
+```bash
+cp go.work.example go.work   # 3 仓平级 dev 桥（go.work 不入库，模板入库）
+just verify-dev-layout       # 守门：兄弟仓就位 + 各仓 go.mod module 路径匹配
+go build ./...               # 经 go.work 解析 SDK 与 6 插件模块
+```
+
+- `go.work` 引用 `../daedalus-sdk` 与 `../daedalus-plugins/{fs,shell,pkg,sysinfo,service,blueprint}`，
+  优先于各 go.mod 的 `replace` 指令（`daedalus-core/go.mod` 的 replace 为 `=> ../daedalus-sdk`）。
+- 单仓 clone（无兄弟仓）时：SDK 仓自带 `daedalus-sdk/go.work.example`（`use ( . )`），
+  各插件仓自带 `daedalus-plugins/<cap>/go.work.example`（`use ( . ../../daedalus-sdk )`），
+  各自 `cp` 为 `go.work` 即生效。
