@@ -65,7 +65,7 @@ find "${DEST}" -mindepth 1 -delete
 # 1) 本地生成 6 zip:构建二进制 + 打包。打包 -in . 要求插件源目录 bin/ 有与
 #    manifest executable 匹配的二进制;把新构建的二进制拷入,保证 zip 内容
 #    新鲜且脚本在全新 clone(无 bin/)下自洽。
-for cap in fs shell pkg sysinfo service blueprint; do
+for cap in fs shell pkg sysinfo service blueprint dupe; do
     echo "== 构建 + 打包 ${cap}"
     (cd "${PLUGINS_ROOT}/${cap}" && go build -trimpath -o "${ZIP_DIR}/daedalus-${cap}" "./cmd/daedalus-${cap}")
     cp -f "${ZIP_DIR}/daedalus-${cap}" "${PLUGINS_ROOT}/${cap}/bin/daedalus-${cap}"

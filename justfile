@@ -115,7 +115,7 @@ plugin-pack: blueprint-embed
     # 蓝图目录不在 rootfs 单独存在)同样被排除,避免 rootfs 出现重复蓝图数据。
     stage="${TMPDIR:-/tmp}/daedalus-plugin-pack-stage"
     find "${stage}" -mindepth 1 -delete 2>/dev/null || true
-    for cap in fs shell pkg sysinfo service blueprint; do
+    for cap in fs shell pkg sysinfo service blueprint dupe; do
         id="daedalus.${cap}"
         src="$root/daedalus-plugins/${cap}"
         dest="$root/daedalus-core/files/system/opt/daedalus/plugins/${id}"
