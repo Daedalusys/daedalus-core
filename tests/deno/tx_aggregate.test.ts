@@ -10,10 +10,10 @@
 // - 聚合差异化:state 读取走**真文件真解析**(Deno.makeTempDir + 真
 //   state.jsonl,readStateFn 不注入),tx 链走 mock 注入(绝 spawn 真二进制)。
 import { expect } from "jsr:@std/expect@1";
-import { runCopilot } from "../../daedalus/plugin/copilot/main.ts";
-import { ALLOWED_AUDIT_TOOLS, type AuditTool } from "../../daedalus/plugin/copilot/audit.ts";
-import { initI18n, t } from "../../daedalus/plugin/copilot/i18n.ts";
-import type { TxApplyOutcome, TxJournal, TxPreviewOutcome, TxProposeOutcome, TxStep } from "../../daedalus/plugin/copilot/exec.ts";
+import { runCopilot } from "../../plugin/copilot/main.ts";
+import { ALLOWED_AUDIT_TOOLS, type AuditTool } from "../../plugin/copilot/audit.ts";
+import { initI18n, t } from "../../plugin/copilot/i18n.ts";
+import type { TxApplyOutcome, TxJournal, TxPreviewOutcome, TxProposeOutcome, TxStep } from "../../plugin/copilot/exec.ts";
 
 // locale 基线锁(main.test.ts 同族纪律):断言基于 en_US 文案硬编码。
 if ((globalThis as any).Deno?.env?.set) {
@@ -400,7 +400,7 @@ Deno.test("Aggregate T29 - user 'n' after real state read drops L0 tx: begin/pro
 // ═══════════════════════════════════════════════════════════════════════
 
 async function loadLocaleDict(locale: string): Promise<Record<string, string>> {
-  const url = new URL(`../../daedalus/plugin/copilot/i18n/${locale}.json`, import.meta.url);
+  const url = new URL(`../../plugin/copilot/i18n/${locale}.json`, import.meta.url);
   return JSON.parse(await Deno.readTextFile(url)) as Record<string, string>;
 }
 
@@ -421,7 +421,7 @@ Deno.test("Aggregate T29 - i18n key-set parity: en_US and zh_CN keys are strictl
 
 Deno.test("Aggregate T29 - every t(\"literal\") in main.ts has a translation in both locales (zero raw-key fallback)", async () => {
   const mainSrc = await Deno.readTextFile(
-    new URL("../../daedalus/plugin/copilot/main.ts", import.meta.url),
+    new URL("../../plugin/copilot/main.ts", import.meta.url),
   );
   // (?<![\w$]) 排除 get("/split(" 等尾缀 t 的误报;只取字面量首参键名
   const re = /(?<![\w$])t\(\s*"([^"]+)"/g;

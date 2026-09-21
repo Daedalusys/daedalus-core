@@ -1,0 +1,36 @@
+{
+  "id": "daedalus.fs",
+  "name": "Daedalus Filesystem",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-fs",
+  "permissions": {
+    "read": [
+      "/home",
+      "/var/log",
+      "/tmp"
+    ],
+    "write": [
+      "/home",
+      "/var/log",
+      "/tmp"
+    ],
+    "run": null
+  },
+  "tools": [
+    "read_file",
+    "write_file",
+    "list_dir",
+    "move_file"
+  ],
+  "checksums": {
+    "bin/daedalus-fs": "sha256:a7cb213ef4706b19b7d044ec881a16e989b058354dde1e89ddba5c574fc805b4",
+    "daedalus.plugin.json": "sha256:b8578665f514e62851b70229b6b93b380b8a1aa77028fd41abdf0a38a299e134"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}

@@ -4,7 +4,7 @@ import {
   execTxApply,
   execTxPreview,
   execTxPropose,
-} from "../../daedalus/plugin/copilot/exec.ts";
+} from "../../plugin/copilot/exec.ts";
 
 let mockSpawnedCommands: Array<{ cmd: string; options: any; instance: any }> = [];
 let mockSignalListeners: Array<{ signal: string; handler: Function }> = [];
@@ -341,15 +341,15 @@ Deno.test("Copilot Exec - supports configurable shell binary path via DAEDALUS_S
 });
 
 Deno.test("Copilot Exec - default resolution finds the real Go daedalus-shell binary on disk", () => {
-  // 不 mock Deno.Command：验证默认解析链（生产路径 → 仓库构建产物 daedalus/core/bin/）
+  // 不 mock Deno.Command：验证默认解析链（生产路径 → 仓库构建产物 daedalus-core/bin/）
   // 在开发态真实文件系统上能解析到一个可 stat 的 Go 二进制。
   const origEnv = Deno.env.get("DAEDALUS_SHELL_BIN");
   try {
     Deno.env.delete("DAEDALUS_SHELL_BIN");
     // 通过未 mock 的解析逻辑间接验证：直接调用模块内解析无导出，
     // 因此这里以 recordAudit 同款策略断言仓库构建产物存在。
-    const repoBinary = "daedalus/core/bin/daedalus-shell";
-    const parentBinary = "../daedalus/core/bin/daedalus-shell";
+    const repoBinary = "daedalus-core/bin/daedalus-shell";
+    const parentBinary = "../daedalus-core/bin/daedalus-shell";
     let found = false;
     for (const candidate of [repoBinary, parentBinary]) {
       try {
@@ -711,7 +711,7 @@ Deno.test("TestExecTxApply_WatchdogTimeout - 40s watchdog (env-overridable) SIGK
   }
 });
 
-Deno.test("TestResolveTxBinary - default resolution finds repo build artifact daedalus/core/bin/daedalus-tx on disk", () => {
+Deno.test("TestResolveTxBinary - default resolution finds repo build artifact daedalus-core/bin/daedalus-tx on disk", () => {
   // 不派生进程: 与 daedalus-shell 同款磁盘断言, 验证 dev 树回退链的实物存在
   // (CI 先 just go-build, 与 shell 断言同等前置)。
   const origEnv = Deno.env.get("DAEDALUS_TX_BIN");
@@ -720,8 +720,8 @@ Deno.test("TestResolveTxBinary - default resolution finds repo build artifact da
     let found = false;
     for (
       const candidate of [
-        "daedalus/core/bin/daedalus-tx",
-        "../daedalus/core/bin/daedalus-tx",
+        "daedalus-core/bin/daedalus-tx",
+        "../daedalus-core/bin/daedalus-tx",
       ]
     ) {
       try {

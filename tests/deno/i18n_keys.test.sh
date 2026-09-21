@@ -10,10 +10,10 @@ set -euo pipefail
 
 # 以脚本自身位置解析仓库根,任意 cwd 可运行
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EN="$ROOT/daedalus/plugin/copilot/i18n/en_US.json"
-ZH="$ROOT/daedalus/plugin/copilot/i18n/zh_CN.json"
-SRC_MAIN="$ROOT/daedalus/plugin/copilot/main.ts"
-SRC_POLICY="$ROOT/daedalus/plugin/copilot/policy.ts"
+EN="$ROOT/plugin/copilot/i18n/en_US.json"
+ZH="$ROOT/plugin/copilot/i18n/zh_CN.json"
+SRC_MAIN="$ROOT/plugin/copilot/main.ts"
+SRC_POLICY="$ROOT/plugin/copilot/policy.ts"
 
 rc=0
 

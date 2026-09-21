@@ -1,11 +1,11 @@
 import { expect } from "jsr:@std/expect@1";
-import { defaultReadStdinAll, defaultTxBegin, runCopilot, parseArgs, readStateSummary, formatStateSummary, VERSION } from "../../daedalus/plugin/copilot/main.ts";
-import type { StateSummary, StateSummaryEntry } from "../../daedalus/plugin/copilot/main.ts";
-import type { TxApplyOutcome, TxJournal, TxPreviewOutcome, TxProposeOutcome, TxStep } from "../../daedalus/plugin/copilot/exec.ts";
-import { initI18n } from "../../daedalus/plugin/copilot/i18n.ts";
+import { defaultReadStdinAll, defaultTxBegin, runCopilot, parseArgs, readStateSummary, formatStateSummary, VERSION } from "../../plugin/copilot/main.ts";
+import type { StateSummary, StateSummaryEntry } from "../../plugin/copilot/main.ts";
+import type { TxApplyOutcome, TxJournal, TxPreviewOutcome, TxProposeOutcome, TxStep } from "../../plugin/copilot/exec.ts";
+import { initI18n } from "../../plugin/copilot/i18n.ts";
 // review M-2 契约测试专用:分类面观测直接调 policy.ts 的 classifyTxProposal
 // (只读 import,不为测试改动任何生产代码)。
-import { classifyTxProposal } from "../../daedalus/plugin/copilot/policy.ts";
+import { classifyTxProposal } from "../../plugin/copilot/policy.ts";
 
 // 锁定 locale 为 en_US：本测试文件的断言基于 en_US 文案硬编码。
 // 如不锁定，在 zh_CN locale 的开发机上（LC_ALL/LANG 为 zh_CN.UTF-8）

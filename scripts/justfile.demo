@@ -21,7 +21,7 @@
 go-build-demo: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
-    cd daedalus/core
+    cd daedalus-core
     if ! command -v go >/dev/null 2>&1; then
         for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
             if [ -x "$c" ]; then
@@ -64,9 +64,9 @@ dev-copilot *args:
     # NotFound→静默(无 writer 跑过);仓库在 $HOME 之外的边缘情形是
     # PermissionDenied→可见-继续(todo 28)——两者皆良性;tx 往返完全可用,
     # 因为 daedalus-tx 是 Go 二进制,不受 Deno 权限授予约束。
-    export DAEDALUS_STATE_PATH="$PWD/daedalus/files/system/var/lib/daedalus/state.jsonl"
-    export DAEDALUS_TX_DIR="$PWD/daedalus/files/system/var/lib/daedalus/tx"
-    argv=$(daedalus/core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
+    export DAEDALUS_STATE_PATH="$PWD/daedalus-core/files/system/var/lib/daedalus/state.jsonl"
+    export DAEDALUS_TX_DIR="$PWD/daedalus-core/files/system/var/lib/daedalus/tx"
+    argv=$(daedalus-core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
            run-plugin daedalus.copilot -- {{args}})
     # 镜像 wrapper(`/usr/local/bin/daedalus`)用 `eval "set -- $argv"` 展开
     # $HOME;dev 模式不经 wrapper,这里手工把字面 $HOME 替换为 HOME
@@ -98,10 +98,10 @@ cli-copilot *args:
     prep_copilot
     # 无参时不带 `--` 尾巴 → 空 query → copilot main.ts 进 REPL;有参则透传。
     if [ -z "{{args}}" ]; then
-        argv=$(daedalus/core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
+        argv=$(daedalus-core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
                run-plugin daedalus.copilot)
     else
-        argv=$(daedalus/core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
+        argv=$(daedalus-core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
                run-plugin daedalus.copilot -- {{args}})
     fi
     # 镜像 wrapper(`/usr/local/bin/daedalus`)用 `eval "set -- $argv"` 展开

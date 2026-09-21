@@ -20,7 +20,7 @@ import {
   parseTimeoutMs,
   translate,
   type NormalizedLLMError,
-} from "../../daedalus/plugin/copilot/llm.ts";
+} from "../../plugin/copilot/llm.ts";
 
 const originalFetch = globalThis.fetch;
 // 集成测试统一走 openai baseUrl=http://127.0.0.1:1/v1 → endpoint 拼接结果(去尾斜杠 + /chat/completions)。

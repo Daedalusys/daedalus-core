@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Daedalus Copilot 插件打包脚本(计划 todo 8)。
 #
-# 职责:把源码态插件目录 daedalus/plugin/copilot/ 中的 Deno copilot 源码
+# 职责:把源码态插件目录 daedalus-core/plugin/copilot/ 中的 Deno copilot 源码
 # (5 个 .ts;测试已随 todo 14 迁至仓库根 tests/deno/,源码目录不再含 .test.ts)与其清单 daedalus.plugin.json 组装成插件源目录,
 # 经 daedalus-plugin-pack 注入 sha256 checksums 后产出:
-#   1) daedalus/core/bin/daedalus.copilot.plugin.zip          —— 可分发插件包(bin/ 已 gitignore,
+#   1) daedalus-core/bin/daedalus.copilot.plugin.zip          —— 可分发插件包(bin/ 已 gitignore,
 #      与 todo 9 能力插件的 <id>.plugin.zip 同一约定)
-#   2) daedalus/files/system/opt/daedalus/plugins/daedalus.copilot/  —— 解压安装态(入库):
+#   2) daedalus-core/files/system/opt/daedalus/plugins/daedalus.copilot/  —— 解压安装态(入库):
 #      sync-daedalus.sh(已迁入 scripts/) → base_image → Containerfile COPY → 镜像 /opt/daedalus/plugins/
 #      宿主 daedalus-host 与 wrapper 都以该绝对路径消费它。
 #   暂存目录用 mktemp 临时目录并在退出时清理:仓库内不留构建中间产物。
@@ -14,7 +14,7 @@
 # ★ task 7 交接铁律:未打包的清单没有 checksums 字段,安装根下的 host verify/
 #   run-plugin 会判 degraded 并拒绝产出启动命令 → 必须先 Pack 再安装,绝不手抄清单。
 #
-# 时序说明:copilot 源码已随 todo 11 三层迁移住进 daedalus/plugin/copilot/
+# 时序说明:copilot 源码已随 todo 11 三层迁移住进 daedalus-core/plugin/copilot/
 # (源码态与清单同目录;镜像内权威安装态是 plugins/daedalus.copilot/,由本脚本产出)。
 #
 # 用法:./scripts/pack-copilot-plugin.sh
@@ -24,13 +24,13 @@ set -euo pipefail
 # 仓库根:脚本位于 scripts/ 子目录,需向上一级。
 # 用 $(cd ... && pwd) 解析真实路径(兼容 symlink 与 ./ 相对调用)。
 ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
-CORE_DIR="$ROOT/daedalus/core"
+CORE_DIR="$ROOT/daedalus-core"
 # 源码态 = 插件定义层(todo 11 起):清单与 5 个 .ts 同目录;测试位于仓库根 tests/deno/(todo 14 迁出)
-COPILOT_SRC="$ROOT/daedalus/plugin/copilot"
-MANIFEST_SRC="$ROOT/daedalus/plugin/copilot/daedalus.plugin.json"
+COPILOT_SRC="$ROOT/daedalus-core/plugin/copilot"
+MANIFEST_SRC="$ROOT/daedalus-core/plugin/copilot/daedalus.plugin.json"
 PLUGIN_ID="daedalus.copilot"
 # 安装态落镜像树(与 todo 9 的能力插件同一约定)
-INSTALL_DIR="$ROOT/daedalus/files/system/opt/daedalus/plugins"
+INSTALL_DIR="$ROOT/daedalus-core/files/system/opt/daedalus/plugins"
 PLUGIN_DEST="$INSTALL_DIR/$PLUGIN_ID"
 ZIP_OUT=${ZIP_OUT:-"$CORE_DIR/bin/$PLUGIN_ID.plugin.zip"}
 

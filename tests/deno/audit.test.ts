@@ -4,7 +4,7 @@ import {
   recordAudit,
   getAuditBinary,
   ALLOWED_AUDIT_TOOLS,
-} from "../../daedalus/plugin/copilot/audit.ts";
+} from "../../plugin/copilot/audit.ts";
 
 let mockEnv: Record<string, string> = {};
 let mockStatFailures = new Set<string>();

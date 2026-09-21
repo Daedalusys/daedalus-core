@@ -18,7 +18,7 @@ import {
   t,
   detectLocale,
   currentLocale,
-} from "../../daedalus/plugin/copilot/i18n.ts";
+} from "../../plugin/copilot/i18n.ts";
 
 /**
  * 设置环境变量并返回恢复函数。

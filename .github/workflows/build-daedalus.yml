@@ -50,12 +50,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set Up Go Toolchain
-        # daedalus/core/go.mod pins `go 1.25.0`;runner image 可能更老,显式 pin。
-        # setup-go 缓存 daedalus/core/go.sum;vendor/ 不入库,首次构建走 module proxy。
+        # daedalus-core/go.mod pins `go 1.25.0`;runner image 可能更老,显式 pin。
+        # setup-go 缓存 daedalus-core/go.sum;vendor/ 不入库,首次构建走 module proxy。
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache-dependency-path: daedalus/core/go.sum
+          cache-dependency-path: daedalus-core/go.sum
 
       - name: Set Up Deno Runtime
         # copilot 测试套件 (tests/deno/) 由 deno 跑。
@@ -93,7 +93,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          just i18n-sync daedalus/plugin/copilot
+          just i18n-sync daedalus-core/plugin/copilot
 
       - name: Go Build & Test Gate
         working-directory: ${{ github.workspace }}
@@ -162,7 +162,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache-dependency-path: daedalus/core/go.sum
+          cache-dependency-path: daedalus-core/go.sum
 
       - name: Prepare justfile.local (gitignored stub for import)
         # 同 ci job:本机私有 recipe 永不进库,CI clone 出来没有该文件,just 解析
@@ -175,7 +175,7 @@ jobs:
           ls -la justfile.local
 
       - name: Build Plugin Install-State (Go binaries + plugin packaging)
-        # plugin-pack 把 Go 静态二进制与插件安装态落到 daedalus/files/system/
+        # plugin-pack 把 Go 静态二进制与插件安装态落到 daedalus-core/files/system/
         # (usr/local/bin + opt/daedalus/plugins),这些构建产物不入库(.gitignore),
         # sync 后构成容器构建上下文。76-daedalus-plugin-gen.sh 在容器内硬依赖
         # daedalus-host 二进制。

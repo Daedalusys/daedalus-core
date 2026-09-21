@@ -1,0 +1,39 @@
+{
+  "id": "daedalus.pkg",
+  "name": "Daedalus Package",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-pkg",
+  "permissions": {
+    "read": [
+      "/var/lib/rpm",
+      "/etc/yum.repos.d"
+    ],
+    "write": [],
+    "run": [
+      "/usr/bin/rpm",
+      "/usr/bin/dnf"
+    ]
+  },
+  "tools": [
+    "dnf_query",
+    "dnf_list_installed"
+  ],
+  "resources": [
+    {
+      "kind": "package",
+      "name": "*",
+      "desired_state": ""
+    }
+  ],
+  "checksums": {
+    "bin/daedalus-pkg": "sha256:5d1aac490fdfd74728987794739cab07ade67e87b862ebd9ecb5ea46e633a943",
+    "daedalus.plugin.json": "sha256:d5413f680927da9702a4684cebef5399ac2a39891120f112dc2fcafc294ed551"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}

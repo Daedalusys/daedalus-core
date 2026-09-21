@@ -4,8 +4,8 @@
 // 与 plan 第 5 节矩阵不符的用例按实际行为断言,并在注释中标注上报主控裁决。
 
 import { assertNotEquals, assertEquals } from "jsr:@std/assert@1";
-import type { CommandProposal } from "../../daedalus/plugin/copilot/policy.ts";
-import { classifyProposal } from "../../daedalus/plugin/copilot/policy.ts";
+import type { CommandProposal } from "../../plugin/copilot/policy.ts";
+import { classifyProposal } from "../../plugin/copilot/policy.ts";
 
 // fixture helper:构造最小 CommandProposal(explanation 不参与分级)
 const prop = (command: string, args: string[]): CommandProposal => ({

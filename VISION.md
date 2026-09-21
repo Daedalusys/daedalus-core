@@ -129,14 +129,14 @@ kind 回答"这条资源在对象模型里是什么"。两个问题，两张表�
 是七类资源枚举之一。一个在 manifest 里，一个在资源声明里，
 二者互不引用：capability 插件不声明 capability 资源，
 capability 资源也不要求由 capability 插件管理。同名巧合，已记录在
-`daedalus/core/internal/controller/doc.go`，此处正式入册。
+`daedalus-core/internal/controller/doc.go`，此处正式入册。
 
 **② "transaction" 三义。**
 其一，`KindTransaction`（值 `transaction`）：七类资源枚举中的一个保留位，
 当前无 provider，不代表任何已落地的执行通道。
 其二，`tx.Status`：事务生命周期状态机上的 token，
 沿 proposed→applying→applied→rolled_back/failed 迁移，
-表外迁移一律拒绝，这是 `daedalus/core/internal/tx` 包里的类型。
+表外迁移一律拒绝，这是 `daedalus-core/internal/tx` 包里的类型。
 其三，本文说"执行面"时的文词"事务"，指的是把声明变更包成一次可回滚变更的
 架构概念（§3），不指向任何具体类型。三义分属三处：枚举位、状态机 token、
 架构名词，读时按上下文落位，不混用。
@@ -146,7 +146,7 @@ capability 资源也不要求由 capability 插件管理。同名巧合，已记
 v1.5 声明性预留，校验放行即全部语义。
 其二，k8s Controller 概念：控制循环、观测与调谐的那套机制，
 在 §5 的 k8s-parity map 里展开，本文不提前展开。
-其三，`daedalus/core/internal/controller` 契约包：类型锚点，
+其三，`daedalus-core/internal/controller` 契约包：类型锚点，
 登记上述巧合、防止命名漂移的文档落点。三处只在字面上相像，
 指的东西互不相干。
 
@@ -161,7 +161,7 @@ v1.5 声明性预留，校验放行即全部语义。
 capability 这个 type 与 capability 这个 kind 从不互指，
 没有任何一行配置或代码把二者绑在一起，混淆只发生在人眼，
 不发生在机器。宁留 documented 巧合，不做破坏性正名；
-`internal/controller/doc.go` 已经把话记在类型旁边，
+`daedalus-core/internal/controller/doc.go` 已经把话记在类型旁边，
 本文再记一遍，两处口径一致。
 
 ## §5 k8s-parity map
@@ -174,39 +174,39 @@ capability 这个 type 与 capability 这个 kind 从不互指，
 
 | k8s 概念 | Daedalus 现状 | 缺口分级 | 归属 |
 | --- | --- | --- | --- |
-| CRD（自定义资源定义） | `objectmodel.go:30-51` Kind 封闭枚举 + manifest `resources` 声明 | A 定义层 | v1 已交付 |
+| CRD（自定义资源定义） | `daedalus-sdk/objectmodel/objectmodel.go:30-51` Kind 封闭枚举 + manifest `resources` 声明 | A 定义层 | v1 已交付 |
 | apiVersion | 无（Resource 无版本段） | A 定义层 | P3 |
 | metadata.labels | 无 | A 定义层 | P3 |
 | metadata.annotations | 无 | A 定义层 | P3 |
 | metadata.uid | 无 | A 定义层 | P3 |
 | metadata.generation | 无 | A 定义层 | P3 |
 | metadata.resourceVersion（乐观并发） | 无（tx journal 为单写者模型） | A 定义层 | P3 |
-| spec/status 显式分离 | Resource（3 字段声明）与 ServiceState（4 字段查询载荷）分离承载，`objectmodel.go:74-91` | A 定义层 | P3 |
+| spec/status 显式分离 | Resource（3 字段声明）与 ServiceState（4 字段查询载荷）分离承载，`daedalus-sdk/objectmodel/objectmodel.go:74-91` | A 定义层 | P3 |
 | Conditions（status.conditions[]） | ServiceState.Properties 为平铺字符串 map，无条件列表 | A 定义层 | P3 |
-| controller / reconcile 循环 | 无（tx 由用户显式调用） | B 架构层 | 契约缝·零运行时（`internal/controller` ReconcileFunc）→ P4 |
-| list-watch / informer | 无（state.jsonl 最新值观测缓存，`state.go:38-146`） | B 架构层 | P4 |
+| controller / reconcile 循环 | 无（tx 由用户显式调用） | B 架构层 | 契约缝·零运行时（`daedalus-core/internal/controller` ReconcileFunc）→ P4 |
+| list-watch / informer | 无（state.jsonl 最新值观测缓存，`daedalus-sdk/state/state.go:38-146`） | B 架构层 | P4 |
 | workqueue / backoff | 无 | B 架构层 | P4 |
-| admission webhook（mutating/validating） | 现状 = 静态准入：policy.toml 启动加载、fail-closed（`internal/policy/`） | B 架构层 | AdmissionFunc 契约缝·零运行时 → P4 |
+| admission webhook（mutating/validating） | 现状 = 静态准入：policy.toml 启动加载、fail-closed（`daedalus-sdk/policy/`） | B 架构层 | AdmissionFunc 契约缝·零运行时 → P4 |
 | etcd / apiserver | **故意无**（journal 存期望、OS 自身存现实、tx 是两者之间的桥，见 §7 分歧①） | — | 故意无 |
 | scheduler | **故意无**（桌面单机，无节点调度问题，见 §7 分歧③） | — | 故意无 |
 | namespace | 无（DynamicUser 上下文隔离替代，见 AGENTS.md Object Model 段） | C 体感层 | P4+ |
 | RBAC | 无 | C 体感层 | 开放问题 |
 | finalizer / ownerRef / GC | 无 | A 定义层 | P3+ |
-| events.k8s.io（操作性事件） | audit.jsonl 是证据链而非事件流（`internal/audit/`） | B 架构层 | P4 |
+| events.k8s.io（操作性事件） | audit.jsonl 是证据链而非事件流（`daedalus-sdk/audit/`） | B 架构层 | P4 |
 | server-side apply / field-ownership | 无（tx 为全量快照替换） | C 体感层 | 开放问题 |
-| kubectl diff | daedalus-tx status 子命令可回放事务日志（`cmd/daedalus-tx/main.go:8-9`），preview 语义仅限事务 | C 体感层 | P4 |
+| kubectl diff | daedalus-tx status 子命令可回放事务日志（`daedalus-core/cmd/daedalus-tx/main.go:8-9`），preview 语义仅限事务 | C 体感层 | P4 |
 | --dry-run=server | copilot --dry-run（翻译、校验、展示三步零系统调用） | C 体感层 | v1 已交付 |
 | kubectl explain / OpenAPI | 无 | C 体感层 | 开放问题 |
-| operator 打包 | daedalus-plugin 格式：zip + manifest + sha256（`internal/plugin/`） | 无缺口 | v1 已交付 |
+| operator 打包 | daedalus-plugin 格式：zip + manifest + sha256（`daedalus-sdk/plugin/`） | 无缺口 | v1 已交付 |
 | feature gate | policy.toml `[objectmodel].enabled_kinds` fail-closed 放行（`policy.toml:58`） | 无缺口 | v1 已交付 |
-| controller-runtime SDK | 契约类型已钉：`internal/controller/types.go:79`（ReconcileFunc） | B 架构层 | 契约缝·零运行时 → P4 |
+| controller-runtime SDK | 契约类型已钉：`daedalus-core/internal/controller/types.go:79`（ReconcileFunc） | B 架构层 | 契约缝·零运行时 → P4 |
 | ServiceAccount / 凭证隔离 | systemd LoadCredential + `/etc/credstore` | 无缺口 | v1 已交付 |
-| node / kubelet 类比 | systemd 单元直接执行（`76-daedalus-plugin-gen.sh` 构建期渲染 ExecStart） | 无缺口 | v1 已交付 |
+| node / kubelet 类比 | systemd 单元直接执行（`daedalus-core/files/scripts/76-daedalus-plugin-gen.sh` 构建期渲染 ExecStart） | 无缺口 | v1 已交付 |
 | rollback（k8s 无对应物） | **强于 k8s**：tx rollback_plan + bootc 双层兜底 | 无缺口 | v1 已交付 |
 | owner 工作负载重启策略（Restart=on-failure） | 无（tx 为显式变更，无常驻 watcher） | B 架构层 | 故意无（v1 决策 25） |
 
 两处归属需要单独说清。"契约缝·零运行时"指缝已缝好、机器未转：
-调和与准入的函数类型已经在 `internal/controller/types.go` 钉死成 Go 签名，
+调和与准入的函数类型已经在 `daedalus-core/internal/controller/types.go` 钉死成 Go 签名，
 测试与文档共同看守，但运行时里没有任何循环去调用它们，
 实现整体归 P4。好处是将来接入时改的是实现而非协议，类型不漂移。
 "故意无"指主动设计而非缺口：etcd/apiserver 与 scheduler 在桌面单机场景
@@ -230,7 +230,7 @@ capability 这个 type 与 capability 这个 kind 从不互指，
 | `status` | 事务状态 | 执行面 | 已实现（`daedalus-tx status`，逐字一致） |
 
 **delete 的语义。** 删除不表达"执行一条破坏性命令"，而是把资源的 desired_state
-写成哨兵值 `absent`（常量 `DesiredStateAbsent`，`internal/controller/types.go`），
+写成哨兵值 `absent`（常量 `DesiredStateAbsent`，`daedalus-core/internal/controller/types.go`），
 让"这个资源不应存在"成为一条可声明、可回滚、可审计的普通期望。
 absent 之后的 per-kind 删除词汇归各 provider 领域：service 的 `absent`
 具体意味着什么——移除用户单元文件？仅停用？连同 `enable` 一起撤销？——
@@ -238,11 +238,11 @@ absent 之后的 per-kind 删除词汇归各 provider 领域：service 的 `abse
 
 **per-kind 词汇现状。** desired_state 的取值词汇不进本文法，归各 provider 自领。
 目前只有 service 有词汇表：`active` / `inactive`（经 `service.set` 的冻结映射表，
-`cmd/daedalus-tx/service_set.go`）。`enabled` / `disabled` 属开机自启维度，
+`daedalus-core/cmd/daedalus-tx/service_set.go`）。`enabled` / `disabled` 属开机自启维度，
 与运行态正交，不是同一词汇轴上的值，引用时注意区分。
 
 **单向规范性。** 本节是给人读的注脚，不是机器可读的权威。
-动词 token 的唯一规范源是 `daedalus/core/internal/controller/types.go` 的
+动词 token 的唯一规范源是 `daedalus-core/internal/controller/types.go` 的
 Op 常量表：OpQuery↔`query`、OpList↔`list`、OpSet↔`set`、OpDelete↔`delete`、
 OpApply↔`apply`、OpRollback↔`rollback`、OpStatus↔`status`，七枚逐字对应。
 本表与代码冲突时，以代码为准并修文。写作此处只为防第二事实源：
@@ -322,7 +322,7 @@ Daedalus 的每个事务自带 before/after 快照与逆序回滚计划。
 
 ## §8 对象模型缺口盘点
 
-§5 的 parity 表按行记账，本节把其中标着缺口的行展开成叙事：每一项现在是什么样，为什么现在不做，归到路线图的哪一段。行集与 §5 表同出一源，本节不新增表外条目，两处若对不上即为账目错误。分级沿用表的口径：A 定义层关乎资源的形状，B 架构层关乎驱动资源的那台机器，C 体感层关乎使用手感。这些缺口的公共前提先交代一句：契约层面的形状已先行钉死，`daedalus/core/internal/controller` 里的类型与函数签名就是它们未来的接入位。
+§5 的 parity 表按行记账，本节把其中标着缺口的行展开成叙事：每一项现在是什么样，为什么现在不做，归到路线图的哪一段。行集与 §5 表同出一源，本节不新增表外条目，两处若对不上即为账目错误。分级沿用表的口径：A 定义层关乎资源的形状，B 架构层关乎驱动资源的那台机器，C 体感层关乎使用手感。这些缺口的公共前提先交代一句：契约层面的形状已先行钉死，`daedalus-core/internal/controller` 里的类型与函数签名就是它们未来的接入位。
 
 ### A 定义层（4 项，归 P3）
 
@@ -338,7 +338,7 @@ Daedalus 的每个事务自带 before/after 快照与逆序回滚计划。
 
 这一层缺的不是字段，是机器：让声明被持续驱动起来的运行时构件。§5 表里标"故意无"的行（etcd/apiserver、scheduler）不在此列，它们是主动设计而非缺口，论证已在 §7 交付。
 
-**reconcile 循环（P4）。** v1 的事务由用户显式调用，没有常驻进程观测差异并驱动调和。这不是能力缺口，是次序选择（§7 分歧②）：先证稳事务语义，再把扳机交给无人值守的循环。ReconcileFunc 的 Go 签名已在 `internal/controller/types.go` 钉死，P4 接的是实现，不是协议。
+**reconcile 循环（P4）。** v1 的事务由用户显式调用，没有常驻进程观测差异并驱动调和。这不是能力缺口，是次序选择（§7 分歧②）：先证稳事务语义，再把扳机交给无人值守的循环。ReconcileFunc 的 Go 签名已在 `daedalus-core/internal/controller/types.go` 钉死，P4 接的是实现，不是协议。
 
 **list-watch/informer（P4）。** 观测缓存 state.jsonl 是最新值快照，没有事件流与 watch 语义。单机单写者模型下，快照已经够用；reconcile 循环出现之后，无 watch 的反复轮询才是无谓开销，informer 机制届时才有存在的必要。
 
@@ -366,7 +366,7 @@ Daedalus 的每个事务自带 before/after 快照与逆序回滚计划。
 
 盘点缺口不等于宣告"万物皆可资源化"。至少有三类操作不该进资源模型：ad-hoc 诊断，一次性查询用完即走，建资源等于给碎片发身份证；过程性脚本，没有稳定身份可供声明，硬套资源形状只能靠编造名字；纯人读的报告输出，读者是人不是机器，既不需要期望态，也不需要调和。强行资源化的代价是 controller 职责无限扩展，违背底座哲学：§3 说得很清楚，不是万物皆资源，是万物皆守边界。资源模型管类型化的声明，其余在硬边界内各得其所。
 
-这些缺口共用同一个结尾：契约缝已在 `daedalus/core/internal/controller` 钉形状，P3/P4 是"让形状长出行为"。
+这些缺口共用同一个结尾：契约缝已在 `daedalus-core/internal/controller` 钉形状，P3/P4 是"让形状长出行为"。
 
 ## §9 现状盘点
 
@@ -374,14 +374,14 @@ Daedalus 的每个事务自带 before/after 快照与逆序回滚计划。
 一行一锚，锚点指向权威实现路径；内容取材于 AGENTS.md 与插件 README，
 此处只盘点现状，不新增叙事。
 
-1. **事务状态机与三道路径安全门**（`daedalus/core/internal/tx/`）：begin→propose→apply→rollback 全程落 journal，tx.Status 沿 proposed→applying→applied→rolled_back/failed 迁移、表外迁移一律拒绝，每笔事务自带 before/after 快照与逆序回滚计划。package.set 适配器已落地（plan daedalus-pkg-kind）。
-2. **service 参考 kind：query/list 只读观测**（`daedalus/core/cmd/daedalus-service/`）：`service.query`/`service.list` 对 systemd 单元严格只读（show 限定 curated 属性），回包载荷为 ServiceState 四字段；service 的状态变更不经本插件，一律走 `daedalus-tx` 事务通道。
-3. **audit 哈希链，含事务二级链**（`daedalus/core/internal/audit/`）：genesis 起点加 SHA-256 逐条 chaining，追加持 syscall.Flock 互斥，begin/apply/rollback 盖 TxID+TxStep 形成事务二级链，金样向量钉住字节级兼容。
-4. **state.jsonl 观测缓存**（`daedalus/core/internal/state/`）：StateEntry 追加式最新值缓存，payload 为序列化的 ServiceState；state 是派生缓存、与哈希链证据层分离，v1 状态记忆按上下文隔离（DynamicUser 命名空间）。
-5. **policy.toml enabled_kinds 网关**（`daedalus/files/system/opt/daedalus/shared/policy.toml`）：`[objectmodel].enabled_kinds` v1 仅启用 `service`，校验器接受保留 kind 而网关 fail-closed 拒执行，构建期再交叉核对声明 kind ⊆ 启用集，漏改由三点漂移测试拦截。
-6. **copilot 双通道 L0-L2**（`daedalus/plugin/copilot/`）：shell 与 transaction 两条执行通道同由本地静态 classifier 定级，LLM 从不自标注风险；L0 经 y/n 确认进 `daedalus-shell` 沙箱或事务五步（begin→propose→preview→y/n→apply），L1/L2 仅展示并提示手动执行。
-7. **插件格式与宿主零 spawn**（`daedalus/core/internal/plugin/` + `daedalus/core/cmd/daedalus-host/`）：zip + manifest + sha256 checksums 打包、解压即校验；宿主 list/inspect/verify/run-plugin/render-unit 只做发现、校验与打印启动命令，绝不 spawn 任何服务器。
-8. **i18n P0**（`daedalus/plugin/copilot/i18n.ts` + locale 文件 `daedalus/plugin/copilot/i18n/{en_US,zh_CN}.json`）：UI 字符串一律经 `t(key, ...args)` 走，en_US 必位兜底，manifest 声明与 locale 文件实物经严模式双向校验、漂移即拒。
+1. **事务状态机与三道路径安全门**（`daedalus-core/internal/tx/`）：begin→propose→apply→rollback 全程落 journal，tx.Status 沿 proposed→applying→applied→rolled_back/failed 迁移、表外迁移一律拒绝，每笔事务自带 before/after 快照与逆序回滚计划。package.set 适配器已落地（plan daedalus-pkg-kind）。
+2. **service 参考 kind：query/list 只读观测**（`daedalus-plugins/service/cmd/daedalus-service/`）：`service.query`/`service.list` 对 systemd 单元严格只读（show 限定 curated 属性），回包载荷为 ServiceState 四字段；service 的状态变更不经本插件，一律走 `daedalus-tx` 事务通道。
+3. **audit 哈希链，含事务二级链**（`daedalus-sdk/audit/`）：genesis 起点加 SHA-256 逐条 chaining，追加持 syscall.Flock 互斥，begin/apply/rollback 盖 TxID+TxStep 形成事务二级链，金样向量钉住字节级兼容。
+4. **state.jsonl 观测缓存**（`daedalus-sdk/state/`）：StateEntry 追加式最新值缓存，payload 为序列化的 ServiceState；state 是派生缓存、与哈希链证据层分离，v1 状态记忆按上下文隔离（DynamicUser 命名空间）。
+5. **policy.toml enabled_kinds 网关**（`daedalus-core/files/system/opt/daedalus/shared/policy.toml`）：`[objectmodel].enabled_kinds` v1 仅启用 `service`，校验器接受保留 kind 而网关 fail-closed 拒执行，构建期再交叉核对声明 kind ⊆ 启用集，漏改由三点漂移测试拦截。
+6. **copilot 双通道 L0-L2**（`daedalus-core/plugin/copilot/`）：shell 与 transaction 两条执行通道同由本地静态 classifier 定级，LLM 从不自标注风险；L0 经 y/n 确认进 `daedalus-shell` 沙箱或事务五步（begin→propose→preview→y/n→apply），L1/L2 仅展示并提示手动执行。
+7. **插件格式与宿主零 spawn**（`daedalus-sdk/plugin/` + `daedalus-core/cmd/daedalus-host/`）：zip + manifest + sha256 checksums 打包、解压即校验；宿主 list/inspect/verify/run-plugin/render-unit 只做发现、校验与打印启动命令，绝不 spawn 任何服务器。
+8. **i18n P0**（`daedalus-core/plugin/copilot/i18n.ts` + locale 文件 `daedalus-core/plugin/copilot/i18n/{en_US,zh_CN}.json`）：UI 字符串一律经 `t(key, ...args)` 走，en_US 必位兜底，manifest 声明与 locale 文件实物经严模式双向校验、漂移即拒。
 
 ## §10 路线图
 
@@ -390,9 +390,9 @@ Daedalus 的每个事务自带 before/after 快照与逆序回滚计划。
 | 阶段 | 内容 | 选型理由（一句） |
 | --- | --- | --- |
 | P2 | package kind + 事务适配器（路线文字非承诺） | dnf history 天然是事务日志、undo 天然是 rollback，第二个 kind 是对事务契约的第一次外部压测 **已交付 v1.1（plan: daedalus-pkg-kind，含 review critical #1 fail-closed 修复，2026-09-15）** |
-| P3 | 契约类型被真实消费（路线文字非承诺） | Condition 写回 + Generation 落地，让 §8 盘点的 A 层字段从类型存在升为语义在场，对象模型升维 |
-| P4 | daedalus-controller runtime + 外部 controller 插件加载（路线文字非承诺） | list-watch/reconcile/workqueue 把 §5 钉死的契约缝长出行为，实现接的是缝不是新协议 |
-| P5 | 各得其所的运营化（路线文字非承诺） | 文档/示例/评估 harness 让既有边界自己说话，无强制迁移，万物仍各守边界 |
+| P3 | 契约类型被真实消费（路线文字非承诺） | Condition 写回 + Generation 落地，让 §8 盘点的 A 层字段从类型存在升为语义在场，对象模型升维。**演进位置**：对象模型类型在 `daedalus-sdk/objectmodel/`（SDK 仓，公开 contract），契约缝在 `daedalus-core/internal/controller/`（core 仓，决策 25 锁定）——P3 的改动面横跨两仓，SDK 侧改类型、core 侧改消费方 |
+| P4 | daedalus-controller runtime + 外部 controller 插件加载（路线文字非承诺） | list-watch/reconcile/workqueue 把 §5 钉死的契约缝长出行为，实现接的是缝不是新协议。**演进位置**：runtime 本体落 `daedalus-core/`（core 仓），外部 controller 插件按 `daedalus-plugin` 格式进 `daedalus-plugins/`（插件仓）或第三方仓，经宿主加载 |
+| P5 | 各得其所的运营化（路线文字非承诺） | 文档/示例/评估 harness 让既有边界自己说话，无强制迁移，万物仍各守边界。**演进位置**：三仓各自演进——core 仓管运行时与镜像，SDK 仓管公开契约包，plugins 仓管能力插件；文档与示例随所在仓维护 |
 
 **决策节奏**：每阶段独立 plan、独立批准门，本文路线是方向背书不是排期承诺。
 
@@ -415,7 +415,7 @@ Daedalus 的每个事务自带 before/after 快照与逆序回滚计划。
 - 宿主绝不 spawn、绝不做任何 MCP 服务器的父进程：宿主只发现、校验并打印启动命令，真正执行者是 systemd 或用户（源：AGENTS.md「ANTI-PATTERNS」，决策 16）。
 - 审计只进哈希链 CLI：禁直写审计文件，禁改链上任何一行，所有写方统一经 `daedalus-audit`（源：AGENTS.md「5. Tamper-Evident Audit Logging」「ANTI-PATTERNS」）。
 - 不引入第二策略事实源：白名单变更只走 `shared/policy.toml`，与 `policy.Default()` 及 shellpolicy/pathguard 常量联动，漂移测试拦截漏改（源：AGENTS.md「ANTI-PATTERNS」「Policy Single Source of Truth」）。
-- 不恢复 Python/Deno 能力服务器：fs/shell/pkg/sysinfo 与审计只有 `daedalus/core` 的 Go 实现（源：AGENTS.md「CONVENTIONS · Go 唯一实现」）。
+- 不恢复 Python/Deno 能力服务器：fs/shell/pkg/sysinfo 与审计只有 Go 实现（能力服务器在 `daedalus-plugins/`，审计库在 `daedalus-sdk/audit/`；源：AGENTS.md「CONVENTIONS · Go 唯一实现」）。
 - 不手改镜像内插件安装态：`/opt/daedalus/plugins/` 是构建产物，一律经 Pack→Verify 重生成（源：AGENTS.md「ANTI-PATTERNS」）。
 - 不让资源模型吞掉长尾：诊断 shell、临时脚本、纯人读输出留在 capability 通道，controller 职责有界（源：AGENTS.md「Object Model · transactable」；叙事展开见本文 §8）。
 
