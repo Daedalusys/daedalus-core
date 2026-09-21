@@ -1,8 +1,0 @@
-# daedalus/core 模块级忽略项(plan todo 15:blueprint 嵌入数据)。
-#
-# cmd/daedalus-blueprint/blueprints/ 是构建期复制产物(just blueprint-embed 用
-# rsync 从 daedalus/plugin/blueprint/blueprints/ 复制而来),供 //go:embed
-# all:blueprints/* 编入二进制。不入库——源码侧
-# daedalus/plugin/blueprint/blueprints/ 才是唯一事实源,复制产物随时可再生成。
-cmd/daedalus-blueprint/blueprints/
-daedalus-blueprint
