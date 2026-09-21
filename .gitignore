@@ -14,8 +14,8 @@ base_image/
 # 本地开发时 3 仓以平级目录 clone（daedalus-core / daedalus-sdk / daedalus-plugins），
 # 兄弟仓各自独立 git 仓，主仓不跟踪其内容（plan todo 13；go.work 本地 dev 桥依赖此布局）。
 # 已跟踪文件不受影响（gitignore 只作用于 untracked）。
-# daedalus-sdk/
-# daedalus-plugins/
+daedalus-sdk/
+daedalus-plugins/
 
 # Orchestration / 索引缓存
 # OhMyOpenCode 工作区缓存

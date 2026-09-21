@@ -47,32 +47,39 @@ git push -u origin main
 # ============ 3. daedalus-sdk / daedalus-plugins:subtree split 拆仓 ============
 echo "=== 3/4 拆分并推送 daedalus-sdk / daedalus-plugins ==="
 # 用 git subtree split 保留各自子树历史(拆出的分支内容在仓根,无嵌套目录)
-git subtree split -P daedalus-sdk -b split-sdk
-git subtree split -P daedalus-plugins -b split-plugins
-
-# 临时目录里分别 init 两个新仓并推
+# 本机无 git-subtree 时退化为 git filter-branch --subdirectory-filter(等价变换;
+# 在临时 clone 内执行,绝不改写主仓分支)
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # --- daedalus-sdk ---
-git clone -b split-sdk . "$TMP/sdk" 2>/dev/null || {
-    # 若 clone 失败(本地分支不可 clone),退化为 worktree 方式
-    git worktree add "$TMP/sdk" split-sdk
-}
+if git subtree split -P daedalus-sdk -b split-sdk 2>/dev/null; then
+    git clone -b split-sdk . "$TMP/sdk" 2>/dev/null || git worktree add "$TMP/sdk" split-sdk
+else
+    echo "  git subtree 不可用,退化为 filter-branch --subdirectory-filter"
+    git clone -q . "$TMP/sdk"
+    ( cd "$TMP/sdk" && git filter-branch -f --subdirectory-filter daedalus-sdk -- --all >/dev/null 2>&1 )
+fi
 (
     cd "$TMP/sdk"
-    git remote add origin git@github.com:Daedalusys/daedalus-sdk.git
-    git push -u origin split-sdk:main
+    git remote set-url origin git@github.com:Daedalusys/daedalus-sdk.git 2>/dev/null \
+        || git remote add origin git@github.com:Daedalusys/daedalus-sdk.git
+    git push -u origin HEAD:main
 )
 
 # --- daedalus-plugins ---
-git clone -b split-plugins . "$TMP/plugins" 2>/dev/null || {
-    git worktree add "$TMP/plugins" split-plugins
-}
+if git subtree split -P daedalus-plugins -b split-plugins 2>/dev/null; then
+    git clone -b split-plugins . "$TMP/plugins" 2>/dev/null || git worktree add "$TMP/plugins" split-plugins
+else
+    echo "  git subtree 不可用,退化为 filter-branch --subdirectory-filter"
+    git clone -q . "$TMP/plugins"
+    ( cd "$TMP/plugins" && git filter-branch -f --subdirectory-filter daedalus-plugins -- --all >/dev/null 2>&1 )
+fi
 (
     cd "$TMP/plugins"
-    git remote add origin git@github.com:Daedalusys/daedalus-plugins.git
-    git push -u origin split-plugins:main
+    git remote set-url origin git@github.com:Daedalusys/daedalus-plugins.git 2>/dev/null \
+        || git remote add origin git@github.com:Daedalusys/daedalus-plugins.git
+    git push -u origin HEAD:main
 )
 
 # 清理临时 split 分支(保留本地分支亦可,删除避免污染主仓)
@@ -84,14 +91,18 @@ echo "=== 4/4 配置 main 分支保护 ==="
 # CI 在 todo 14 配置,届时把 required_status_checks.contexts 填上实际 job 名;
 # 当前先启用 PR review 门,CI 就绪后补 contexts。
 for repo in daedalus-core daedalus-sdk daedalus-plugins; do
+    # 注意:必须用 --input 传 JSON body;gh -f 会把 true/1/null 当字符串,
+    # GitHub API 校验失败返回 422(已踩坑验证)
     gh api -X PUT "repos/Daedalusys/${repo}/branches/main/protection" \
         -H "Accept: application/vnd.github+json" \
-        -f "required_status_checks[strict]=true" \
-        -f "required_status_checks[contexts][]=test" \
-        -f "enforce_admins=true" \
-        -f "required_pull_request_reviews[required_approving_review_count]=1" \
-        -f "restrictions=null" \
-        >/dev/null && echo "  ${repo}:main 分支保护已启用(PR + 1 review + CI)"
+        --input - <<'EOF' >/dev/null && echo "  ${repo}:main 分支保护已启用(PR + 1 review + CI)"
+{
+  "required_status_checks": {"strict": true, "contexts": ["test"]},
+  "enforce_admins": true,
+  "required_pull_request_reviews": {"required_approving_review_count": 1},
+  "restrictions": null
+}
+EOF
 done
 
 echo "=== 完成:3 仓已创建并推送 ==="
