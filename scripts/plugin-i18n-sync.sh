@@ -19,7 +19,7 @@
 # 用法: ./scripts/plugin-i18n-sync.sh [--autofix] [--no-cross-check] [plugin-dir]
 #   默认(无 --autofix):严格校验,有不一致 exit 1
 #   --autofix:        以 i18n/ 目录为准,自动重写 manifest 的 i18n 字段
-#   --no-cross-check: 关闭 Go 侧 i18n key 校验(默认开启:扫描 daedalus/core/
+#   --no-cross-check: 关闭 Go 侧 i18n key 校验(默认开启:扫描 daedalus-core/
 #                     下 i18n.T("...") 字面量 key,校验 locale json 有对应条目)
 #   plugin-dir:      插件根目录(默认当前目录;含 daedalus.plugin.json 与 i18n/)
 set -euo pipefail
@@ -55,18 +55,18 @@ I18N_DIR="$plugin_dir/i18n"
 command -v jq >/dev/null || { echo "错误:需要 jq(仓库处理 JSON 的约定工具)" >&2; exit 1; }
 
 # ── Go 侧 i18n key 校验(--check-cross,默认开启;决策 9:融入本脚本,不做独立工具)──
-# 扫描 daedalus/core/ 下 i18n.T("...") 字符串字面量首参 key(grep 提取,不用
-# go/ast:工具链调用太重,误报时才升级),逐个校验 internal/i18n/locales/ 下
+# 扫描 daedalus-core/ 下 i18n.T("...") 字符串字面量首参 key(grep 提取,不用
+# go/ast:工具链调用太重,误报时才升级),逐个校验 daedalus-sdk/i18n/locales/ 下
 # en_US.json 与 zh_CN.json 均有条目;任一缺即差集报错 exit 1。排除 *_test.go。
 # locales/ 目录不存在(任务 1 的包未建)时跳过且不失败 —— 向后兼容窗口。
 check_go_i18n_keys() {
-    local locales_dir="$ROOT/daedalus/core/internal/i18n/locales"
+    local locales_dir="$ROOT/daedalus-sdk/i18n/locales"
     [ -d "$locales_dir" ] || { echo "⊘ Go i18n 包未就位,跳过 cross-check"; return 0; }
 
     # 提取全部 Go 侧 key:只匹配 i18n.T("key" 形式(字符串字面量首参,
     # 不匹配变量传递);--include 排除 *_test.go(测试 T() 调用不参与生产校验)。
     local keys
-    keys=$(grep -rhoE 'i18n\.T\("([a-z0-9_.]+)"' "$ROOT/daedalus/core/" \
+    keys=$(grep -rhoE 'i18n\.T\("([a-z0-9_.]+)"' "$ROOT/daedalus-core/" \
         --include='*.go' --exclude='*_test.go' \
         | sed 's/.*"\(.*\)"/\1/' | sort -u || true)
     [ -n "$keys" ] || return 0   # 任务 4 迁移未跑,尚无任何 Go 侧 key

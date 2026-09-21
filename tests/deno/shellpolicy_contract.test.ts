@@ -1,6 +1,6 @@
 // 跨语言契约测试(Go ↔ Deno):copilot policy.ts 的冻结副本必须与
-// daedalus/core/internal/shellpolicy 的默认常量、以及单一事实源
-// daedalus/files/system/opt/daedalus/shared/policy.toml 三点一致。
+// daedalus-sdk/shellpolicy 的默认常量、以及单一事实源
+// files/system/opt/daedalus/shared/policy.toml 三点一致。
 // (计划 todo 14:替代已随 task 5 删除的 py↔deno parity 测试。)
 //
 // ⚠ 同步义务:任何人修改 Go 侧 internal/shellpolicy 或 policy.toml 的
@@ -12,16 +12,16 @@ import {
   ALLOWED_PATH_PREFIXES,
   BLOCKED_PATHS,
   DEFAULT_ALLOW_COMMANDS,
-} from "../../daedalus/plugin/copilot/policy.ts";
+} from "../../plugin/copilot/policy.ts";
 
 // 仓库根:本文件位于 <root>/tests/deno/,上溯两级。
 const repoRoot = new URL("../../", import.meta.url);
 const goSourceUrl = new URL(
-  "daedalus/core/internal/shellpolicy/shellpolicy.go",
+  "../daedalus-sdk/shellpolicy/shellpolicy.go",
   repoRoot,
 );
 const policyTomlUrl = new URL(
-  "daedalus/files/system/opt/daedalus/shared/policy.toml",
+  "files/system/opt/daedalus/shared/policy.toml",
   repoRoot,
 );
 
@@ -94,7 +94,7 @@ Deno.test("跨语言契约 - ALLOW_COMMANDS 环境变量为整体替换(REPLACE)
   // 语义契约(Go shellpolicy.ResolveAllowCommands 文档同源):
   //   非空 env → 逗号分隔、逐项 trim、丢弃空项,整体替换默认集(不取并集);
   //   空/缺省 env → 回退默认 15 项。
-  const policyUrl = new URL("daedalus/plugin/copilot/policy.ts", repoRoot);
+  const policyUrl = new URL("plugin/copilot/policy.ts", repoRoot);
   const probe = `
     const { ALLOW_COMMANDS, DEFAULT_ALLOW_COMMANDS } = await import("${policyUrl.href}");
     console.log(JSON.stringify({

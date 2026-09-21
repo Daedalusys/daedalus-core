@@ -1,5 +1,5 @@
 import { expect } from "jsr:@std/expect@1";
-import type { CommandProposal, RiskAssessment } from "../../daedalus/plugin/copilot/policy.ts";
+import type { CommandProposal, RiskAssessment } from "../../plugin/copilot/policy.ts";
 import {
   parseProposal,
   buildSystemPrompt,
@@ -14,7 +14,7 @@ import {
   L2_DANGER_PATTERNS,
   classifyProposal,
   classifyTxProposal,
-} from "../../daedalus/plugin/copilot/policy.ts";
+} from "../../plugin/copilot/policy.ts";
 
 Deno.test("Copilot Policy & Validation - exports validators and constants matching gateway definitions", () => {
   expect(typeof validateCommand).toBe("function");

@@ -1,6 +1,6 @@
 import { expect } from "jsr:@std/expect@1";
 import { join } from "jsr:@std/path@1";
-import { readConfig, translate, revise } from "../../daedalus/plugin/copilot/llm.ts";
+import { readConfig, translate, revise } from "../../plugin/copilot/llm.ts";
 
 let tempDir: string;
 // 隔离配置文件路径：指向临时目录下【不存在】的文件。

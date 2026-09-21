@@ -9,7 +9,7 @@
 # 绝不吞错误。步骤:
 #   (a) just go-build-demo 重建 demo 二进制(-tags demo 路径重写);
 #   (b) 安装 daedalus-audit / daedalus-shell 到镜像布局位
-#       daedalus/files/system/usr/local/bin/(deno --allow-run 旗标放行的
+#       daedalus-core/files/system/usr/local/bin/(deno --allow-run 旗标放行的
 #       路径,已被 .gitignore 保护,不入库);
 #   (c) mktemp -d 建临时目录,用 daedalus-plugin-pack -verify --keep 解包
 #       5 个官方插件 zip(fs/shell/pkg/sysinfo/copilot),解压即 sha256 校验;
@@ -22,11 +22,11 @@ prep_copilot() {
     just go-build-demo
 
     # (b) 镜像布局位:deno --allow-run 旗标(经 demo 重写后)只放行
-    # ./daedalus/files/system/usr/local/bin/... 下的路径;audit/shell 必须
+    # ./daedalus-core/files/system/usr/local/bin/... 下的路径;audit/shell 必须
     # 真实存在于此,deno 沙箱才允许 spawn。
-    local bin_layout="daedalus/files/system/usr/local/bin"
-    install -Dm0755 daedalus/core/bin/daedalus-audit "${bin_layout}/daedalus-audit"
-    install -Dm0755 daedalus/core/bin/daedalus-shell "${bin_layout}/daedalus-shell"
+    local bin_layout="daedalus-core/files/system/usr/local/bin"
+    install -Dm0755 daedalus-core/bin/daedalus-audit "${bin_layout}/daedalus-audit"
+    install -Dm0755 daedalus-core/bin/daedalus-shell "${bin_layout}/daedalus-shell"
 
     # (c) 解包 5 个官方插件安装态到临时目录;解压即校验,任一摘要不符
     # daedalus-plugin-pack 直接非零退出。
@@ -34,8 +34,8 @@ prep_copilot() {
     plugdir=$(mktemp -d)
     local p
     for p in fs shell pkg sysinfo copilot; do
-        daedalus/core/bin/daedalus-plugin-pack \
-            -verify "daedalus/core/bin/daedalus.${p}.plugin.zip" --keep "${plugdir}/daedalus.${p}"
+        daedalus-core/bin/daedalus-plugin-pack \
+            -verify "daedalus-core/bin/daedalus.${p}.plugin.zip" --keep "${plugdir}/daedalus.${p}"
     done
 
     # (d) copilot 内 audit.ts/exec.ts 用 env 解析辅助二进制;必须与上面

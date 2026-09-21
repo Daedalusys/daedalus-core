@@ -1,0 +1,40 @@
+{
+  "id": "daedalus.shell",
+  "name": "Daedalus Shell",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-shell",
+  "permissions": {
+    "read": [
+      "/home",
+      "/var/log",
+      "/tmp",
+      "/proc",
+      "/sys",
+      "/etc/os-release",
+      "/usr/lib/os-release",
+      "/etc/fedora-release",
+      "/etc/almalinux-release"
+    ],
+    "write": [],
+    "run": [
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin"
+    ]
+  },
+  "tools": [
+    "shell_exec"
+  ],
+  "checksums": {
+    "bin/daedalus-shell": "sha256:da654e87c6db2e3c9f68f6ca6a58800db764ac8b93f021816fc2c95462fc1f64",
+    "daedalus.plugin.json": "sha256:4c1aa9ebf851c3069a3ec713c0be7c747e0840f5f57c97b120e532f42d883da9"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}

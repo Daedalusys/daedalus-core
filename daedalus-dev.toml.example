@@ -5,7 +5,7 @@
 
 # dev 树里"镜像布局"的根目录;entrypoint 里的 /opt/daedalus 改写为
 # {prefix}/opt/daedalus,/usr/local/bin 同理。从仓库根跑就用默认。
-prefix = "./daedalus/files/system"
+prefix = "./daedalus-core/files/system"
 
 # Deno 二进制绝对路径;留空走 $PATH (exec.LookPath)。deno 必须能解析到,
 # 否则 demo 二进制也拒启。

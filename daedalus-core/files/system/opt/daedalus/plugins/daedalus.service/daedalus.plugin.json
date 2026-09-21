@@ -1,0 +1,39 @@
+{
+  "id": "daedalus.service",
+  "name": "Daedalus Service",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-service",
+  "permissions": {
+    "read": [
+      "/etc/systemd",
+      "/run/systemd",
+      "/proc/1/cmdline"
+    ],
+    "write": [],
+    "run": [
+      "/usr/bin/systemctl"
+    ]
+  },
+  "tools": [
+    "service.query",
+    "service.list"
+  ],
+  "resources": [
+    {
+      "kind": "service",
+      "name": "*",
+      "desired_state": ""
+    }
+  ],
+  "checksums": {
+    "bin/daedalus-service": "sha256:58210c03dbdf3a00fa068ef9df35963f3e56d053168f2ba88f5e86f8adfded0a",
+    "daedalus.plugin.json": "sha256:fccda1a99918c85a097371ac6a9393d5d327bcb4f938f37296f4598b5f64f3a6"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}

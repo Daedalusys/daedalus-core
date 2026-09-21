@@ -10,6 +10,13 @@ base_image/
 .jj/
 .jj-*.json
 
+# ===== 兄弟仓（3 仓平级 clone 形态） =====
+# 本地开发时 3 仓以平级目录 clone（daedalus-core / daedalus-sdk / daedalus-plugins），
+# 兄弟仓各自独立 git 仓，主仓不跟踪其内容（plan todo 13；go.work 本地 dev 桥依赖此布局）。
+# 已跟踪文件不受影响（gitignore 只作用于 untracked）。
+# daedalus-sdk/
+# daedalus-plugins/
+
 # Orchestration / 索引缓存
 # OhMyOpenCode 工作区缓存
 .omo/
@@ -19,10 +26,15 @@ base_image/
 # ===== 构建产物 =====
 # Go 模块依赖: 仅入库 go.mod + go.sum;vendor/ 不入库,构建期 `go build` 从 module proxy
 # 下载到 GOMODCACHE(首次构建需联网);go mod verify 仍可校验 go.sum 完整性。
-daedalus/core/vendor/
+daedalus-core/vendor/
 
 # Daedalus Go 核心工作区的本机构建产物(静态二进制与插件 zip 包,不进版本控制)
-daedalus/core/bin/
+daedalus-core/bin/
+
+# go.work 本地 dev 桥(plan todo 13):go.work 是 3 仓平级 clone 后的本地工作区文件,
+# 不入库;模板 go.work.example 入库(见 daedalus-core/go.work.example 等 8 个)。
+go.work
+go.work.sum
 
 # demo 构建的本地 dev 路径配置,不入库;仅 .example 模板入库
 daedalus-dev.toml
@@ -37,12 +49,19 @@ justfile.local
 !.env.example
 
 # 能力插件源目录的构建期二进制(just plugin-pack 拷入用于打包;不入库)
-daedalus/plugin/*/bin/
+# 注:daedalus-plugins/ 整体已被上方"兄弟仓"忽略,此模式为显式防御(拆仓后
+# plugins 仓自带 .gitignore 兜底)
+daedalus-plugins/*/bin/
 
-# 镜像安装态中的 Go 编译产物(just plugin-pack 生成;非源码,不入库;同 daedalus/core/bin/ 性质)
+# 镜像安装态中的 Go 编译产物(just plugin-pack 生成;非源码,不入库;同 daedalus-core/bin/ 性质)
 # 包含 4 个能力插件安装态 (daedalus.fs/shell/pkg/sysinfo) 和 3 个 /usr/local/bin 工具
-daedalus/files/system/opt/daedalus/plugins/daedalus.*/bin/
-daedalus/files/system/usr/local/bin/daedalus-*
+daedalus-core/files/system/opt/daedalus/plugins/daedalus.*/bin/
+daedalus-core/files/system/usr/local/bin/daedalus-*
+
+# blueprint embed 暂存目录(just blueprint-embed 用 rsync 从
+# daedalus-plugins/blueprint/blueprints/ 复制到 cmd 同目录供 //go:embed;不入库)
+# 注:同被 daedalus-plugins/ 整体忽略覆盖,显式列出作防御
+daedalus-plugins/blueprint/cmd/daedalus-blueprint/blueprints/
 
 # 通用构建/临时目录(当前无实例;防御性预置)
 build/
@@ -77,7 +96,7 @@ Thumbs.db
 .opencode/*
 
 # ===== 本地环境 / 密钥（防御性） =====
-# .env / .env.* 的忽略规则在文件前面 line 35-36(那里有 `!.env.example` 例外);
+# .env / .env.* 的忽略规则在文件前面 line 47-48(那里有 `!.env.example` 例外);
 # 这里只留 .local 兜底。避免重复 .env.* 后覆盖前面的 ! 例外,把 .env.example
 # 错误地一并忽略掉(已踩坑验证过)。
 *.local

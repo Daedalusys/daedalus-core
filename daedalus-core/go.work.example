@@ -1,0 +1,12 @@
+go 1.25.0
+
+use (
+	.
+	../daedalus-sdk
+	../daedalus-plugins/fs
+	../daedalus-plugins/shell
+	../daedalus-plugins/pkg
+	../daedalus-plugins/sysinfo
+	../daedalus-plugins/service
+	../daedalus-plugins/blueprint
+)
