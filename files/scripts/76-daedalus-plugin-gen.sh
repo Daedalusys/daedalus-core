@@ -50,7 +50,7 @@ POLICY="${ROOT%/}/opt/daedalus/shared/policy.toml"
 # tools/list 交叉核对 + landlock/credentials drop-in 沙箱语义防回归。blueprint 的
 # ReadWritePaths 输出目录由单元自带(76 脚本第 7 条只禁 shell/fs 的 /opt 遮蔽/重绑定,
 # ReadWritePaths 不拦 policy 读取,保留放行合法)。
-CAPS="fs shell pkg sysinfo service blueprint"
+CAPS="fs shell pkg sysinfo service blueprint dupe"
 
 fail() { echo "76-daedalus-plugin-gen: 错误: $*" >&2; exit 1; }
 
