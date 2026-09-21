@@ -10,3 +10,6 @@ daedalus-blueprint
 # go.work 本地 dev 桥(3 仓平级 clone 后生成;不入库;模板 go.work.example 入库)
 go.work
 go.work.sum
+
+# OhMyOpenCode 编排状态(不入库)
+.omo/
