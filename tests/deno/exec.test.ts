@@ -346,12 +346,17 @@ Deno.test("Copilot Exec - default resolution finds the real Go daedalus-shell bi
   const origEnv = Deno.env.get("DAEDALUS_SHELL_BIN");
   try {
     Deno.env.delete("DAEDALUS_SHELL_BIN");
-    // 通过未 mock 的解析逻辑间接验证：直接调用模块内解析无导出，
+    // 通过未 mock 的解析逻辑间接验证:直接调用模块内解析无导出,
     // 因此这里以 recordAudit 同款策略断言仓库构建产物存在。
     const repoBinary = "daedalus-core/bin/daedalus-shell";
     const parentBinary = "../daedalus-core/bin/daedalus-shell";
+    // 三仓拆分后 core 的 `./cmd/...` 不再构建 shell(主源在 ../daedalus-plugins/shell),
+    // CI test job 也不检出插件仓;仓库内真实存在的 Go 二进制实物是入库安装态
+    // files/system/usr/local/bin/daedalus-shell(plugin-pack 产物,随仓 checkout)。
+    // 与上方 dev 构建产物候选并列,覆盖 post-split 布局。
+    const installStateBinary = "files/system/usr/local/bin/daedalus-shell";
     let found = false;
-    for (const candidate of [repoBinary, parentBinary]) {
+    for (const candidate of [repoBinary, parentBinary, installStateBinary]) {
       try {
         Deno.statSync(candidate);
         found = true;
