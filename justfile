@@ -35,7 +35,16 @@ fetch-plugins:
     # 假设 workspace 根 cwd,拆仓后必挂(exit 127);脚本自带 CORE_ROOT 定位,直接相对调用。
     root="$(cd .. && pwd)"
     cd "$root/daedalus-core"
-    bash scripts/fetch-plugins.sh
+    # 幂等衔接:CI build-image job 已把 release zip 下到 /tmp/plugins-release,
+    # 脚本默认腿 gh release download 拒覆盖已存在文件(rc=1)→ 经
+    # DAEDALUS_FETCH_ZIP_DIR 环境变量把已就位目录以 --local-zip-dir 传入,
+    # 跳过重复下载、保留解压即校验(fail-closed);本机不设该变量,走 gh 默认腿。
+    zipdir="${DAEDALUS_FETCH_ZIP_DIR:-}"
+    if [ -n "$zipdir" ]; then
+        bash scripts/fetch-plugins.sh --local-zip-dir "$zipdir"
+    else
+        bash scripts/fetch-plugins.sh
+    fi
 
 # Build Daedalus container image
 # --network=host:让容器共享 host 网络栈,容器内 127.0.0.1 才指 host(用 host 的
