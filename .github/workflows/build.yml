@@ -296,10 +296,15 @@ jobs:
 
       - name: Build Daedalus Container Image
         # just build = sync(scripts/sync-daedalus.sh 把 files/ 同步进 base_image
-        # vendor 树)+ podman build。镜像内 76-daedalus-plugin-gen.sh 从安装态
-        # 渲染 systemd ExecStart 并自校验。
+        # vendor 树,CI 上从 AlmaLinux/atomic-desktop 浅克隆 bootstrap)+ podman build。
+        # 镜像内 76-daedalus-plugin-gen.sh 从安装态渲染 systemd ExecStart 并自校验。
+        # DAEDALUS_FETCH_ZIP_DIR:上方步骤已把 release zip 下到 /tmp/plugins-release,
+        # fetch-plugins 腿经 --local-zip-dir 复用(gh download 拒覆盖同名文件),
+        # 解压即校验语义不变。
         shell: bash
         working-directory: daedalus-core
+        env:
+          DAEDALUS_FETCH_ZIP_DIR: /tmp/plugins-release
         run: just build
 
       - name: Verify Image Zero-Residue
