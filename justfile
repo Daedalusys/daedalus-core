@@ -28,7 +28,14 @@ sync:
 # --local-zip-dir 指向本地 zip 目录兜底(见 scripts/fetch-plugins.sh --help)。
 # 依赖 daedalus-core/bin/daedalus-plugin-pack(先 just go-build / plugin-pack)。
 fetch-plugins:
-    bash daedalus-core/scripts/fetch-plugins.sh
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # 规范 cd 形态(与 go-build/go-test/plugin-pack 同款):CI 的 run 步在
+    # daedalus-core 子目录内调 just,旧写法 `bash daedalus-core/scripts/...`
+    # 假设 workspace 根 cwd,拆仓后必挂(exit 127);脚本自带 CORE_ROOT 定位,直接相对调用。
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
+    bash scripts/fetch-plugins.sh
 
 # Build Daedalus container image
 # --network=host:让容器共享 host 网络栈,容器内 127.0.0.1 才指 host(用 host 的
@@ -74,7 +81,13 @@ verify-image:
 # 3 仓平级布局守门(plan todo 13):检查 daedalus-sdk / daedalus-plugins 兄弟仓
 # 是否以平级目录形态就位(go.work 本地 dev 桥的前置);缺哪个报哪个,exit 1。
 verify-dev-layout:
-    bash daedalus-core/scripts/verify-dev-layout.sh
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # 同款规范 cd 形态:旧写法假设 workspace 根 cwd(拆仓前形态);脚本自带
+    # SCRIPT_DIR→CORE_ROOT 定位,从仓根相对调用即可。
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
+    bash scripts/verify-dev-layout.sh
 
 # 打包 5 个能力服务器(fs/shell/pkg/sysinfo/service)为 daedalus-plugin 并安装进镜像树
 # (计划 todo 9;service 腿 = aios 计划 todo 11;构建镜像前执行)
