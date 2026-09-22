@@ -2,11 +2,16 @@
 # daedalus-core 仓 CI(拆仓后本文件即 core 仓的 .github/workflows/build.yml)。
 #
 # 布局约定(post-split 3 仓平级 clone):
-#   - 本 workflow 的 checkout root = core 仓根(含 go.mod / tests/deno/ / files/ /
-#     plugin/ / cmd/ / justfile;tests/deno 的 repoRoot 解析即此根)。
-#   - daedalus-sdk 以兄弟仓形态 checkout 到 ../daedalus-sdk,ref 用 pinned-tag
-#     策略(review Oracle Issue 3 + Issue 7):版本从 go.mod 的
-#     `require github.com/Daedalusys/daedalus-sdk vX.Y.Z` 提取,不写死字面量。
+#   - 主仓检出到 workspace 下的 daedalus-core/ 子目录(GH Actions 禁止 checkout
+#     逃出 GITHUB_WORKSPACE,故不能用 ../daedalus-sdk 兄弟形态);所有 run 步骤
+#     以 working-directory: daedalus-core 运行,go.mod / tests/deno/ / files/ /
+#     plugin/ / cmd/ / justfile 的相对引用基准即此根。
+#   - daedalus-sdk checkout 到 workspace 下的 daedalus-sdk/ 子目录,从
+#     daedalus-core/ 解析 ../daedalus-sdk 与 tests/deno 的 ../daedalus-sdk/...
+#     正好落到平级兄弟位置。ref 用 pinned-tag 策略(review Oracle Issue 3 +
+#     Issue 7):版本从 go.mod 的 `require github.com/Daedalusys/daedalus-sdk
+#     vX.Y.Z` 提取,不写死字面量;占位版本 v0.0.0(本地 replace 开发形态)或缺失
+#     时输出空 ref 走 SDK 默认分支,不在 CI 启动期 fail-closed。
 #   - daedalus-plugins 的 release zip 在镜像构建 job 内联下载(review Oracle
 #     Issue 5:原 plan 把下载拆到 todo 15,但 workflow 是 todo 14 写的,漏集成)。
 #   - testdata drift 守门放本 workflow(review Oracle Issue 3 修正:SDK 仓独立
@@ -60,41 +65,49 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # 主仓检出到 daedalus-core 子目录:go.mod 的 replace => ../daedalus-sdk
+          # 与 tests/deno 的相对引用经父目录解析到 workspace 下的兄弟仓;把主仓
+          # 检出到子目录是唯一不逃出 GITHUB_WORKSPACE 的合法布局。
+          path: daedalus-core
 
       - name: Extract SDK version from go.mod
         # pinned-tag 策略(review Oracle Issue 7):SDK 版本从 go.mod 的
         # `require github.com/Daedalusys/daedalus-sdk vX.Y.Z` 提取,传给下方
         # SDK checkout 的 ref: v$SDK_VERSION;不写死字面量占位符。
-        # 占位伪版本(v0.0.0-xxx,replace 本地开发形态)不是真实 tag,fail-closed
-        # 拒启:先发布 SDK tag 并更新 go.mod 才能跑 CI。
+        # 占位版本(v0.0.0,replace 本地开发形态)或缺失一律放行:输出空的
+        # sdk_version,SDK checkout 回退默认分支;不在 CI 启动期 fail-closed。
         id: sdk-version
         shell: bash
+        working-directory: daedalus-core
         run: |
           SDK_VERSION=$(sed -n 's/.*daedalus-sdk v\([0-9.]*\).*/\1/p' go.mod | head -1)
           if [ -z "$SDK_VERSION" ] || [ "$SDK_VERSION" = "0.0.0" ]; then
-            echo "ERROR: go.mod 中 daedalus-sdk 版本缺失或为占位伪版本($SDK_VERSION);请先发布 SDK tag 并更新 go.mod 为 vX.Y.Z" >&2
-            exit 1
+            echo "占位版本或版本缺失($SDK_VERSION);输出空 sdk_version,SDK checkout 走默认分支" >&2
+            SDK_VERSION=""
           fi
           echo "sdk_version=$SDK_VERSION" >> "$GITHUB_OUTPUT"
           echo "SDK_VERSION=$SDK_VERSION"
 
       - name: Checkout daedalus-sdk (sibling, pinned tag)
-        # review Oracle Issue 3:SDK 必须 checkout 到 ../daedalus-sdk(平级兄弟),
-        # 否则 go.mod 的 `replace => ../daedalus-sdk` 与 tests/deno 的
-        # `../daedalus-sdk/...` 相对引用在 CI 中找不到模块。
+        # review Oracle Issue 3:SDK 必须检出到 workspace 下的 daedalus-sdk 子目录,
+        # 与主仓 daedalus-core 子目录平级,使 go.mod 的 `replace => ../daedalus-sdk`
+        # 与 tests/deno 的 `../daedalus-sdk/...` 相对引用在 CI 中可解析。
+        # ref 为空(go.mod 为占位版本)时 checkout SDK 默认分支。
         uses: actions/checkout@v4
         with:
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
-          ref: v${{ steps.sdk-version.outputs.sdk_version }}
+          ref: ${{ steps.sdk-version.outputs.sdk_version != '' && format('v{0}', steps.sdk-version.outputs.sdk_version) || '' }}
 
       - name: Set Up Go Toolchain
         # go.mod pins `go 1.25.0`;runner image 可能更老,显式 pin。
         # setup-go 缓存 go.sum;vendor/ 不入库,首次构建走 module proxy。
+        # 主仓在 daedalus-core 子目录,缓存依赖文件路径须带前缀。
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache-dependency-path: go.sum
+          cache-dependency-path: daedalus-core/go.sum
 
       - name: Set Up Deno Runtime
         # copilot 测试套件 (tests/deno/) 由 deno 跑。
@@ -106,6 +119,7 @@ jobs:
         # test job 的多个 gate(go-test / 后续 recipe)都用 just 编排;
         # ubuntu-latest 默认不带 just,必须显式装。
         shell: bash
+        working-directory: daedalus-core
         run: |
           sudo apt-get update -y || true
           sudo apt-get install -y just
@@ -116,6 +130,7 @@ jobs:
         # (.gitignore),但 CI clone 出来没有该文件 → just 解析期 fail,整条
         # pipeline 挂掉。touch 一个空文件兜底:空 import 等价无操作。
         shell: bash
+        working-directory: daedalus-core
         run: |
           touch justfile.local
           ls -la justfile.local
@@ -123,22 +138,26 @@ jobs:
       - name: Go Test Gate
         # Go 全量单元测试(含 controller/tx 契约缝测试)。
         shell: bash
+        working-directory: daedalus-core
         run: just go-test
 
       - name: Deno Test Suite
         # copilot 测试套件(含 shellpolicy_contract 跨语言契约,读 ../daedalus-sdk)。
         shell: bash
+        working-directory: daedalus-core
         run: deno test --allow-all tests/deno/
 
       - name: i18n Keys Gate
         # i18n 键集门禁:en↔zh 对称 + t() 字面量双 locale 存在性。
         shell: bash
+        working-directory: daedalus-core
         run: bash tests/deno/i18n_keys.test.sh
 
       - name: testdata drift gate (production policy.toml ↔ SDK testdata)
         # review Oracle Issue 3:生产 policy.toml 与 SDK 的 testdata 副本必须
         # 一致,否则 SDK 的 3 点漂移测试校验的是过期副本。不一致即 fail。
         shell: bash
+        working-directory: daedalus-core
         run: |
           diff files/system/opt/daedalus/shared/policy.toml ../daedalus-sdk/policy/testdata/policy.toml
           echo "OK: 生产 policy.toml 与 SDK testdata 一致"
@@ -163,42 +182,52 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # 同 test job:主仓检出到 daedalus-core 子目录,不逃出 GITHUB_WORKSPACE。
+          path: daedalus-core
 
       - name: Extract SDK version from go.mod
-        # 同 test job:pinned-tag 策略,SDK checkout 的 ref 从 go.mod 提取。
+        # 同 test job:pinned-tag 策略,SDK checkout 的 ref 从 go.mod 提取;
+        # 占位版本 v0.0.0 或缺失时输出空 sdk_version,SDK checkout 走默认分支。
         id: sdk-version
         shell: bash
+        working-directory: daedalus-core
         run: |
           SDK_VERSION=$(sed -n 's/.*daedalus-sdk v\([0-9.]*\).*/\1/p' go.mod | head -1)
           if [ -z "$SDK_VERSION" ] || [ "$SDK_VERSION" = "0.0.0" ]; then
-            echo "ERROR: go.mod 中 daedalus-sdk 版本缺失或为占位伪版本($SDK_VERSION)" >&2
-            exit 1
+            echo "占位版本或版本缺失($SDK_VERSION);输出空 sdk_version,SDK checkout 走默认分支" >&2
+            SDK_VERSION=""
           fi
           echo "sdk_version=$SDK_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Checkout daedalus-sdk (sibling, pinned tag)
+        # 同 test job:SDK 检出到 workspace 下的 daedalus-sdk 子目录;ref 为空
+        # (go.mod 为占位版本)时 checkout 默认分支。
         uses: actions/checkout@v4
         with:
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
-          ref: v${{ steps.sdk-version.outputs.sdk_version }}
+          ref: ${{ steps.sdk-version.outputs.sdk_version != '' && format('v{0}', steps.sdk-version.outputs.sdk_version) || '' }}
 
       - name: Set up Podman / Buildah
         shell: bash
+        working-directory: daedalus-core
         run: |
           sudo apt-get update -y || true
           sudo apt-get install -y podman qemu-user-static just
 
       - name: Set Up Go Toolchain
+        # 主仓在 daedalus-core 子目录,缓存依赖文件路径须带前缀。
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-          cache-dependency-path: go.sum
+          cache-dependency-path: daedalus-core/go.sum
 
       - name: Prepare justfile.local (gitignored stub for import)
         # 同 test job:CI clone 出来没有 justfile.local,just 解析会 fail。
         # 必须先于第一个 `just` 调用(下方 Build Core Binaries)执行。
         shell: bash
+        working-directory: daedalus-core
         run: |
           touch justfile.local
           ls -la justfile.local
@@ -207,14 +236,16 @@ jobs:
         # 构建 core 仓全部 Go 静态二进制到 bin/(含 daedalus-host / daedalus-audit /
         # daedalus-shell / daedalus-plugin-pack / daedalus-tx / daedalus-smoke)。
         shell: bash
+        working-directory: daedalus-core
         run: just go-build
 
       - name: Download plugin zips from daedalus-plugins release
         # review Oracle Issue 5:镜像构建 job 内联 plugin zip 下载(跨仓集成)。
         # daedalus-plugins 仓 release 出 6 个 *.plugin.zip;gh 在 runner 预装且
         # 经 GITHUB_TOKEN 认证。todo 15 的 fetch-plugins.sh 只做本地等价兜底,
-        # 不重复描述本 workflow 步骤。
+        # 不重复描述本 workflow 步骤。下载目录用绝对路径 /tmp,不受 cwd 影响。
         shell: bash
+        working-directory: daedalus-core
         run: |
           mkdir -p /tmp/plugins-release
           gh release download --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --dir /tmp/plugins-release/
@@ -225,6 +256,7 @@ jobs:
         # 拒绝安装(fail-closed)。安装态落 files/system/opt/daedalus/plugins/,
         # 经 just build 的 sync 腿同步进镜像 /opt/daedalus/plugins。
         shell: bash
+        working-directory: daedalus-core
         run: |
           for zip in /tmp/plugins-release/*.plugin.zip; do
             id=$(basename "$zip" .plugin.zip)   # daedalus.fs / daedalus.shell / ...
@@ -240,6 +272,7 @@ jobs:
         # files/system/usr/local/bin/(76-daedalus-plugin-gen.sh 与 copilot
         # wrapper 的 deno --allow-run 旗标放行路径依赖)。
         shell: bash
+        working-directory: daedalus-core
         run: |
           install -Dm0755 bin/daedalus-host files/system/usr/local/bin/daedalus-host
           install -Dm0755 bin/daedalus-audit files/system/usr/local/bin/daedalus-audit
@@ -252,17 +285,20 @@ jobs:
         # vendor 树)+ podman build。镜像内 76-daedalus-plugin-gen.sh 从安装态
         # 渲染 systemd ExecStart 并自校验。
         shell: bash
+        working-directory: daedalus-core
         run: just build
 
       - name: Verify Image Zero-Residue
         # 断言镜像 /opt 内无 Python 源码/字节码、__pycache__、Deno 测试文件、
         # Go 模块/依赖残留。任一新布局构建产物泄漏进 rootfs 即 exit 1。
         shell: bash
+        working-directory: daedalus-core
         run: |
           podman run --rm localhost/daedalus-os:latest sh -c 'test -z "$(find /opt -name "*.py" -o -name "*.pyc" -o -name "__pycache__" -o -name "*.test.ts" -o -name "go.mod" -o -type d -name vendor 2>/dev/null)"' || { echo "ERROR: residue found in image /opt"; exit 1; }
 
       - name: Verify Image & Bootc Container Lint
         shell: bash
+        working-directory: daedalus-core
         run: |
           podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release || true
           podman run --rm localhost/daedalus-os:latest bootc --version || true
@@ -283,6 +319,7 @@ jobs:
       - name: Push OCI image to ghcr.io
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
         shell: bash
+        working-directory: daedalus-core
         env:
           OWNER_LOWER: ${{ github.repository_owner }}
         run: |
@@ -307,20 +344,23 @@ jobs:
         # rootless 存储里。用 save/load 把镜像从用户存储转交 root 存储。
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
         shell: bash
+        working-directory: daedalus-core
         run: podman save --format oci-archive -o /tmp/daedalus-os.oci.tar localhost/daedalus-os:latest
 
       - name: Build qcow2 disk image (bootc-image-builder, rootful)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
         shell: bash
+        working-directory: daedalus-core
         run: |
           sudo podman load -i /tmp/daedalus-os.oci.tar
           mkdir -p output/qcow2
           # rootful podman 的存储在 /var/lib/containers/storage(load 已导入),
           # builder 容器内硬编码该路径找镜像 → 同名对同名挂载(root 存储进容器)
+          # 输出目录用 workspace 绝对路径,与 working-directory(daedalus-core)对齐。
           sudo podman run --rm \
             --privileged \
             --security-opt label=disable \
-            -v ${{ github.workspace }}/output/qcow2:/output \
+            -v ${{ github.workspace }}/daedalus-core/output/qcow2:/output \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             quay.io/centos-bootc/bootc-image-builder:latest \
             --local --type qcow2 --output /output localhost/daedalus-os:latest
@@ -333,7 +373,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: daedalus-os-qcow2-${{ matrix.variant }}
-          path: output/qcow2/
+          # upload-artifact 的相对路径以 workspace 根为基准(不受 run 步骤的
+          # working-directory 影响),故这里必须带 daedalus-core/ 前缀。
+          path: daedalus-core/output/qcow2/
           # 默认保留 90 天;qcow2 预计 3-6GB,远低于 artifact 10GB 上限
           if-no-files-found: error
           compression-level: 0
