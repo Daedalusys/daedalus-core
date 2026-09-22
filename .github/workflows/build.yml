@@ -141,6 +141,15 @@ jobs:
         working-directory: daedalus-core
         run: just go-test
 
+      - name: Build Core Binaries (Go)
+        # Deno 套件的磁盘断言(audit.test.ts getAuditBinary / exec.test.ts shell/tx
+        # 默认解析)要求仓库构建产物 bin/daedalus-{audit,shell,tx} 真实存在——
+        # 测试注释即写明前置 "CI 先 just go-build"。go-test 只编译不产出,故在
+        # Deno 门前补这一步(bin/ 为 gitignored 构建产物,与 build-image job 同款)。
+        shell: bash
+        working-directory: daedalus-core
+        run: just go-build
+
       - name: Deno Test Suite
         # copilot 测试套件(含 shellpolicy_contract 跨语言契约,读 ../daedalus-sdk)。
         shell: bash
