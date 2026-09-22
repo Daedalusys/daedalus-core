@@ -101,7 +101,7 @@ plugin-pack: blueprint-embed
     #   3) plugin-pack -in/-out 打 zip:Pack 注入逐条目 sha256 checksums + manifest 规范化自摘要;
     #   4) plugin-pack -verify --keep 把 zip 解压到镜像树安装态目录——解压即完整校验,
     #      任一摘要不符拒绝安装;安装态经 ./scripts/sync-daedalus.sh 同步为镜像 /opt/daedalus/plugins。
-    root="$PWD"
+    root="$(cd .. && pwd)"
     cd "$root/daedalus-core"
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
     # 能力循环(aios 计划 todo 11 扩 service;blueprint-p1 todo 23 扩 blueprint):
@@ -181,7 +181,7 @@ dev-install prefix='': blueprint-embed
     if [ -z "${prefix}" ]; then
         prefix="${HOME}/.local"
     fi
-    root="$PWD"
+    root="$(cd .. && pwd)"
     plugins_root="${prefix}/share/daedalus/plugins"
     # sudo 判定:受保护前缀(/opt、/usr/local、/usr)且非 root 时前缀安装命令;
     # 非交互环境 sudo 不可用会立即显式失败,绝不静默半装。
@@ -281,7 +281,8 @@ blueprint-embed:
 go-build: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
-    cd daedalus-core
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
     if ! command -v go >/dev/null 2>&1; then
         for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
             if [ -x "$c" ]; then
@@ -299,7 +300,8 @@ go-build: blueprint-embed
 go-test: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
-    cd daedalus-core
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
     if ! command -v go >/dev/null 2>&1; then
         for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
             if [ -x "$c" ]; then
@@ -317,7 +319,8 @@ go-test: blueprint-embed
 deps:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd daedalus-core
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
     if ! command -v go >/dev/null 2>&1; then
         for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
             if [ -x "$c" ]; then
@@ -344,7 +347,9 @@ test: blueprint-embed
         done
     fi
     command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
-    cd daedalus-core && go test ./...
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
+    go test ./...
     deno test --allow-all tests/deno/
     # i18n 键集门禁(todo 30):en↔zh 对称 + t() 字面量双 locale 存在性
     bash tests/deno/i18n_keys.test.sh
