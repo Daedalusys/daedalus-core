@@ -1,23 +1,13 @@
 ---
 name: Build Daedalus Image
+# 本 workflow 是拆仓前 monorepo 布局的遗留(pre-split dead code):其步骤假设
+# 主仓检出在 workspace 根且 SDK/插件源码同仓共存,三仓拆分后 `just go-build` /
+# `just go-test` / `just plugin-pack` 等后续步骤在 CI 里已不可能通过
+# (core go.mod 的 `replace ../daedalus-sdk` 解析到 GITHUB_WORKSPACE 之外;
+# plugin-pack 需要未检出的 daedalus-plugins 仓)。触发已在 daedalus-ci-justfile-mopup
+# 收口期间停用,删除/重构留 follow-up PR(计划 R2 待办),期间仅保留手动
+# workflow_dispatch 以便显式对照旧流程,不再随 PR/push 自动运行。
 on:
-  pull_request:
-    # 反向白名单:仅忽略纯文档/模板,其余路径变更都触发 CI(改任何代码/脚本/
-    # manifest 都跑)。正向白名单容易漏列新加的脚本(如 scripts/justfile.demo
-    # 之前漏掉就导致 CI 静默不跑)。
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '.github/ISSUE_TEMPLATE/**'
-  push:
-    # 触发器:任何 push(除了纯文档/模板)都至少跑 ci job;镜像构建与发布
-    # (build-image job)由其自身 if: 限定到 feat/* 分支推送、任何 tag 推送、
-    # workflow_dispatch。发版:合并到 feat/<name> 后 push,或 git tag v0.2.0
-    # && git push --tags。
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
     inputs:
       VARIANT:
