@@ -256,14 +256,27 @@ host-list prefix='':
 # daedalus-plugins/blueprint/blueprints/ 在 blueprint Go 模块之外,go:embed 不能
 # 引用 `..` 越界路径也不能跟随符号链接;故经 rsync 复制到
 # daedalus-plugins/blueprint/cmd/daedalus-blueprint/blueprints/ 再 `//go:embed all:blueprints/*`。
-# 复制产物不入库(daedalus-plugins/.gitignore),源码侧 daedalus-plugins/blueprint/blueprints/ 是唯一事实源。
+# 复制产物不入库(daedalus-plugins 仓对该目标路径 gitignore),源码侧
+# daedalus-plugins/blueprint/blueprints/ 是唯一事实源。
+# 布局解析:root 取仓库根的父目录(`cd .. && pwd`),兼容两种平级布局——
+#   - 本地三仓平级:daedalus-core(本仓 Daedalusys)/ daedalus-sdk /
+#     daedalus-plugins 平级并列,兄弟仓真实存在 → 正常 rsync 嵌入副本;
+#   - CI workspace 兄弟检出(build.yml):GITHUB_WORKSPACE 下仅检出
+#     daedalus-core/ + daedalus-sdk/(无 daedalus-plugins)→ 下方守护跳过。
+# CI 跳过是安全的:核心的 go-build / go-test / test 只构建/测试本仓
+# `./cmd/...` 与 `./...`,从不编译 blueprint 插件模块;嵌入副本仅在真正构建
+# daedalus-blueprint 二进制时(plugin-pack / 本地 dev 流)才被消费,而那些
+# 流程本就要求平级检出 daedalus-plugins 兄弟仓。
 # 所有会编译 Go 代码的 recipe(go-build / go-test / test / plugin-pack /
 # dev-install / go-build-demo)都以本 recipe 为依赖,保证裸 `go build` / `go test`
 # 之前蓝图数据已就位。
 blueprint-embed:
     #!/usr/bin/env bash
     set -euo pipefail
-    root="$(pwd)"
+    root="$(cd .. && pwd)"
+    # CI 布局下无 daedalus-plugins 兄弟检出 → 打 note 跳过并 exit 0,
+    # 让依赖链上的 go-build / go-test 等核心 recipe 照常通过(见上方注释)。
+    if [ ! -d "${root}/daedalus-plugins/blueprint/blueprints" ]; then echo "note: 未检出 daedalus-plugins 兄弟仓(CI 布局),核心 Go 构建不消费蓝图嵌入副本,跳过"; exit 0; fi
     mkdir -p "${root}/daedalus-plugins/blueprint/cmd/daedalus-blueprint/blueprints"
     rsync -a --delete "${root}/daedalus-plugins/blueprint/blueprints/" "${root}/daedalus-plugins/blueprint/cmd/daedalus-blueprint/blueprints/"
 
