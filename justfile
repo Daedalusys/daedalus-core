@@ -196,7 +196,7 @@ dev-install prefix='': blueprint-embed
     # 建目录:<prefix>/bin 与 <prefix>/share/daedalus
     ${sudo} install -d "${prefix}/bin" "${prefix}/share/daedalus"
     # 复用 plan-1 构建(与 go-build/plugin-pack 逐字同旗标;不发明新构建形态)
-    cd "${root}/daedalus-core"
+    cd "$root/daedalus-core"
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
     # 三个 CLI 二进制进 <prefix>/bin(copilot audit.ts/exec.ts 与 host 的生产同名路径)
     ${sudo} install -Dm0755 bin/daedalus-host "${prefix}/bin/daedalus-host"
