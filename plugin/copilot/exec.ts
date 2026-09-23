@@ -88,8 +88,21 @@ function resolveWatchdogTimeoutMs(): number {
 
 /**
  * 解析 Go 版 daedalus-shell MCP 服务器（stdio JSON-RPC）二进制路径。
- * 解析顺序：DAEDALUS_SHELL_BIN 环境变量 → 生产默认 /usr/local/bin/daedalus-shell →
- *   开发态仓库构建产物 daedalus-core/bin/daedalus-shell（含向上回溯最多 10 层父目录）。
+ * 3 仓拆分（5353931）后 core `./cmd/...` 不再构建 daedalus-shell（主源在兄弟仓
+ * ../daedalus-plugins/shell），旧候选 daedalus-core/bin/daedalus-shell 与最多
+ * 10 层向上回溯父目录探测均为悬空死链，已整体移除。现行解析顺序：
+ *   ① DAEDALUS_SHELL_BIN 环境变量覆写 —— 一切仓外路径（含插件仓
+ *     $root/daedalus-plugins/shell/bin/daedalus-shell）与 demo 布局位都经此
+ *     通道进入（`just dev-copilot` 的 scripts/copilot-prep.sh 即注入该变量）；
+ *   ② 生产默认 /usr/local/bin/daedalus-shell（镜像出厂位；优先级恒在一切开发
+ *     态候选之前 —— 生产解析顺序字节冻结的守护轨，勿动）；
+ *   ③ demo 前缀重写通道不在本文件落码：宿主侧 paths_demo.go 构造 entrypoint
+ *     时重写镜像路径，其运行链路最终由 ① 承接；
+ *   ④ 开发态回退候选 = 仓内安装态 files/system/usr/local/bin/daedalus-shell
+ *     （`just plugin-pack` 落位、随仓 checkout），兼容三种调用 cwd 形态：
+ *     仓库根 / 物理根经 daedalus-core 软链 / 平级仓 ../daedalus-core 形态。
+ *     宿主构造 argv 铁律：exec.ts 不得自己探仓外路径写死 —— 候选只许落在
+ *     本仓内，且绝不向上回溯父目录。
  * 全部探测失败时回退到生产路径（让用户看到友好错误）。
  */
 function resolveShellBinary(): string {
@@ -106,26 +119,18 @@ function resolveShellBinary(): string {
     return productionPath;
   }
 
+  // ④ 仓内安装态候选（与 tests/deno/exec.test.ts 的枚举逐字 1:1 对齐；
+  // 拆仓后 core bin/daedalus-shell 永不再存在，旧 dev 构建产物候选与
+  // 向上回溯链一并删除 —— 宿主构造 argv 铁律，不得探仓外路径写死）。
   const devCandidates = [
-    "daedalus-core/bin/daedalus-shell",
-    "../daedalus-core/bin/daedalus-shell",
+    "files/system/usr/local/bin/daedalus-shell",
+    "daedalus-core/files/system/usr/local/bin/daedalus-shell",
+    "../daedalus-core/files/system/usr/local/bin/daedalus-shell",
   ];
   for (const rel of devCandidates) {
     if (pathExists(rel)) {
       return rel;
     }
-  }
-
-  // 向上回溯最多 10 层父目录查找仓库内构建产物
-  let cwd = (globalThis as any).Deno.cwd();
-  for (let i = 0; i < 10; i++) {
-    const tryPath = `${cwd}/daedalus-core/bin/daedalus-shell`;
-    if (pathExists(tryPath)) {
-      return tryPath;
-    }
-    const parent = cwd.replace(/\/[^/]+\/?$/, "");
-    if (parent === cwd) break;
-    cwd = parent;
   }
   return productionPath;
 }

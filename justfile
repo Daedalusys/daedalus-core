@@ -98,9 +98,11 @@ verify-dev-layout:
     cd "$root/daedalus-core"
     bash scripts/verify-dev-layout.sh
 
-# 打包 5 个能力服务器(fs/shell/pkg/sysinfo/service)为 daedalus-plugin 并安装进镜像树
-# (计划 todo 9;service 腿 = aios 计划 todo 11;构建镜像前执行)
-# 同时安装带外 CLI 到 /usr/local/bin: host/audit/shell/service/tx(计划 todo 17 补 tx)
+# 打包 7 个能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe)为 daedalus-plugin
+# (计划 todo 9;service 腿 = aios 计划 todo 11;blueprint 腿 = blueprint-p1 todo 23;
+# dupe 腿 = daba617;构建镜像前执行)
+# 同时安装带外 CLI 到 /usr/local/bin: host/audit/tx(本仓现构)+ shell/service
+# (插件仓现构;计划 todo 17 补 tx。3 仓拆分后能力二进制出厂源已从 core 迁至 daedalus-plugins)
 plugin-pack: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
@@ -118,42 +120,105 @@ plugin-pack: blueprint-embed
     fi
     command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
     # 流程(决策 22:构建期内建,无运行时安装;task 7 交接:安装态必经 Pack 注入 checksums):
-    #   1) 构建全部 Go 静态二进制(含宿主 daedalus-host 与打包器 daedalus-plugin-pack);
-    #   2) 同步二进制到插件源目录 daedalus-plugins/<cap>/bin/(源目录布局 = manifest + bin/);
-    #   3) plugin-pack -in/-out 打 zip:Pack 注入逐条目 sha256 checksums + manifest 规范化自摘要;
+    #   1) 本仓构建 5 个 core runtime 静态二进制(host/audit/tx/smoke/plugin-pack)。
+    #      注意:3 仓拆分(5353931)后 core ./cmd/... 不再产出能力服务器二进制,旧版
+    #      此处之后 `cp bin/daedalus-<cap>` 自此悬空(拆仓债,T2 修复点);
+    #   2) 能力二进制改为在兄弟仓 daedalus-plugins/<cap> 模块内就地构建(唯一事实源),
+    #      产物写 <cap>/bin/(插件仓已 gitignore),输出路径取 manifest executable 字段;
+    #   3) 暂存目录只放 daedalus.plugin.json + bin/(zip 不含源码不变式)→ plugin-pack
+    #      -in/-out 打 zip 进 core bin/:Pack 注入逐条目 sha256 checksums + manifest 规范化自摘要;
     #   4) plugin-pack -verify --keep 把 zip 解压到镜像树安装态目录——解压即完整校验,
     #      任一摘要不符拒绝安装;安装态经 ./scripts/sync-daedalus.sh 同步为镜像 /opt/daedalus/plugins。
     root="$(cd .. && pwd)"
     cd "$root/daedalus-core"
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
-    # 能力循环(aios 计划 todo 11 扩 service;blueprint-p1 todo 23 扩 blueprint):
-    # 源目录 daedalus-plugins/<cap>、安装态 plugins/daedalus.<cap>/,与 70 编号脚本
-    # "仅 chmod+提示"的分工互补——复制职责恒在本 recipe。
-    # 全部 6 个插件统一经暂存目录打包:源目录 daedalus-plugins/<cap>/ 含 cmd/ 源码 +
-    # go.mod + go.sum(todo 6 迁入的 monorepo 布局),直接 -in 源目录会把源码打进 zip,
-    # 解压进镜像安装态后泄漏源码,违反零残留断言(find ... -name go.mod 应为 0)。
-    # 暂存目录只放 daedalus.plugin.json + bin/daedalus-<cap>,天然排除 cmd/ + go.mod +
-    # go.sum;blueprint 的 blueprints/ 蓝图数据(已 //go:embed 进二进制,计划 §4 line 121
-    # 蓝图目录不在 rootfs 单独存在)同样被排除,避免 rootfs 出现重复蓝图数据。
+    # ── replace 陷阱(拆分后跨仓构建要害,T2 设计决策=临时软链 + trap 清理)──────
+    # 插件仓每个 cap 的 go.mod 都有 `replace github.com/Daedalusys/daedalus-sdk =>
+    # ../daedalus-sdk`:相对 cap 目录即 daedalus-plugins/daedalus-sdk,该路径只在插件仓
+    # 自身 CI workspace(SDK 检出到其工作区内)才存在;本机三仓平级布局没有它,
+    # GOWORK=off 单模块直接构建必失败("replacement directory ../daedalus-sdk does not
+    # exist",已实测钉死)。方案:临时把 daedalus-plugins/daedalus-sdk 软链到平级
+    # ../daedalus-sdk 充当桥,能力循环无论成败由 trap EXIT 立即移除。该软链路径在
+    # 插件仓【不】被 gitignore,绝不许留残(插件仓 git status 必须恒干净);
+    # 若该路径已存在(插件仓 CI 布局或开发者自建)则尊重原样:不接管也不删除;
+    # 平级 daedalus-sdk 缺失则 fail-closed 拒构,避免半构建。
+    sdk_stub="$root/daedalus-plugins/daedalus-sdk"
+    sdk_stub_created=0
+    if [ ! -e "${sdk_stub}" ] && [ ! -L "${sdk_stub}" ]; then
+        if [ ! -d "$root/daedalus-sdk" ]; then
+            echo "ERROR: 平级 daedalus-sdk 不存在,无法满足 daedalus-plugins/*/go.mod 的 replace(=> ../daedalus-sdk);拒绝继续" >&2
+            exit 1
+        fi
+        ln -sfn ../daedalus-sdk "${sdk_stub}"
+        sdk_stub_created=1
+    fi
+    cleanup_sdk_stub() {
+        # 只删本 recipe 自己创建的那个软链;unlink 而非 rm(语义最小,rm 在本机权限面有约束史)。
+        if [ "${sdk_stub_created}" = 1 ] && [ -L "${sdk_stub}" ]; then
+            unlink "${sdk_stub}"
+        fi
+    }
+    trap cleanup_sdk_stub EXIT
+    # 能力循环(aios 计划 todo 11 扩 service;blueprint-p1 todo 23 扩 blueprint;daba617 扩 dupe):
+    # 安装态 plugins/daedalus.<cap>/,与 70 编号脚本"仅 chmod+提示"的分工互补——装配职责恒在本 recipe。
+    # 全部插件统一经暂存目录打包:源目录 daedalus-plugins/<cap>/ 含 cmd/ 源码 + go.mod +
+    # go.sum + testdata(monorepo 布局),直接 -in 源目录会把源码打进 zip,解压进镜像安装态
+    # 后泄漏源码,违反零残留断言(find ... -name go.mod 应为 0)。暂存目录只放
+    # daedalus.plugin.json + ${exe},天然排除源码;blueprint 的 blueprints/ 蓝图数据(已
+    # //go:embed 进二进制,计划 §4 line 121 蓝图目录不在 rootfs 单独存在;嵌入副本由依赖链
+    # 上的 blueprint-embed 先 rsync 就位)同样被排除,避免 rootfs 出现重复蓝图数据。
     stage="${TMPDIR:-/tmp}/daedalus-plugin-pack-stage"
     find "${stage}" -mindepth 1 -delete 2>/dev/null || true
+    declare -A cap_bin   # cap → 插件仓现构产物绝对路径,供 /usr/local/bin 双落位腿复用
     for cap in fs shell pkg sysinfo service blueprint dupe; do
         id="daedalus.${cap}"
         src="$root/daedalus-plugins/${cap}"
-        dest="$root/daedalus-core/files/system/opt/daedalus/plugins/${id}"
+        manifest="${src}/daedalus.plugin.json"
+        # executable 字段(bin/daedalus-<cap>)用 sed 抽取:纯 POSIX 工具面,不引入 jq 依赖;
+        # 缺字段或不在 bin/ 下都立即报错退出,绝不静默挑错文件(防 zip 内容与 manifest 漂移)。
+        exe="$(sed -n 's/.*"executable"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${manifest}" | head -n 1)"
+        if [ -z "${exe}" ]; then
+            echo "ERROR: ${manifest} 缺少 executable 字段,无法确定产物名" >&2
+            exit 1
+        fi
+        case "${exe}" in
+            bin/*) ;;
+            *) echo "ERROR: ${manifest} 的 executable 必须以 bin/ 相对路径声明,实际: ${exe}" >&2; exit 1 ;;
+        esac
         mkdir -p "${src}/bin"
-        cp -f "bin/daedalus-${cap}" "${src}/bin/daedalus-${cap}"
-        chmod 0755 "${src}/bin/daedalus-${cap}"
-        rm -rf "${stage}"
-        mkdir -p "${stage}/bin"
-        cp -f "${src}/daedalus.plugin.json" "${stage}/daedalus.plugin.json"
-        cp -f "${src}/bin/daedalus-${cap}" "${stage}/bin/daedalus-${cap}"
-        pack_in="${stage}"
-        "./bin/daedalus-plugin-pack" -in "${pack_in}" -out "bin/${id}.plugin.zip"
-        mkdir -p "${dest}"
-        # 解压器要求空目录(O_EXCL 不覆盖既有文件);本机权限面禁 rm,用 find -delete 清空。
-        find "${dest}" -mindepth 1 -delete
-        "./bin/daedalus-plugin-pack" -verify "bin/${id}.plugin.zip" --keep "${dest}"
+        # 在 cap 模块目录内构建(插件仓 = 能力服务器唯一事实源);GOWORK=off 强制单模块
+        # 语义,与 core 侧 go-build 逐字同旗标:CGO_ENABLED=0 / GOTOOLCHAIN=local / -trimpath。
+        # -o 直指 manifest 声明的产物路径;./cmd/... 命中多个 main 包时 go 自行报错(fail-loud)。
+        ( cd "${src}" && GOWORK=off CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o "${src}/${exe}" ./cmd/... )
+        chmod 0755 "${src}/${exe}"
+        cap_bin["${cap}"]="${src}/${exe}"
+        # 暂存:只放 manifest + bin 产物,然后打 zip 进 core bin/(zip 不含源码不变式)。
+        # find 带 || true:首循环 stage 尚不存在(preamble 清空容忍缺失),目录不存在即无需清空。
+        find "${stage}" -mindepth 1 -delete 2>/dev/null || true
+        mkdir -p "${stage}/$(dirname "${exe}")"
+        cp -f "${manifest}" "${stage}/daedalus.plugin.json"
+        cp -f "${src}/${exe}" "${stage}/${exe}"
+        chmod 0755 "${stage}/${exe}"
+        "./bin/daedalus-plugin-pack" -in "${stage}" -out "bin/${id}.plugin.zip"
+        if [ "${cap}" = "dupe" ]; then
+            # dupe 仅 TMPDIR 解包校验、不进 files/system(三条理由,zip 照常产出到 core bin/):
+            #   1) dupe 的安装态从未入库——git ls-files 中 daedalus.dupe/ 零条目(daba617 只注册
+            #      了循环/单测/76 脚本;拆仓后循环悬空,该解包腿从未成功执行过);
+            #   2) CI 镜像供料腿 fetch-plugins.sh 只解 6 个 zip、不含 dupe——往入库树写 dupe 是
+            #      净新增未跟踪残留,违反"core git status 只许 M justfile"验收与本 plan F3 白名单;
+            #   3) 校验语义不降级:zip 仍经 -verify --keep 解压到临时空目录,解压即完整校验、
+            #      fail-closed。dupe 正式入库(安装态 commit + release + fetch)时删掉此分支即可。
+            vdir="${TMPDIR:-/tmp}/daedalus-plugin-pack-verify/${id}"
+            mkdir -p "${vdir}"
+            find "${vdir}" -mindepth 1 -delete 2>/dev/null || true
+            "./bin/daedalus-plugin-pack" -verify "bin/${id}.plugin.zip" --keep "${vdir}"
+        else
+            dest="$root/daedalus-core/files/system/opt/daedalus/plugins/${id}"
+            mkdir -p "${dest}"
+            # 解压器要求空目录(O_EXCL 不覆盖既有文件);本机权限面禁 rm,用 find -delete 清空。
+            find "${dest}" -mindepth 1 -delete
+            "./bin/daedalus-plugin-pack" -verify "bin/${id}.plugin.zip" --keep "${dest}"
+        fi
     done
     # 宿主自身进镜像树 /usr/local/bin:构建期 76-daedalus-plugin-gen.sh 与 copilot wrapper(任务 8)都依赖它。
     install -Dm0755 "bin/daedalus-host" "$root/daedalus-core/files/system/usr/local/bin/daedalus-host"
@@ -163,17 +228,20 @@ plugin-pack: blueprint-embed
     #   注意: 插件安装态 plugins/daedalus.shell/bin/ 内的副本保持不动——systemd 单元仍经
     #   76 脚本 render-unit 指向插件内二进制; 此处副本仅服务 copilot 进程内 spawn 的字面路径。
     install -Dm0755 "bin/daedalus-audit" "$root/daedalus-core/files/system/usr/local/bin/daedalus-audit"
-    install -Dm0755 "bin/daedalus-shell" "$root/daedalus-core/files/system/usr/local/bin/daedalus-shell"
+    # 3 仓拆分后 shell/service 双落位改源(对齐 f7ceece/b314a5b 入库态双轨注记):core 不再
+    #   自产这两个二进制,此处拷上方能力循环在插件仓现构的产物——与插件安装态
+    #   plugins/daedalus.<cap>/bin/ 内副本逐字节同源(同一次 go build 的两个落位)。
+    install -Dm0755 "${cap_bin[shell]}" "$root/daedalus-core/files/system/usr/local/bin/daedalus-shell"
     # aios 计划 todo 11:daedalus-service 按同款 task-21 形态双落位——
     #   插件安装态 plugins/daedalus.service/bin/(上方能力循环产出)供 systemd
     #   ExecStart(76 脚本 render-unit 指向);/usr/local/bin 副本服务镜像内以字面
     #   路径直接启动该二进制的 QA 链路(F3(e) service.query 手工管道)。两态互不替代。
-    install -Dm0755 "bin/daedalus-service" "$root/daedalus-core/files/system/usr/local/bin/daedalus-service"
+    install -Dm0755 "${cap_bin[service]}" "$root/daedalus-core/files/system/usr/local/bin/daedalus-service"
     # 计划 todo 17:daedalus-tx 为 out-of-band CLI(todo 16 裁决:无插件清单、无 systemd 单元、
-    #   不进 76 脚本 render/handshake 环路)——与 audit/shell 同款 task-21 形态仅落
+    #   不进 76 脚本 render/handshake 环路)——与 audit 同款 task-21 形态仅落
     #   /usr/local/bin,服务 copilot spawn 与用户直接 CLI(v1 执行模型 = 调用者进程)。
     install -Dm0755 "bin/daedalus-tx" "$root/daedalus-core/files/system/usr/local/bin/daedalus-tx"
-    echo "plugin-pack: 6 个能力插件(fs/shell/pkg/sysinfo/service/blueprint)已安装 -> daedalus-core/files/system/opt/daedalus/plugins/; host/audit/shell/service/tx 已安装 -> daedalus-core/files/system/usr/local/bin/"
+    echo "plugin-pack: 7 个能力插件 zip(fs/shell/pkg/sysinfo/service/blueprint/dupe)-> daedalus-core/bin/;6 个已解包校验安装 -> daedalus-core/files/system/opt/daedalus/plugins/(dupe 仅 TMPDIR 解包校验,理由见循环内注释);host/audit/tx(core 现构)+ shell/service(插件仓现构)-> daedalus-core/files/system/usr/local/bin/"
 
 # 开发态本地安装(计划 checkbox 1):把 dev 产物装进用户前缀,免镜像即可使用全套 CLI。
 # 用法: just dev-install [前缀] (亦兼容 --prefix=X 形式);默认前缀 = $HOME/.local。

@@ -340,29 +340,43 @@ Deno.test("Copilot Exec - supports configurable shell binary path via DAEDALUS_S
   }
 });
 
+// exec.ts resolveShellBinary() ④ 号开发态回退候选:与实现逐字 1:1 对齐
+// (顺序、字符串都不得漂移)。3 仓拆分后 core bin/daedalus-shell 死链与
+// 10 层向上回溯均已删除;唯一活候选 = plugin-pack 落位并随仓 checkout 的
+// 安装态,三种形态覆盖不同调用 cwd(仓库根 / 物理根软链 / 平级仓)。
+const SHELL_DEV_CANDIDATES = [
+  "files/system/usr/local/bin/daedalus-shell",
+  "daedalus-core/files/system/usr/local/bin/daedalus-shell",
+  "../daedalus-core/files/system/usr/local/bin/daedalus-shell",
+] as const;
+
+const SHELL_PRODUCTION_PATH = "/usr/local/bin/daedalus-shell";
+
+function statExists(target: string): boolean {
+  try {
+    Deno.statSync(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 Deno.test("Copilot Exec - default resolution finds the real Go daedalus-shell binary on disk", () => {
-  // 不 mock Deno.Command：验证默认解析链（生产路径 → 仓库构建产物 daedalus-core/bin/）
+  // 不 mock Deno.Command:验证默认解析链(生产路径 → 仓内安装态候选)
   // 在开发态真实文件系统上能解析到一个可 stat 的 Go 二进制。
+  // 三仓拆分(5353931)后 core `./cmd/...` 不再构建 shell(主源在
+  // ../daedalus-plugins/shell),旧 daedalus-core/bin/ 候选与向上回溯链
+  // 已整体移除;仓内真实存在的 Go 二进制实物是入库安装态
+  // files/system/usr/local/bin/daedalus-shell(plugin-pack 产物,随仓
+  // checkout)。
   const origEnv = Deno.env.get("DAEDALUS_SHELL_BIN");
   try {
     Deno.env.delete("DAEDALUS_SHELL_BIN");
-    // 通过未 mock 的解析逻辑间接验证:直接调用模块内解析无导出,
-    // 因此这里以 recordAudit 同款策略断言仓库构建产物存在。
-    const repoBinary = "daedalus-core/bin/daedalus-shell";
-    const parentBinary = "../daedalus-core/bin/daedalus-shell";
-    // 三仓拆分后 core 的 `./cmd/...` 不再构建 shell(主源在 ../daedalus-plugins/shell),
-    // CI test job 也不检出插件仓;仓库内真实存在的 Go 二进制实物是入库安装态
-    // files/system/usr/local/bin/daedalus-shell(plugin-pack 产物,随仓 checkout)。
-    // 与上方 dev 构建产物候选并列,覆盖 post-split 布局。
-    const installStateBinary = "files/system/usr/local/bin/daedalus-shell";
     let found = false;
-    for (const candidate of [repoBinary, parentBinary, installStateBinary]) {
-      try {
-        Deno.statSync(candidate);
+    for (const candidate of SHELL_DEV_CANDIDATES) {
+      if (statExists(candidate)) {
         found = true;
         break;
-      } catch {
-        // 尝试下一个候选
       }
     }
     expect(found).toBe(true);
@@ -370,6 +384,37 @@ Deno.test("Copilot Exec - default resolution finds the real Go daedalus-shell bi
     if (origEnv !== undefined) {
       Deno.env.set("DAEDALUS_SHELL_BIN", origEnv);
     }
+  }
+});
+
+Deno.test("Copilot Exec - env-unset resolution order pins production-precedence then first live candidate", async () => {
+  // 钉死解析顺序(计划 T3 强化项):env 未设时,经 mock Deno.Command 捕获
+  // 实际被 spawn 的二进制路径,断言其逐字符等于按实现同款顺序计算出的期望:
+  //   生产路径存在 → 生产路径(② 字节冻结守护轨优先于一切开发态候选);
+  //   否则 devCandidates 序首个存在者(④ —— 开发机/CI 上 /usr/local/bin 无
+  //     实物、安装态随仓 checkout,故本断言实际钉死"仓库根 cwd 下解析返回
+  //     files/system/usr/local/bin/daedalus-shell");
+  //   全缺 → 回退生产路径(友好错误)。
+  setup();
+  const origEnv = Deno.env.get("DAEDALUS_SHELL_BIN");
+  try {
+    Deno.env.delete("DAEDALUS_SHELL_BIN");
+    await execAllowlisted("uptime", []);
+
+    let expected = SHELL_PRODUCTION_PATH;
+    if (!statExists(SHELL_PRODUCTION_PATH)) {
+      const hit = SHELL_DEV_CANDIDATES.find((c) => statExists(c));
+      if (hit) {
+        expected = hit;
+      }
+    }
+    expect(mockSpawnedCommands.length).toBe(1);
+    expect(mockSpawnedCommands[0].cmd).toBe(expected);
+  } finally {
+    if (origEnv !== undefined) {
+      Deno.env.set("DAEDALUS_SHELL_BIN", origEnv);
+    }
+    teardown();
   }
 });
 
