@@ -346,12 +346,17 @@ jobs:
           IMAGE="ghcr.io/${OWNER_LOWER,,}/daedalus-os"
           podman tag localhost/daedalus-os:latest "${IMAGE}:latest"
           podman tag localhost/daedalus-os:latest "${IMAGE}:${{ github.sha }}"
-          podman push "${IMAGE}:latest"
-          podman push "${IMAGE}:${{ github.sha }}"
+          # ghcr 对「同 digest 层已存在于其他不可见私有包」的 blob HEAD 复用探测会返回
+          # 403(而非 404),podman 视为致命错误直接 exit 125(run 35757330443
+          # attempt 4/5 在 899f820c… 层稳定复现)。用 zstd 重压缩推送 → 所有层
+          # digest 全新 → HEAD 一律 404 → 正常上传。本地镜像不受影响,
+          # 仅改变推送时的压缩格式。
+          podman push --compression-format zstd "${IMAGE}:latest"
+          podman push --compression-format zstd "${IMAGE}:${{ github.sha }}"
           # :upstream 是 bootc 原地升级 (KVM guest 上 `bootc upgrade ghcr.io/<owner>/daedalus-os:upstream`)
           # 的稳定别名,与 :latest/:sha 共存,指向同一镜像内容。
           podman tag localhost/daedalus-os:latest "${IMAGE}:upstream"
-          podman push "${IMAGE}:upstream"
+          podman push --compression-format zstd "${IMAGE}:upstream"
           echo "Pushed: ${IMAGE}:latest (+ sha tag, + upstream tag)"
 
       # ---- 发布:qcow2 → artifact (本地 KVM 测试用;bootc-image-builder 产出) ----
