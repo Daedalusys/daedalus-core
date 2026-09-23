@@ -1,5 +1,5 @@
 [Unit]
-Description=Daedalus OS Filesystem MCP Sandbox Profile
+Description=Daedalus Large & Duplicate File Scanner MCP Sandbox Profile
 
 [Service]
 Type=simple
@@ -8,7 +8,7 @@ Type=simple
 # 策略消费约定(计划 todo 13):目录白名单的单一事实源是 /opt/daedalus/shared/policy.toml
 # 的 [fs].allowed_dirs,本服务启动时运行时读取;单元不得注入 DAEDALUS_POLICY_PATH 改指策略,
 # 构建期 76 脚本校验策略可读性(0644/o+r,ProtectSystem=strict 只读不拦读)。
-ExecStart=/opt/daedalus/plugins/daedalus.dupe/bin/daedalus.dupe
+ExecStart=/opt/daedalus/plugins/daedalus.dupe/bin/daedalus-dupe
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=read-only

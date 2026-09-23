@@ -59,11 +59,16 @@ if [ -f "${KDE_PATCH_TARGET}" ] && grep -q 'systemctl enable sddm' "${KDE_PATCH_
 fi
 
 # 1. General copy
-rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" daedalus-core/files/system/ base_image/files/system/
-rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" daedalus-core/files/scripts/ base_image/files/scripts/
+# 拆仓收口:本脚本唯一调用契约是 cwd = daedalus-core 仓根(justfile `sync:` 以
+# ./scripts/sync-daedalus.sh 从仓根调用;base_image bootstrap / sddm 补丁 / 校验腿
+# 一直按此 cwd 工作)。下列 rsync 源保留的 daedalus-core/ 前缀是拆仓前 workspace
+# 根调用形态的 stale 残留(与 fetch-plugins recipe 同款),仓根 cwd 下必挂
+# (rsync rc=23),现改为仓根相对路径。
+rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" files/system/ base_image/files/system/
+rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" files/scripts/ base_image/files/scripts/
 
 # 2. opt/daedalus exclusive sync with --delete
-rsync -a --delete ${DRY_RUN_FLAG} "${EXCLUDES[@]}" daedalus-core/files/system/opt/daedalus/ base_image/files/system/opt/daedalus/
+rsync -a --delete ${DRY_RUN_FLAG} "${EXCLUDES[@]}" files/system/opt/daedalus/ base_image/files/system/opt/daedalus/
 
 # 3. Targeted sync for systemd daedalus-* units with PREFIX-SCOPED stale-delete (todo 5 遗留收口):
 #    源目录整体同步(不再是 shell glob),--delete 的杀伤面被 include/exclude 规则钳制在
@@ -74,22 +79,30 @@ rsync -a --delete ${DRY_RUN_FLAG} "${EXCLUDES[@]}" daedalus-core/files/system/op
 #    由 'daedalus-*/**' 规则随行同步/清除。
 rsync -a --delete ${DRY_RUN_FLAG} "${EXCLUDES[@]}" \
     --include='daedalus-*' --include='daedalus-*/**' --exclude='*' \
-    daedalus-core/files/system/usr/lib/systemd/system/ base_image/files/system/usr/lib/systemd/system/
+    files/system/usr/lib/systemd/system/ base_image/files/system/usr/lib/systemd/system/
 
 # 4. 插件源码态目录同步(todo 11 三层迁移, 决策 23/24;todo 7 起源根迁至 daedalus-plugins/):
-#    daedalus-plugins/ → base_image/plugin/ 仅作为构建上下文存档;
+#    插件源仓 → base_image/plugin/ 仅作为构建上下文存档;
 #    Containerfile 只 COPY base_image/files/{system,scripts},因此 base_image/plugin/
-#    绝不进镜像 rootfs /opt——镜像内插件安装态由 plugin-pack / pack-copilot-plugin.sh
-#    经 Pack→Verify 生成到 daedalus-core/files/system/opt/daedalus/plugins/。
-#    daedalus-plugins/ 是 6 个 Go 能力插件(fs/shell/pkg/sysinfo/service/blueprint)
-#    的 monorepo 源根(manifest + cmd/ + blueprints/ 数据);copilot 仍留主仓
-#    daedalus-core/plugin/copilot/(非 daedalus-plugins/),由 pack-copilot-plugin.sh 单独打包。
+#    绝不进镜像 rootfs /opt——镜像内插件安装态由 plugin-pack / pack-copilot-plugin.sh /
+#    CI 的 release zip 解包腿经 Pack→Verify 生成到 files/system/opt/daedalus/plugins/。
+#    拆仓后源根 = 兄弟仓平级 ../daedalus-plugins(6 个 Go 能力插件 monorepo:
+#    manifest + cmd/ + blueprints/ 数据);copilot 仍留本仓 plugin/copilot/,
+#    由 pack-copilot-plugin.sh 单独打包。本仓 checkout 里**没有** daedalus-plugins/
+#    源目录(git ls-files 计数 0,迁移期残留不入库),故源缺失时打印提示并跳过本腿
+#    (CI 镜像 job 只检出 core+sdk,即属此形态;与 justfile blueprint-embed 的
+#    双布局 skip 先例同款)——跳过仅影响 archive 存档,零镜像语义。
 #    todo 15 起追加 --delete:base_image/plugin/ 为 Daedalus 独占目录(todo 11 新建,
 #    无上游资产混居),源端删除的插件目录可安全自洁,不存在 systemd 段的误删半径问题。
 #    --delete-excluded 同样只作用于本段:被 EXCLUDES 排除的接收端残留(如 todo 14
 #    迁移前滞留的 copilot/*.test.ts)rsync 默认不删(排除即豁免),此处显式撤销豁免,
 #    让"排除进镜像"与"清除 vendor 残留"共用同一套模式,不留自洁死角。
-rsync -a --delete --delete-excluded ${DRY_RUN_FLAG} "${EXCLUDES[@]}" daedalus-plugins/ base_image/plugin/
+PLUGIN_SRC="../daedalus-plugins"
+if [ -d "${PLUGIN_SRC}" ]; then
+    rsync -a --delete --delete-excluded ${DRY_RUN_FLAG} "${EXCLUDES[@]}" "${PLUGIN_SRC}/" base_image/plugin/
+else
+    echo "note: ${PLUGIN_SRC} 源仓不存在(CI 镜像 job 不检出插件仓 / 非三仓平级布局),跳过 plugin 源存档同步腿"
+fi
 
 # 5. Validate after sync: ensure base_image/files/system/usr/lib/systemd/system/system-flatpak-setup.service exists
 if [ ! -f base_image/files/system/usr/lib/systemd/system/system-flatpak-setup.service ]; then

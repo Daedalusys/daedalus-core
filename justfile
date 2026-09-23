@@ -28,7 +28,23 @@ sync:
 # --local-zip-dir 指向本地 zip 目录兜底(见 scripts/fetch-plugins.sh --help)。
 # 依赖 daedalus-core/bin/daedalus-plugin-pack(先 just go-build / plugin-pack)。
 fetch-plugins:
-    bash daedalus-core/scripts/fetch-plugins.sh
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # 规范 cd 形态(与 go-build/go-test/plugin-pack 同款):CI 的 run 步在
+    # daedalus-core 子目录内调 just,旧写法 `bash daedalus-core/scripts/...`
+    # 假设 workspace 根 cwd,拆仓后必挂(exit 127);脚本自带 CORE_ROOT 定位,直接相对调用。
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
+    # 幂等衔接:CI build-image job 已把 release zip 下到 /tmp/plugins-release,
+    # 脚本默认腿 gh release download 拒覆盖已存在文件(rc=1)→ 经
+    # DAEDALUS_FETCH_ZIP_DIR 环境变量把已就位目录以 --local-zip-dir 传入,
+    # 跳过重复下载、保留解压即校验(fail-closed);本机不设该变量,走 gh 默认腿。
+    zipdir="${DAEDALUS_FETCH_ZIP_DIR:-}"
+    if [ -n "$zipdir" ]; then
+        bash scripts/fetch-plugins.sh --local-zip-dir "$zipdir"
+    else
+        bash scripts/fetch-plugins.sh
+    fi
 
 # Build Daedalus container image
 # --network=host:让容器共享 host 网络栈,容器内 127.0.0.1 才指 host(用 host 的
@@ -74,7 +90,13 @@ verify-image:
 # 3 仓平级布局守门(plan todo 13):检查 daedalus-sdk / daedalus-plugins 兄弟仓
 # 是否以平级目录形态就位(go.work 本地 dev 桥的前置);缺哪个报哪个,exit 1。
 verify-dev-layout:
-    bash daedalus-core/scripts/verify-dev-layout.sh
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # 同款规范 cd 形态:旧写法假设 workspace 根 cwd(拆仓前形态);脚本自带
+    # SCRIPT_DIR→CORE_ROOT 定位,从仓根相对调用即可。
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
+    bash scripts/verify-dev-layout.sh
 
 # 打包 5 个能力服务器(fs/shell/pkg/sysinfo/service)为 daedalus-plugin 并安装进镜像树
 # (计划 todo 9;service 腿 = aios 计划 todo 11;构建镜像前执行)
@@ -101,7 +123,7 @@ plugin-pack: blueprint-embed
     #   3) plugin-pack -in/-out 打 zip:Pack 注入逐条目 sha256 checksums + manifest 规范化自摘要;
     #   4) plugin-pack -verify --keep 把 zip 解压到镜像树安装态目录——解压即完整校验,
     #      任一摘要不符拒绝安装;安装态经 ./scripts/sync-daedalus.sh 同步为镜像 /opt/daedalus/plugins。
-    root="$PWD"
+    root="$(cd .. && pwd)"
     cd "$root/daedalus-core"
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
     # 能力循环(aios 计划 todo 11 扩 service;blueprint-p1 todo 23 扩 blueprint):
@@ -181,7 +203,7 @@ dev-install prefix='': blueprint-embed
     if [ -z "${prefix}" ]; then
         prefix="${HOME}/.local"
     fi
-    root="$PWD"
+    root="$(cd .. && pwd)"
     plugins_root="${prefix}/share/daedalus/plugins"
     # sudo 判定:受保护前缀(/opt、/usr/local、/usr)且非 root 时前缀安装命令;
     # 非交互环境 sudo 不可用会立即显式失败,绝不静默半装。
@@ -196,7 +218,7 @@ dev-install prefix='': blueprint-embed
     # 建目录:<prefix>/bin 与 <prefix>/share/daedalus
     ${sudo} install -d "${prefix}/bin" "${prefix}/share/daedalus"
     # 复用 plan-1 构建(与 go-build/plugin-pack 逐字同旗标;不发明新构建形态)
-    cd "${root}/daedalus-core"
+    cd "$root/daedalus-core"
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
     # 三个 CLI 二进制进 <prefix>/bin(copilot audit.ts/exec.ts 与 host 的生产同名路径)
     ${sudo} install -Dm0755 bin/daedalus-host "${prefix}/bin/daedalus-host"
@@ -256,14 +278,27 @@ host-list prefix='':
 # daedalus-plugins/blueprint/blueprints/ 在 blueprint Go 模块之外,go:embed 不能
 # 引用 `..` 越界路径也不能跟随符号链接;故经 rsync 复制到
 # daedalus-plugins/blueprint/cmd/daedalus-blueprint/blueprints/ 再 `//go:embed all:blueprints/*`。
-# 复制产物不入库(daedalus-plugins/.gitignore),源码侧 daedalus-plugins/blueprint/blueprints/ 是唯一事实源。
+# 复制产物不入库(daedalus-plugins 仓对该目标路径 gitignore),源码侧
+# daedalus-plugins/blueprint/blueprints/ 是唯一事实源。
+# 布局解析:root 取仓库根的父目录(`cd .. && pwd`),兼容两种平级布局——
+#   - 本地三仓平级:daedalus-core(本仓 Daedalusys)/ daedalus-sdk /
+#     daedalus-plugins 平级并列,兄弟仓真实存在 → 正常 rsync 嵌入副本;
+#   - CI workspace 兄弟检出(build.yml):GITHUB_WORKSPACE 下仅检出
+#     daedalus-core/ + daedalus-sdk/(无 daedalus-plugins)→ 下方守护跳过。
+# CI 跳过是安全的:核心的 go-build / go-test / test 只构建/测试本仓
+# `./cmd/...` 与 `./...`,从不编译 blueprint 插件模块;嵌入副本仅在真正构建
+# daedalus-blueprint 二进制时(plugin-pack / 本地 dev 流)才被消费,而那些
+# 流程本就要求平级检出 daedalus-plugins 兄弟仓。
 # 所有会编译 Go 代码的 recipe(go-build / go-test / test / plugin-pack /
 # dev-install / go-build-demo)都以本 recipe 为依赖,保证裸 `go build` / `go test`
 # 之前蓝图数据已就位。
 blueprint-embed:
     #!/usr/bin/env bash
     set -euo pipefail
-    root="$(pwd)"
+    root="$(cd .. && pwd)"
+    # CI 布局下无 daedalus-plugins 兄弟检出 → 打 note 跳过并 exit 0,
+    # 让依赖链上的 go-build / go-test 等核心 recipe 照常通过(见上方注释)。
+    if [ ! -d "${root}/daedalus-plugins/blueprint/blueprints" ]; then echo "note: 未检出 daedalus-plugins 兄弟仓(CI 布局),核心 Go 构建不消费蓝图嵌入副本,跳过"; exit 0; fi
     mkdir -p "${root}/daedalus-plugins/blueprint/cmd/daedalus-blueprint/blueprints"
     rsync -a --delete "${root}/daedalus-plugins/blueprint/blueprints/" "${root}/daedalus-plugins/blueprint/cmd/daedalus-blueprint/blueprints/"
 
@@ -281,7 +316,8 @@ blueprint-embed:
 go-build: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
-    cd daedalus-core
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
     if ! command -v go >/dev/null 2>&1; then
         for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
             if [ -x "$c" ]; then
@@ -299,7 +335,8 @@ go-build: blueprint-embed
 go-test: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
-    cd daedalus-core
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
     if ! command -v go >/dev/null 2>&1; then
         for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
             if [ -x "$c" ]; then
@@ -317,7 +354,8 @@ go-test: blueprint-embed
 deps:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd daedalus-core
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
     if ! command -v go >/dev/null 2>&1; then
         for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
             if [ -x "$c" ]; then
@@ -344,7 +382,9 @@ test: blueprint-embed
         done
     fi
     command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
-    cd daedalus-core && go test ./...
+    root="$(cd .. && pwd)"
+    cd "$root/daedalus-core"
+    go test ./...
     deno test --allow-all tests/deno/
     # i18n 键集门禁(todo 30):en↔zh 对称 + t() 字面量双 locale 存在性
     bash tests/deno/i18n_keys.test.sh
