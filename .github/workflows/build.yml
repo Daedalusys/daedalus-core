@@ -20,12 +20,8 @@
 name: Build Daedalus Core
 on:
   pull_request:
-    # 反向白名单:仅忽略纯文档/模板,其余路径变更都触发 CI(改任何代码/脚本/
-    # manifest 都跑)。正向白名单容易漏列新加的脚本。
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '.github/ISSUE_TEMPLATE/**'
+    # 主保护 required check 已钉住 Test job 名,pull_request 若再带 paths-ignore,
+    # 纯文档 PR 无 check 来源会永挂 "Expected" 卡死合并(拆仓幽灵 "test" 的同款陷阱)。
   push:
     # 触发器:任何 push(除了纯文档/模板)都至少跑 test job;镜像构建与发布
     # (build-image job)由其自身 if: 限定到 feat/* 分支推送、任何 tag 推送、
