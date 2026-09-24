@@ -54,7 +54,7 @@ I18N_DIR="$plugin_dir/i18n"
 [ -f "$MANIFEST" ] || { echo "错误:清单不存在: $MANIFEST" >&2; exit 1; }
 command -v jq >/dev/null || { echo "错误:需要 jq(仓库处理 JSON 的约定工具)" >&2; exit 1; }
 
-# ── Go 侧 i18n key 校验(--check-cross,默认开启;决策 9:融入本脚本,不做独立工具)──
+# Go 侧 i18n key 校验(--check-cross,默认开启;融入本脚本,不做独立工具)
 # 扫描 daedalus-core/ 下 i18n.T("...") 字符串字面量首参 key(grep 提取,不用
 # go/ast:工具链调用太重,误报时才升级),逐个校验 daedalus-sdk/i18n/locales/ 下
 # en_US.json 与 zh_CN.json 均有条目;任一缺即差集报错 exit 1。排除 *_test.go。

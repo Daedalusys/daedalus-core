@@ -185,7 +185,7 @@ Deno.test("重试流 - 第一次 TimeoutError 第二次成功,translate 正常�
       return openaiOk('{"command":"uptime","args":[],"explanation":"Check uptime"}');
     };
 
-    // 重试成功 = happy path:不产生任何 error 痕迹(决策 10),直接拿到内容
+    // 重试成功 = happy path:不产生任何 error 痕迹,直接拿到内容
     const result = await translate("show uptime");
     expect(result).toBe('{"command":"uptime","args":[],"explanation":"Check uptime"}');
     expect(calls).toBe(2);
@@ -283,7 +283,7 @@ Deno.test("重试流 - 超时持续失败:fetch 恰 2 次(只重试 1 次),最�
     expect(thrown!.kind).toBe("timeout");
     expect(thrown!.fields.endpoint).toBe(TEST_ENDPOINT);
     expect(thrown!.fields.timeoutMs).toBe(1000);
-    // 决策 5:最多 1 次重试 → 最多 2 次调用
+    // 最多 1 次重试 → 最多 2 次调用
     expect(calls).toBe(2);
   } finally {
     teardownLlmEnv();

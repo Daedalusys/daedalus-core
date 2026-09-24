@@ -25,7 +25,7 @@
     "network_status"
   ],
   "checksums": {
-    "bin/daedalus-sysinfo": "sha256:ab7162611a28a1872aacb78e3d1c7b75c9bdeeb46a343e5d44b098c04a4dd006",
+    "bin/daedalus-sysinfo": "sha256:d938b10f4c88e45c39415cd30bdd00f7925e73314aeaf0ecf029de02b4042483",
     "daedalus.plugin.json": "sha256:c386f8d3375fdc76f533783579f3a274a2c1264d8719071b5bb9770d4dbd518b"
   },
   "api_version": "0.1.0",

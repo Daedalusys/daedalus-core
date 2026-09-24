@@ -17,8 +17,6 @@ import (
 	"github.com/Daedalusys/daedalus-sdk/dirs"
 )
 
-// ──── Begin:形状 + 落位 ────
-
 func TestTx_Begin_IDShapeAndJournalLocation(t *testing.T) {
 	dir := useTxDir(t)
 	tx := mustBegin(t)
@@ -60,8 +58,6 @@ func TestTx_Begin_TopLevelKeysPinned(t *testing.T) {
 	}
 }
 
-// ──── 路径安全:敌意 id(计划钉桩:../、大写、短 id) ────
-
 func TestTx_JournalPath_RejectsHostileIDs(t *testing.T) {
 	dir := useTxDir(t)
 	hostile := []string{
@@ -82,7 +78,7 @@ func TestTx_JournalPath_RejectsHostileIDs(t *testing.T) {
 		if _, err := journalPath(dir, id); !errors.Is(err, ErrInvalidID) {
 			t.Fatalf("journalPath(%q) 必须命中 ErrInvalidID,实得: %v", id, err)
 		}
-		// Load:同一道门(CLI todo 15 的 id 位置参数在触盘前即拒 → exit 2)。
+		// Load:同一道门(CLI 的 id 位置参数在触盘前即拒 → exit 2)。
 		if _, err := Load(id); !errors.Is(err, ErrInvalidID) {
 			t.Fatalf("Load(%q) 必须命中 ErrInvalidID,实得: %v", id, err)
 		}
@@ -174,8 +170,6 @@ func TestTx_ConcurrentBeginSameID_ExactlyOneWins(t *testing.T) {
 	}
 }
 
-// ──── 并发 Append:同进程串行 + 跨进程锁 → 日志永不撕裂 ────
-
 func TestTx_ConcurrentAppend_Serializes(t *testing.T) {
 	useTxDir(t)
 	tx := mustBegin(t)
@@ -220,8 +214,6 @@ func TestTx_ConcurrentAppend_Serializes(t *testing.T) {
 		}
 	}
 }
-
-// ──── Load 防御与往返 ────
 
 func TestTx_Load_RoundTrip(t *testing.T) {
 	useTxDir(t)

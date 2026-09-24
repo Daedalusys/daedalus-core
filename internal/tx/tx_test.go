@@ -1,4 +1,4 @@
-// tx 包线上契约与生命周期测试(todo 14)。
+// tx 包线上契约与生命周期测试。
 // 全部用例经 t.Setenv("DAEDALUS_TX_DIR", t.TempDir()) 隔离,绝不触碰真实系统路径。
 package tx
 
@@ -63,8 +63,6 @@ func requireErrIs(t *testing.T, err, target error) {
 	}
 }
 
-// ──── 线上 JSON 契约(T15/T22/T23 消费者钉桩) ────
-
 func TestTx_JSONShape_Minimal(t *testing.T) {
 	// Given: 一个只有必填键的步骤(returncode 0 也必须发射,不得 omit)。
 	step := Step{Index: 1, Adapter: "service.set", Args: json.RawMessage(`{"name":"x"}`)}
@@ -75,7 +73,7 @@ func TestTx_JSONShape_Minimal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Then: 键名/键序/缺省抑制逐字节钉死。
+	// Then: 键名/键序/缺省抑制逐字节锁定。
 	want := `{"index":1,"adapter":"service.set","args":{"name":"x"},"op_result":{"returncode":0}}`
 	if string(b) != want {
 		t.Fatalf("Step JSON 漂移:\n got %s\nwant %s", b, want)
@@ -97,8 +95,6 @@ func TestTx_JSONShape_Full(t *testing.T) {
 		t.Fatalf("全字段 Step JSON 漂移:\n got %s\nwant %s", b, want)
 	}
 }
-
-// ──── 生命周期迁移全表(钉死的 from×to 矩阵) ────
 
 // reach 构造一个处于指定状态的合法事务(沿迁移表正向走)。
 func reach(t *testing.T, target Status) *Transaction {
@@ -238,7 +234,7 @@ func TestTx_Lifecycle_HappyPath(t *testing.T) {
 	}
 }
 
-// TestTx_JournalContent_Fixture 用钉死的 CreatedAt/ID 断言日志全文逐字节
+// TestTx_JournalContent_Fixture 用锁定的 CreatedAt/ID 断言日志全文逐字节
 // 等于 fixture(线上契约的最终防线;时间戳与 id 固定后 JSON 完全确定)。
 func TestTx_JournalContent_Fixture(t *testing.T) {
 	dir := useTxDir(t)
@@ -267,8 +263,6 @@ func TestTx_JournalContent_Fixture(t *testing.T) {
 	}
 }
 
-// ──── Append 校验(计划 Failure QA a/b + 状态门) ────
-
 func TestTx_Append_Rejections(t *testing.T) {
 	useTxDir(t)
 	t.Run("空Adapter拒绝", func(t *testing.T) {
@@ -287,7 +281,7 @@ func TestTx_Append_Rejections(t *testing.T) {
 		}
 	})
 	t.Run("MarkApplied跳过applying被拒", func(t *testing.T) {
-		// 计划 Failure QA (c):proposed 直达 applied 非法。
+		// proposed 直达 applied 非法。
 		tx := mustBegin(t)
 		requireErrIs(t, tx.MarkApplied(), ErrInvalidTransition)
 	})

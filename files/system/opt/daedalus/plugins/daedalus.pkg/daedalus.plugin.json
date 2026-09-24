@@ -1,6 +1,6 @@
 {
   "id": "daedalus.pkg",
-  "name": "Daedalus Package",
+  "name": "Daedalus Package Query",
   "version": "0.1.0",
   "type": "capability",
   "runtime": {
@@ -30,8 +30,8 @@
     }
   ],
   "checksums": {
-    "bin/daedalus-pkg": "sha256:5d1aac490fdfd74728987794739cab07ade67e87b862ebd9ecb5ea46e633a943",
-    "daedalus.plugin.json": "sha256:d5413f680927da9702a4684cebef5399ac2a39891120f112dc2fcafc294ed551"
+    "bin/daedalus-pkg": "sha256:0b352c261bdc889883756ebfec0688a342b050b4270ae544efcb5ac57aa1f351",
+    "daedalus.plugin.json": "sha256:7b5f66d0e25a4ed551e574405d61ea50ca875ca9516155aafad9994f1c2fd115"
   },
   "api_version": "0.1.0",
   "license": "Apache-2.0",

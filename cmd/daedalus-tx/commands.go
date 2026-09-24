@@ -1,6 +1,6 @@
 package main
 
-// commands.go —— 五个子命令的编排(todo 15)。
+// commands.go —— 五个子命令的编排。
 //
 // 分工: 本文件只做"解析 → 调 internal/tx 与适配器 → 盖章 → 打印"的流程;
 // 生命周期/日志/回滚计划在 internal/tx, 审计播种在 internal/audit, 盖章链在 stamp.go。
@@ -84,7 +84,7 @@ func cmdApply(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return code
 	}
-	ctx = withTxID(ctx, id) // D-1 裁决第 1 条: package.set Apply 的 sidecar 寻址需要 tx-id(对 service.set 透明)
+	ctx = withTxID(ctx, id) // package.set Apply 的 sidecar 寻址需要 tx-id(对 service.set 透明)
 	t, code, ok := mustLoad(id, stdout, stderr)
 	if !ok {
 		return code
@@ -142,7 +142,7 @@ func cmdRollback(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return code
 	}
-	ctx = withTxID(ctx, id) // 同 cmdApply 的注入点(todo 10 Rollback 经同通道读 sidecar 命名)
+	ctx = withTxID(ctx, id) // 同 cmdApply 的注入点(Rollback 经同通道读 sidecar 命名)
 	t, code, ok := mustLoad(id, stdout, stderr)
 	if !ok {
 		return code
@@ -225,8 +225,8 @@ func firstFailed(steps []tx.Step) int {
 }
 
 // applyStep / rollbackStep 是分派到适配器的窄缝: 适配器缺失视为该步失败(未知适配器),
-// 使 apply 能诚实标记 failed 而非 panic。ctx 携带 --unit-dir 覆写(todo 22:
-// 旗标只影响 service.set 的解析目录, 其余适配器忽略)。
+// 使 apply 能诚实标记 failed 而非 panic。ctx 携带 --unit-dir 覆写(该旗标只影响
+// service.set 的解析目录, 其余适配器忽略)。
 func applyStep(ctx context.Context, step tx.Step) tx.OpResult {
 	a, ok := lookupAdapter(step.Adapter)
 	if !ok {
@@ -244,7 +244,7 @@ func rollbackStep(ctx context.Context, step tx.Step) tx.OpResult {
 }
 
 // extractUnitDir 从 propose/apply/rollback 的位置参数里摘出 `--unit-dir <path>`
-// 旗标(todo 22 CLI 接线): 至多一次、必须携带非空跟随值, 否则报用法错误(exit 2)。
+// 旗标: 至多一次、必须携带非空跟随值, 否则报用法错误(exit 2)。
 // 返回 (其余位置参数, 覆写目录(未给则 ""))。ok=false 时已打印错误文档。
 func extractUnitDir(args []string, stdout, stderr io.Writer) ([]string, string, bool) {
 	rest := make([]string, 0, len(args))

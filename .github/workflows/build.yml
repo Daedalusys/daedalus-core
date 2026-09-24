@@ -1,22 +1,12 @@
 ---
 # daedalus-core 仓 CI(拆仓后本文件即 core 仓的 .github/workflows/build.yml)。
 #
-# 布局约定(post-split 3 仓平级 clone):
-#   - 主仓检出到 workspace 下的 daedalus-core/ 子目录(GH Actions 禁止 checkout
-#     逃出 GITHUB_WORKSPACE,故不能用 ../daedalus-sdk 兄弟形态);所有 run 步骤
-#     以 working-directory: daedalus-core 运行,go.mod / tests/deno/ / files/ /
-#     plugin/ / cmd/ / justfile 的相对引用基准即此根。
-#   - daedalus-sdk checkout 到 workspace 下的 daedalus-sdk/ 子目录,从
-#     daedalus-core/ 解析 ../daedalus-sdk 与 tests/deno 的 ../daedalus-sdk/...
-#     正好落到平级兄弟位置。ref 用 pinned-tag 策略(review Oracle Issue 3 +
-#     Issue 7):版本从 go.mod 的 `require github.com/Daedalusys/daedalus-sdk
-#     vX.Y.Z` 提取,不写死字面量;占位版本 v0.0.0(本地 replace 开发形态)或缺失
-#     时输出空 ref 走 SDK 默认分支,不在 CI 启动期 fail-closed。
-#   - daedalus-plugins 的 release zip 在镜像构建 job 内联下载(review Oracle
-#     Issue 5:原 plan 把下载拆到 todo 15,但 workflow 是 todo 14 写的,漏集成)。
-#   - testdata drift 守门放本 workflow(review Oracle Issue 3 修正:SDK 仓独立
-#     CI 没有 core 兄弟仓,diff 无法跑;core 仓有 SDK 兄弟 checkout + 生产
-#     policy.toml,在此 diff 生产 policy.toml ↔ SDK testdata 副本)。
+# 布局约定:主仓检出到 workspace 的 daedalus-core/ 子目录(GH Actions 禁止
+# checkout 逃出 GITHUB_WORKSPACE),所有 run 步骤以它为 cwd;SDK 检出到平级的
+# daedalus-sdk/ 子目录,使 go.mod 的 replace => ../daedalus-sdk 可解析,版本从
+# go.mod 的 require 行提取(pinned-tag),占位/缺失时回退 SDK 默认分支。
+# daedalus-plugins 的 release zip 在镜像构建 job 内联下载;policy.toml drift
+# 守门放本 workflow(只有这里同时具备 SDK 兄弟仓与生产 policy.toml)。
 name: Build Daedalus Core
 on:
   pull_request:
@@ -54,7 +44,7 @@ permissions:
   contents: read
 
 jobs:
-  # ---- 日常 CI:任何 push / PR / dispatch 都跑(无镜像构建,反馈快) ----
+  # 日常 CI:任何 push / PR / dispatch 都跑(无镜像构建,反馈快)。
   test:
     name: Test (go / deno / i18n / drift)
     runs-on: ubuntu-latest
@@ -68,7 +58,7 @@ jobs:
           path: daedalus-core
 
       - name: Extract SDK version from go.mod
-        # pinned-tag 策略(review Oracle Issue 7):SDK 版本从 go.mod 的
+        # pinned-tag 策略:SDK 版本从 go.mod 的
         # `require github.com/Daedalusys/daedalus-sdk vX.Y.Z` 提取,传给下方
         # SDK checkout 的 ref: v$SDK_VERSION;不写死字面量占位符。
         # 占位版本(v0.0.0,replace 本地开发形态)或缺失一律放行:输出空的
@@ -86,7 +76,7 @@ jobs:
           echo "SDK_VERSION=$SDK_VERSION"
 
       - name: Checkout daedalus-sdk (sibling, pinned tag)
-        # review Oracle Issue 3:SDK 必须检出到 workspace 下的 daedalus-sdk 子目录,
+        # SDK 必须检出到 workspace 下的 daedalus-sdk 子目录,
         # 与主仓 daedalus-core 子目录平级,使 go.mod 的 `replace => ../daedalus-sdk`
         # 与 tests/deno 的 `../daedalus-sdk/...` 相对引用在 CI 中可解析。
         # ref 为空(go.mod 为占位版本)时 checkout SDK 默认分支。
@@ -161,7 +151,7 @@ jobs:
         run: bash tests/deno/i18n_keys.test.sh
 
       - name: testdata drift gate (production policy.toml ↔ SDK testdata)
-        # review Oracle Issue 3:生产 policy.toml 与 SDK 的 testdata 副本必须
+        # 生产 policy.toml 与 SDK 的 testdata 副本必须
         # 一致,否则 SDK 的 3 点漂移测试校验的是过期副本。不一致即 fail。
         shell: bash
         working-directory: daedalus-core
@@ -169,10 +159,10 @@ jobs:
           diff files/system/opt/daedalus/shared/policy.toml ../daedalus-sdk/policy/testdata/policy.toml
           echo "OK: 生产 policy.toml 与 SDK testdata 一致"
 
-  # ---- 镜像构建与发布:仅 feat/* 分支 / 任何 tag / workflow_dispatch 才跑 ----
+  # 镜像构建与发布:仅 feat/* 分支 / 任何 tag / workflow_dispatch 才跑。
   # 依赖 test 通过;日常 PR 与普通分支 push 不到此处,反馈快。
-  # 跨仓集成:daedalus-plugins 的 release zip 在此 job 内联下载(review Oracle
-  # Issue 5),解压到镜像树安装态后 `just build` 构建镜像。
+  # 跨仓集成:daedalus-plugins 的 release zip 在此 job 内联下载,解压到镜像树
+  # 安装态后 `just build` 构建镜像。
   build-image:
     name: Build & Publish Daedalus Image
     runs-on: ubuntu-latest
@@ -248,10 +238,10 @@ jobs:
         run: just go-build
 
       - name: Download plugin zips from daedalus-plugins release
-        # review Oracle Issue 5:镜像构建 job 内联 plugin zip 下载(跨仓集成)。
+        # 镜像构建 job 内联 plugin zip 下载(跨仓集成)。
         # daedalus-plugins 仓 release 出 7 个 *.plugin.zip(fs/shell/pkg/sysinfo/
         # service/blueprint/dupe);gh 在 runner 预装且
-        # 经 GITHUB_TOKEN 认证。todo 15 的 fetch-plugins.sh 只做本地等价兜底,
+        # 经 GITHUB_TOKEN 认证。fetch-plugins.sh 只做本地等价兜底,
         # 不重复描述本 workflow 步骤。下载目录用绝对路径 /tmp,不受 cwd 影响。
         shell: bash
         working-directory: daedalus-core

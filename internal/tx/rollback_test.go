@@ -43,7 +43,7 @@ func TestBuildRollbackPlan_Empty(t *testing.T) {
 	}
 }
 
-// TestTx_MarkApplied_PersistsRollbackPlan 钉死生命周期与生成器的接线:
+// TestTx_MarkApplied_PersistsRollbackPlan 锁定生命周期与生成器的接线:
 // MarkApplied 时计划固化进日志,且持久化形态同样是逆序筛选后的步骤集。
 func TestTx_MarkApplied_PersistsRollbackPlan(t *testing.T) {
 	useTxDir(t)

@@ -1,4 +1,4 @@
-// types.go 的金样序列化测试:线上契约钉死,改动即破坏——任何字段/tag/键序
+// types.go 的金样序列化测试:线上契约锁定,改动即破坏——任何字段/tag/键序
 // 漂移都必须先改本测试再改类型(仿 tx_test.go:85 TestTx_JSONShape_Full 风格)。
 package controller
 
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// TestObject_GoldenRoundTrip 钉死 Object 全字段 JSON 逐字节形态:
+// TestObject_GoldenRoundTrip 锁定 Object 全字段 JSON 逐字节形态:
 // 键序 = 字段声明序,snake_case tag,omit 语义,Result 两键不在其中。
 func TestObject_GoldenRoundTrip(t *testing.T) {
 	obj := Object{
@@ -58,7 +58,7 @@ func TestObject_GoldenRoundTrip(t *testing.T) {
 	}
 }
 
-// TestVerbGrammar 钉死标准动词文法的常量表(逐字):值集合恰为 7 枚、
+// TestVerbGrammar 锁定标准动词文法的常量表(逐字):值集合恰为 7 枚、
 // DesiredStateAbsent 哨兵为 "absent",且事务生命周期原语 begin/propose
 // 绝不进动词表(它们不是资源操作,防顺手扩表)。
 func TestVerbGrammar(t *testing.T) {
@@ -86,7 +86,7 @@ func TestVerbGrammar(t *testing.T) {
 		t.Fatalf("动词表数量漂移: got %d 枚, want %d 枚", len(got), len(want))
 	}
 
-	// 哨兵值逐字钉死:delete 语义在 desired_state 词汇中的缺席值。
+	// 哨兵值逐字锁定:delete 语义在 desired_state 词汇中的缺席值。
 	if DesiredStateAbsent != "absent" {
 		t.Fatalf("DesiredStateAbsent 漂移: got %q, want \"absent\"", DesiredStateAbsent)
 	}
@@ -103,7 +103,7 @@ func TestVerbGrammar(t *testing.T) {
 
 // TestPackageHasNoFuncBodies 把"本包零函数体"契约变成可执行码:解析本目录
 // 全部非 _test.go 文件,断言无任何 *ast.FuncDecl(纯类型契约层,校验归 v2
-// runtime;todo 1 预告的缝契约由此钉死)。解析失败即 Fatal。
+// runtime)。解析失败即 Fatal。
 func TestPackageHasNoFuncBodies(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {

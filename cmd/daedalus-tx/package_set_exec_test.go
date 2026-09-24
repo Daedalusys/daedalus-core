@@ -52,7 +52,7 @@ func TestWriteDnfHistorySidecar_Happy(t *testing.T) {
 	}
 }
 
-// TestWriteDnfHistorySidecar_TxRootErrorPropagates: oracle C4 fix 守门——
+// TestWriteDnfHistorySidecar_TxRootErrorPropagates: 守门——
 // dirs.TxRoot 报错(env 给了相对路径, fail-closed 拒用且不回落)时,
 // 错误必须传播给调用方, 绝不静默兜底写别处。
 func TestWriteDnfHistorySidecar_TxRootErrorPropagates(t *testing.T) {
@@ -68,7 +68,7 @@ func TestWriteDnfHistorySidecar_TxRootErrorPropagates(t *testing.T) {
 // TestDnfExec_StartFailure_Normalized: dnfExec 的规范化内核在二进制无法启动时
 // 归一化为 rc=126 + Error 说明(与 systemctlUser 同款), 不 panic。
 // 本机装有真实 dnf 且 dnfBinary 是不可覆写的包级常量, 故经 runNormalized 的
-// binary 形参注入一个不存在的路径来钉这条失败路径(todo 7 移交条款批准的形态)。
+// binary 形参注入一个不存在的路径来钉这条失败路径。
 func TestDnfExec_StartFailure_Normalized(t *testing.T) {
 	res := runNormalized(context.Background(), dnfExecTimeout, "/nonexistent/daedalus-missing-binary", "history")
 	if res.Returncode != 126 {
@@ -146,7 +146,6 @@ func TestParseDnfHistoryLastID(t *testing.T) {
 	}
 }
 
-// ─────────────────── review M-1 追加区: history 捕获相关性校验(勿改上方 todo 7 分区) ───────────────────
 //
 // 真 readDnfHistoryID 的无-dnf 单测: dnfExecFn 本就是注入缝, stub 它回造
 // `dnf history` 表格输出, 钉末行 Command line 相关性校验的三种落点

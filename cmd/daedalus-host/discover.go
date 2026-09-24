@@ -1,6 +1,6 @@
 // discover.go: 插件目录扫描与 list/inspect 子命令。
 //
-// 目录契约(计划决策 22,镜像构建期内建):<pluginDir>/<id>/daedalus.plugin.json,
+// 目录契约(构建期内建):<pluginDir>/<id>/daedalus.plugin.json,
 // 一层扫描,id = 目录名。扫描是幂等的,单个损坏插件绝不拖垮整体:
 // 任何缺 manifest / 解析失败 / id 与目录名不一致 / sha256 校验失败的目录
 // 都被标记 degraded 并附带原因,其余条目照常输出。

@@ -1,7 +1,7 @@
 // 跨语言契约测试(Go ↔ Deno):copilot policy.ts 的冻结副本必须与
 // daedalus-sdk/shellpolicy 的默认常量、以及单一事实源
 // files/system/opt/daedalus/shared/policy.toml 三点一致。
-// (计划 todo 14:替代已随 task 5 删除的 py↔deno parity 测试。)
+// (替代已随 task 5 删除的 py↔deno parity 测试。)
 //
 // ⚠ 同步义务:任何人修改 Go 侧 internal/shellpolicy 或 policy.toml 的
 // 白名单/前缀/黑名单集合时,必须同步修改 policy.ts 冻结副本,否则本文件必红。

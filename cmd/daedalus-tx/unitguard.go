@@ -1,9 +1,9 @@
 package main
 
-// unitguard.go —— service.set 的用户域路径守卫与单元名/目录解析(todo 22)。
+// unitguard.go —— service.set 的用户域路径守卫与单元名/目录解析。
 //
-// 守卫是 UNCONDITIONAL 的(v1 无 tx systemd 单元, 用户域限制只靠这里, 计划
-// todo 16/22 钉死): Propose 与 Apply/Rollback **各自独立**调用 guardUnitPath,
+// 守卫是 UNCONDITIONAL 的(v1 无 tx systemd 单元, 用户域限制只靠这里):
+// Propose 与 Apply/Rollback **各自独立**调用 guardUnitPath,
 // 日志可被手改喂入 args/before_state —— 纵深防御, 每一次都重新解析重新守。
 //
 // 允许根(解析后的目标必须落在其一, 段边界前缀比较, 防 /home 匹配 /home2):

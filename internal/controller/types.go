@@ -2,7 +2,7 @@
 //
 // 本文件只含纯类型与 JSON tag,零函数体/方法/构造器/Validate——校验归 v2
 // runtime,预留包 v1 不接线。序列化形态由 types_test.go 的金样往返测试逐字节
-// 钉死(键序 = 字段声明序),任何漂移必须先改测试再改类型。
+// 锁定(键序 = 字段声明序),任何漂移必须先改测试再改类型。
 package controller
 
 import (
@@ -87,7 +87,7 @@ type Decision struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
-// AdmissionFunc 是 v2 动态准入链的缝。框架注释钉死:v1 静态准入 = policy.toml
+// AdmissionFunc 是 v2 动态准入链的缝。框架注释锁定:v1 静态准入 = policy.toml
 // 单实现(fail-closed);本类型是 v2 动态链的插入点,不是对现状的第二事实源
 // 宣称——policy.toml 的强制值今天、明天都由 internal/policy 独家承载。
 type AdmissionFunc func(op AdmissionOp, obj Object) Decision

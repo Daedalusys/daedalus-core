@@ -1,6 +1,6 @@
 package main
 
-// service_set_cli_test.go —— service.set 的 CLI 全链路测试(todo 22)。
+// service_set_cli_test.go —— service.set 的 CLI 全链路测试。
 // 经由 run(argv...) 走 begin→propose→apply→rollback→status 完整回路:
 // --unit-dir 旗标接线、盖章计数(3 条同 tx_id 事务记录)、audit.Verify 绿、
 // 失败回路(invalid desired_state / 手改日志被 apply/rollback 守卫兜住)。
@@ -13,8 +13,6 @@ import (
 	"strings"
 	"testing"
 )
-
-// ───────────────────────── 全回路: propose→apply→rollback→status ─────────────────────────
 
 func TestServiceSet_CLI_RoundtripApplyRollback(t *testing.T) {
 	logPath, rc := harness(t)
@@ -49,7 +47,7 @@ func TestServiceSet_CLI_RoundtripApplyRollback(t *testing.T) {
 	if got := inTxCount(recs, id); got != 3 {
 		t.Fatalf("in-tx 记录数 = %d, want 3", got)
 	}
-	// 双链验证必须绿(todo 13 验证器)。
+	// 双链验证必须绿。
 	mustVerify(t, logPath)
 	// argv 全序: show(propose) → start(apply) → stop(rollback, prior=inactive→stop)。
 	// 无文件漂移 → 无恢复写 → 无 daemon-reload。
@@ -62,8 +60,6 @@ func TestServiceSet_CLI_RoundtripApplyRollback(t *testing.T) {
 		t.Errorf("argv 全序 = %v, want %v", got, want)
 	}
 }
-
-// ───────────────────────── --unit-dir 旗标接线 ─────────────────────────
 
 func TestServiceSet_CLI_UnitDirFlagPlumbing(t *testing.T) {
 	_, rc := harness(t)
@@ -83,8 +79,6 @@ func TestServiceSet_CLI_UnitDirFlagPlumbing(t *testing.T) {
 		t.Errorf("重复旗标应 exit2: code=%d out=%s", c, out)
 	}
 }
-
-// ───────────────────────── failure QA: invalid desired_state → apply 失败 ─────────────────────────
 
 func TestServiceSet_CLI_InvalidDesiredFailsAtApply(t *testing.T) {
 	logPath, rc := harness(t)
@@ -106,8 +100,6 @@ func TestServiceSet_CLI_InvalidDesiredFailsAtApply(t *testing.T) {
 	}
 	mustVerify(t, logPath) // 失败回路同样是合法盖章链(链≠journal)
 }
-
-// ───────────────────────── 手改日志: apply/rollback 侧守卫(纵深防御)─────────────────────────
 
 // handEditJournal 先正规 begin, 再把日志重写为指定形态(tx 层不理解步骤内容,
 // 守卫必须在适配器层兜住手改的 args / before_state)。返回 tx-id。

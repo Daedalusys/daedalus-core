@@ -138,7 +138,6 @@ func TestList_MixedHealthyAndDegraded(t *testing.T) {
 		t.Fatal(err)
 	} // 目录名不合文法
 
-	// When: list。
 	code, out, errOut := runCapture(t, "list", "-dir", root)
 
 	// Then: 整体成功,损坏项标 degraded 且各带原因,健康项字段齐全。
@@ -200,7 +199,6 @@ func TestList_I18NColumn(t *testing.T) {
 	installPlugin(t, root, i18nManifest())
 	installPlugin(t, root, nativeManifest())
 
-	// When: list。
 	code, out, errOut := runCapture(t, "list", "-dir", root)
 	if code != exitOK {
 		t.Fatalf("list 退出码 = %d, want 0; stderr: %s", code, errOut)
@@ -252,14 +250,12 @@ func TestList_LocaleSwitchHeader(t *testing.T) {
 }
 
 func TestList_DirMissingAndEnvOverride(t *testing.T) {
-	// Given: 不存在的目录。
 	missing := filepath.Join(t.TempDir(), "nope")
 	code, _, errOut := runCapture(t, "list", "-dir", missing)
 	if code != exitRuntime || !strings.Contains(errOut, "不可读") {
 		t.Fatalf("目录不存在应 exit 1 + 原因,得 %d / %q", code, errOut)
 	}
 
-	// When: 通过 DAEDALUS_PLUGIN_DIR 环境变量指定(无 -dir 旗标)。
 	root := t.TempDir()
 	installPlugin(t, root, nativeManifest())
 	t.Setenv(EnvPluginDir, root)

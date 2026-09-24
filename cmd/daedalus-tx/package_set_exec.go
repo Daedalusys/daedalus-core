@@ -1,6 +1,6 @@
 package main
 
-// package_set_exec.go —— package.set 的进程与文件助手层(plan daedalus-pkg-kind todo 7)。
+// package_set_exec.go —— package.set 的进程与文件助手层。
 //
 // package_set.go 守"形状"与校验守卫; 本文件只做机械事: dnf/rpm argv 直发
 // (含超时/退出码规范化)、dnf history 事务 ID 的解析与探测、以及 dnf history id
@@ -21,12 +21,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Daedalusys/daedalus-sdk/dirs"
 	"github.com/Daedalusys/daedalus-core/internal/tx"
+	"github.com/Daedalusys/daedalus-sdk/dirs"
 )
 
 // 进程助手的路径与预算常量: dnf 要做元数据同步, 比 systemctl 的 30s 慢, 给独立
-// 60s; sidecar 文件权限与 tx journal 的私有性对齐(review minor #5 fix)。
+// 60s; sidecar 文件权限与 tx journal 的私有性对齐。
 const (
 	dnfBinary      = "/usr/bin/dnf"
 	rpmBinary      = "/usr/bin/rpm"
@@ -40,8 +40,8 @@ var dnfHistoryIDPattern = regexp.MustCompile(`\s+(\d+)\s+\|`)
 // runNormalized 是 dnfExec/rpmQuery 共用的执行内核: argv 直发
 // `binary <args...>` 并规范化为 tx.OpResult —— rc=子进程退出码(透传);
 // 无法启动 → 126(shellpolicy 拒绝惯例); 超时 → 124(同款约定)。
-// binary 提为形参是让"启动失败归一化"路径在装有 dnf 的机器上也能被单测钉死
-// (todo 7 移交条款: 包级常量不可临时覆写, 故内核做成可注入)。
+// binary 提为形参是让"启动失败归一化"路径在装有 dnf 的机器上也能被单测锁定
+// (移交条款: 包级常量不可临时覆写, 故内核做成可注入)。
 func runNormalized(ctx context.Context, timeout time.Duration, binary string, args ...string) tx.OpResult {
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -140,8 +140,8 @@ func cmdlineMatches(cmdline, verb, name string) bool {
 	return false
 }
 
-// readDnfHistoryID 捕获当前最新 dnf 事务 ID(todo 9 Apply 成功后的 sidecar 写入源)。
-// 【review M-1 fix】dnf rc=0 到本捕获之间存在并发窗口: 若另一 dnf 事务
+// readDnfHistoryID 捕获当前最新 dnf 事务 ID(Apply 成功后的 sidecar 写入源)。
+// dnf rc=0 到本捕获之间存在并发窗口: 若另一 dnf 事务
 // (dnf-automatic timer 等)恰好提交, 末行就是他人事务, 回滚会 undo 错对象。
 // 故校验末行 Command line 列的 verb 与 name 确属本次实发事务, 对不上即捕获
 // 不可信、error 上抛(调用方 Apply 走 fail-closed)。进程调用次数不变——
@@ -176,10 +176,10 @@ func dnfHistoryExists(ctx context.Context, id int64) (bool, error) {
 }
 
 // writeDnfHistorySidecar 把 dnf history id 以 `<txID>-<stepIndex>.dnf_history_id`
-// 落盘(tx 根目录内), 供 todo 10 Rollback 读取。【oracle review C4 fix】
-// dirs.TxRoot() 错误一律包装上抛, 绝不吞掉; 【oracle review M1 fix】路径用
-// filepath.Join 拼接; 【review critical #1 fix】写失败直接返 error 给调用方,
-// 不做任何兜底——todo 9 视写失败为 Apply 失败, 杜绝"成功但不可回滚"。
+// 落盘(tx 根目录内), 供 Rollback 读取。
+// dirs.TxRoot() 错误一律包装上抛, 绝不吞掉; 路径用
+// filepath.Join 拼接; 写失败直接返 error 给调用方,
+// 不做任何兜底——视写失败为 Apply 失败, 杜绝"成功但不可回滚"。
 func writeDnfHistorySidecar(txID string, stepIndex int, dnfHistoryID int64) error {
 	root, err := dirs.TxRoot()
 	if err != nil {
@@ -192,10 +192,10 @@ func writeDnfHistorySidecar(txID string, stepIndex int, dnfHistoryID int64) erro
 	return os.WriteFile(path, []byte(strconv.FormatInt(dnfHistoryID, 10)), sidecarMode)
 }
 
-// readDnfHistorySidecar 是 writeDnfHistorySidecar 的镜像消费侧(todo 10 Rollback
-// 寻址回滚材料): dirs.TxRoot() 错误同款包装上抛, filepath.Join 同款拼接(todo 7
-// 钉死的命名与十进制裸 id 格式在此消费)。sidecar 缺失、读失败、内容不可解析
-// 一律返 error——不回退、不猜 id(fail-closed 哲学, review important #3)。
+// readDnfHistorySidecar 是 writeDnfHistorySidecar 的镜像消费侧(Rollback
+// 寻址回滚材料): dirs.TxRoot() 错误同款包装上抛, filepath.Join 同款拼接
+// 约定的命名与十进制裸 id 格式在此消费。sidecar 缺失、读失败、内容不可解析
+// 一律返 error——不回退、不猜 id(fail-closed 哲学)。
 // 本助手不设 mock 缝: 纯文件 IO 经 env 指临时目录即可真实测试, 更接近生产形态。
 func readDnfHistorySidecar(txID string, stepIndex int) (int64, error) {
 	root, err := dirs.TxRoot()

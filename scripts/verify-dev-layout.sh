@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 3 仓平级布局守门(plan todo 13):检查 daedalus-core 的兄弟仓
+# 3 仓平级布局守门:检查 daedalus-core 的兄弟仓
 # daedalus-sdk / daedalus-plugins 是否以平级目录形态就位,供 go.work 本地 dev 桥使用。
 # 任一缺失/不匹配即 exit 1,并逐项报告缺哪个。
 #
