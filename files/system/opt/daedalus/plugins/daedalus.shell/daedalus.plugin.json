@@ -1,6 +1,6 @@
 {
   "id": "daedalus.shell",
-  "name": "Daedalus Shell",
+  "name": "Daedalus Command Execution",
   "version": "0.1.0",
   "type": "capability",
   "runtime": {
@@ -31,8 +31,8 @@
     "shell_exec"
   ],
   "checksums": {
-    "bin/daedalus-shell": "sha256:da654e87c6db2e3c9f68f6ca6a58800db764ac8b93f021816fc2c95462fc1f64",
-    "daedalus.plugin.json": "sha256:4c1aa9ebf851c3069a3ec713c0be7c747e0840f5f57c97b120e532f42d883da9"
+    "bin/daedalus-shell": "sha256:25890b8c49fafadab2a28d7fec73b9d3814abafbc34fe91a66ab915c2d48d9d1",
+    "daedalus.plugin.json": "sha256:421d1cbc0492251b6420c60818c44c4c4cd00ac11a4abf1e58c1eab3d41ab461"
   },
   "api_version": "0.1.0",
   "license": "Apache-2.0",

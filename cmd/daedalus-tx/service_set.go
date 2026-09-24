@@ -1,6 +1,6 @@
 package main
 
-// service_set.go —— service.set 事务适配器(todo 22, 计划 todo 22 (a)-(f) 条款)。
+// service_set.go —— service.set 事务适配器。
 //
 // 三段生命周期(与 adapter.go 的 Adapter 契约对齐):
 //   - Propose: 解析单元文件路径(直在调用用户进程内, **不**经 daedalus-service ——
@@ -12,18 +12,16 @@ package main
 //     恢复文件(恢复写之后、逆动词之前必跑 daemon-reload, (f) 条款)→
 //     按 BeforeState.active_state 施加恢复性动词。
 //
-// desired_state 语义面(计划 review round 1 钉):
+// desired_state 语义面:
 //   - v1 动词集 started|stopped|restarted|enabled|disabled(映射见 serviceSetVerbs);
 //   - "reload" 在 Propose 即逐字拒绝 "desired_state reload not supported in v1"
-//     (copilot 分类器按 danger 归类属 todo 24, 本适配器只负责拒绝执行);
+//     (reload 属 danger 类操作, 本适配器只负责拒绝执行);
 //   - 其余未知值 Propose **放行**(快照照常), Apply 拒绝 → apply exit 1 +
-//     拒绝原因落该步 OpResult(plan todo 22 Failure QA 钉死该形态)。
+//     拒绝原因落该步 OpResult。
 //
-// 逆动词的语义选择(计划 (e) 括注 "active→stop, inactive→start" 与其
-// Happy QA "ActiveState 必须被恢复" 互相矛盾 —— 括注映射是把状态推向相反值,
-// 永远无法"恢复")。本实现采**恢复语义 active→start / inactive→stop / 其余不发
-// 动词**(与 todo 22 正文 "re-applies the prior ActiveState" 及门控测试断言一致),
-// 该选择在代码注释与 DoneClaim 双登记。
+// 逆动词的语义选择:若按 "active→stop, inactive→start" 映射,是把状态推向相反值,
+// 永远无法与 "ActiveState 必须被恢复" 的要求同时成立。故本实现采**恢复语义
+// active→start / inactive→stop / 其余不发动词**,与门控测试断言一致。
 
 import (
 	"bytes"
@@ -62,7 +60,7 @@ var serviceSetInverseVerbs = map[string]string{
 	"inactive": "stop",
 }
 
-// serviceSetArgs 是步骤 args 的线上形态(计划钉死的两键 schema, 未知键拒绝)。
+// serviceSetArgs 是步骤 args 的线上形态(锁定的两键 schema, 未知键拒绝)。
 type serviceSetArgs struct {
 	Name         string `json:"name"`
 	DesiredState string `json:"desired_state"`

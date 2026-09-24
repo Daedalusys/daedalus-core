@@ -108,7 +108,7 @@ Deno.test("Copilot Policy & Validation - parseProposal throws on missing or non-
 Deno.test("Copilot Policy & Validation - buildSystemPrompt generates advisor prompt without command whitelist enumeration", () => {
   const prompt = buildSystemPrompt();
   expect(typeof prompt).toBe("string");
-  // QQ pivot(决策 10):不再枚举 15 命令白名单
+  // QQ pivot:不再枚举 15 命令白名单
   expect(prompt).not.toContain("ALLOW_COMMANDS");
   expect(prompt).not.toContain("ALLOWED_PATH_PREFIXES");
   expect(prompt).not.toContain("BLOCKED_PATHS");
@@ -211,8 +211,6 @@ Deno.test("Copilot Policy & Validation - validateProposal throws on path travers
   };
   expect(() => validateProposal(nullByte)).toThrow("Null bytes are not allowed");
 });
-
-// ── classifyProposal 风险分类器(QQ pivot)────────────────────────────────
 
 /** 构造 proposal 的辅助函数 */
 function prop(command: string, args: string[]): CommandProposal {
@@ -336,7 +334,6 @@ Deno.test("classifyProposal - risk table structure exports", () => {
   expect(L1_CAUTION_CMDS.has("df")).toBe(false);
 });
 
-// ── classifyTxProposal 事务风险分类器（aios-object-model-alignment todo 24）──
 //
 // ★ L0_WHITELIST 竞态条款（镜像 plan 措辞）★
 // 当意图是事务（transactional intent）时，分类器绝不走 shell 路径：
@@ -345,7 +342,7 @@ Deno.test("classifyProposal - risk table structure exports", () => {
 // 使 L0 shell_exec 路径与 tx 路径互不竞争（no race）。
 //
 // reasonKey 仅复用已落地 i18n 键（risk.reason.* / risk.pattern.*）；
-// tx.* 专用键由 todo 30 落地，届时替换。
+// tx.* 专用键后续落地,届时替换。
 
 /** 断言事务风险评估结果（level + reasonKey + tx_kind）的辅助函数 */
 function expectTxRisk(actual: RiskAssessment, level: string, reasonKey: string | null, txKind: string) {
@@ -380,7 +377,7 @@ Deno.test("classifyTxProposal - 8-cell intent x desired_state matrix", () => {
     "risk.reason.caution_command",
     "tx_apply",
   );
-  // tx_apply: reload → danger（触发 daemon-reload；todo 22 适配器已在 propose
+  // tx_apply: reload → danger（触发 daemon-reload；适配器已在 propose
   // 时拒绝 reload，v1 无 apply 路径，danger 标注是纵深防御的展示层兜底）
   expectTxRisk(
     classifyTxProposal("tx_apply", "nginx.service", "reload"),
@@ -397,7 +394,7 @@ Deno.test("classifyTxProposal - 8-cell intent x desired_state matrix", () => {
   );
 });
 
-Deno.test("classifyTxProposal - package domain present/absent/latest (daedalus-pkg-kind todo 16)", () => {
+Deno.test("classifyTxProposal - package domain present/absent/latest", () => {
   // package 域形态：target = "package <name>"，desiredState ∈ present|absent|latest
   // （与 service 域完全同构，仅 target 首词不同；args[1] 期望态位置不变）。
   // present / absent → safe（确定性操作，不依赖外部元数据，与 started/stopped 同档）
@@ -426,7 +423,7 @@ Deno.test("classifyTxProposal - package domain present/absent/latest (daedalus-p
     "risk.reason.caution_command",
     "tx_rollback",
   );
-  // 空目标 → 抛 plan 钉死文案（fail-closed）。注意裸 "package"（无 name）
+  // 空目标 → 抛固定文案（fail-closed）。注意裸 "package"（无 name）
   // 不在此拒：分类器不校验 name 形态（parseArgs 职责），裸词落入 service 域
   // 既有 caution 兜底，语义等价 fail-closed。
   expect(() => classifyTxProposal("tx_apply", "", "present")).toThrow(

@@ -1,7 +1,7 @@
 package main
 
 // service_set_gated_test.go —— service.set 对真实 systemd user manager 的
-// 端到端门控测试(plan todo 22 Happy QA 的 Go 形态)。门控协议: 经注入缝
+// 端到端门控测试(正向路径的 Go 形态)。门控协议: 经注入缝
 // systemctlUserBinary 探测 `systemctl --user show-environment`, 失败即
 // t.Skip("no user manager") —— 无用户会话的 CI(headless runner)恒绿。
 // 通过时把一次性 oneshot fixture 写进真实 ~/.config/systemd/user, 全 CLI
@@ -19,8 +19,6 @@ import (
 	"testing"
 )
 
-// ───────────────────────── 门控: 真实 systemd user manager ─────────────────────────
-
 // showActiveState 用真 systemctl 读一个单元的 ActiveState(门控测试专用)。
 func showActiveState(t *testing.T, unit string) string {
 	t.Helper()
@@ -31,7 +29,7 @@ func showActiveState(t *testing.T, unit string) string {
 	return strings.TrimPrefix(strings.TrimSpace(string(data)), "ActiveState=")
 }
 
-// TestServiceSet_Gated_UserManagerRoundtrip 是 plan todo 22 Happy QA 的 Go 形态:
+// TestServiceSet_Gated_UserManagerRoundtrip 是正向路径的 Go 形态:
 // 先经注入缝探测 `systemctl --user show-environment`, 失败即 t.Skip —— 无用户
 // 会话的 CI 恒绿。通过时把一次性 fixture 单元放进真实 ~/.config/systemd/user,
 // 走 begin→propose(started)→apply→(观测 active)→rollback→(观测恢复到 inactive),

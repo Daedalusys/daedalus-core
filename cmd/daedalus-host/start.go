@@ -1,6 +1,6 @@
 // start.go: verify / run-plugin / render-unit 子命令与启动命令构造。
 //
-// ★ 安全边界(计划决策 16):宿主不是任何 MCP 服务器的父进程。
+// ★ 安全边界:宿主不是任何 MCP 服务器的父进程。
 // run-plugin 与 render-unit 都只**打印**命令文本,绝不 spawn/exec;
 // 真正的进程父是 systemd,它按 manifest 渲染出的 ExecStart 直接执行服务器,
 // 每个服务保留各自的 DynamicUser/Landlock/seccomp drop-in 沙箱语义。
@@ -40,7 +40,7 @@ func cmdRunPlugin(stdout, stderr io.Writer, st pluginState, extra []string) int 
 	}
 	tokens := buildStartTokens(st.dir, st.manifest)
 	tokens = append(tokens, extra...)
-	// stdout 只含纯命令行文本(供 todo 8 的 wrapper 之类消费),
+	// stdout 只含纯命令行文本(供上层 wrapper 之类消费),
 	// 非父进程语义写在 stderr 提示与 help 里,不污染命令输出。
 	fmt.Fprintln(stdout, shellJoin(tokens))
 	fmt.Fprint(stderr, i18n.T("host.run_plugin.note"))

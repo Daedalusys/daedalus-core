@@ -1,12 +1,12 @@
-// W6/T29 跨模块集成聚合层:验证 copilot 事务通道全链路
+// W6 跨模块集成聚合层:验证 copilot 事务通道全链路
 //   state read(真文件)→ translate(注入捕获)→ classify → exec tx(mock 链)
-// 行为符合 plan 验收。本文件是**最后一层**聚合断言:单模块行为已在
-// main/exec/policy/audit/i18n 各自测试钉死,此处只验跨模块联动 +
+// 行为符合验收标准。本文件是**最后一层**聚合断言:单模块行为已在
+// main/exec/policy/audit/i18n 各自测试锁定,此处只验跨模块联动 +
 // i18n/audit 防回退完整性断言。
 //
 // 继承的既有模式(不重写 setup/teardown):
-// - T27:txBeginFn/txProposeFn/txPreviewFn/txApplyFn 4 注入 + 调用序记录
-// - T28:DAEDALUS_STATE_PATH 基线锁 + withStateEnv 覆写还原
+// - txBeginFn/txProposeFn/txPreviewFn/txApplyFn 4 注入 + 调用序记录
+// - DAEDALUS_STATE_PATH 基线锁 + withStateEnv 覆写还原
 // - 聚合差异化:state 读取走**真文件真解析**(Deno.makeTempDir + 真
 //   state.jsonl,readStateFn 不注入),tx 链走 mock 注入(绝 spawn 真二进制)。
 import { expect } from "jsr:@std/expect@1";
@@ -22,7 +22,7 @@ if ((globalThis as any).Deno?.env?.set) {
   process.env.LC_ALL = "en_US.UTF-8";
 }
 
-// state 基线锁(T28 同法):默认把 DAEDALUS_STATE_PATH 钉到不存在路径,
+// state 基线锁(同法):默认把 DAEDALUS_STATE_PATH 钉到不存在路径,
 // 开发者真实 ~/.local/share 状态记忆绝不泄漏进断言;聚合用例各自覆写。
 const BASELINE_STATE = "/tmp/daedalus-tx-aggregate-baseline-missing.jsonl";
 if ((globalThis as any).Deno?.env?.set) {
@@ -46,7 +46,6 @@ function setup() {
   auditLogs = [];
 }
 
-// ── T27 同族 tx mock(4 注入 + 调用序记录)──────────────────────────────
 const TX_ID = "f0e1d2c3b4a59687";
 
 function txJournalFixture(status: string, steps: TxStep[]): TxJournal {
@@ -121,7 +120,6 @@ const txConfig = () => ({
   baseUrl: "https://api.openai.com/v1",
 });
 
-// ── 真 state.jsonl 夹具(聚合层不 mock 状态读取)────────────────────────
 async function writeRealStateFile(
   dir: string,
   entries: Array<{ name: string; active: string; sub: string; observedAt: string }>,
@@ -415,7 +413,7 @@ Deno.test("Aggregate T29 - i18n key-set parity: en_US and zh_CN keys are strictl
   expect(onlyZh).toEqual([]);
   expect(enKeys.length).toBeGreaterThan(0);
   expect(enKeys.length).toBe(zhKeys.length);
-  // T30 全集下限:79 键(tx + state 通道补齐后的既有规模)
+  // 全集下限:79 键(tx + state 通道补齐后的既有规模)
   expect(enKeys.length).toBeGreaterThanOrEqual(79);
 });
 
@@ -442,7 +440,7 @@ Deno.test("Aggregate T29 - every t(\"literal\") in main.ts has a translation in 
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// 聚合断言 8-9:audit 事件白名单完整性(防 T30 之后回退)
+// 聚合断言 8-9:audit 事件白名单完整性(防回退)
 // ═══════════════════════════════════════════════════════════════════════
 
 Deno.test("Aggregate T29 - ALLOWED_AUDIT_TOOLS contains the tx event trio and the legacy six (regression guard)", async () => {
@@ -460,7 +458,7 @@ Deno.test("Aggregate T29 - ALLOWED_AUDIT_TOOLS contains the tx event trio and th
   for (const tool of required) {
     expect(ALLOWED_AUDIT_TOOLS.has(tool)).toBe(true);
   }
-  // tx 三事件是 T30 落地的防回退核心:单独再钉一遍(语义显式)
+  // tx 三事件是防回退核心:单独再钉一遍(语义显式)
   expect(ALLOWED_AUDIT_TOOLS.has("copilot_tx_propose")).toBe(true);
   expect(ALLOWED_AUDIT_TOOLS.has("copilot_tx_apply")).toBe(true);
   expect(ALLOWED_AUDIT_TOOLS.has("copilot_tx_reject")).toBe(true);

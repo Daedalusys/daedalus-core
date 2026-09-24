@@ -1,12 +1,12 @@
-// Command daedalus-smoke 是 Daedalus Go 工作区的构建冒烟验证程序(计划 todo 1)。
+// Command daedalus-smoke 是 Daedalus Go 工作区的构建冒烟验证程序。
 //
 // 它的唯一目的,是在当前工具链下"真实编译并执行"本工作区的两个关键依赖:
 //  1. github.com/modelcontextprotocol/go-sdk v1.7.0 —— 构造 MCP 服务器、注册
 //     demo 工具,并通过内存内传输完成一次真实的 initialize + tools/call 往返;
-//  2. github.com/BurntSushi/toml —— 解析一段内嵌 TOML 配置,证明后续任务
-//     (policy.toml)所需的配置解析能力可用。
+//  2. github.com/BurntSushi/toml —— 解析一段内嵌 TOML 配置,证明 policy.toml
+//     所需的配置解析能力可用。
 //
-// 本程序不包含任何产品逻辑;服务器/审计等真实实现属于后续 todo。
+// 本程序不包含任何产品逻辑;服务器/审计等真实实现不在本程序范围内。
 package main
 
 import (
@@ -21,8 +21,8 @@ import (
 	"github.com/Daedalusys/daedalus-sdk/version"
 )
 
-// smokeConfig 是冒烟测试的 TOML 配置模式:证明 BurntSushi/toml
-// 可以解析后续任务(policy.toml 等)所需形式的键值配置。
+// smokeConfig 是冒烟测试的 TOML 配置模式:证明 BurntSushi/toml 可以解析
+// policy.toml 等所需形式的键值配置。
 type smokeConfig struct {
 	Name     string `toml:"name"`
 	ReadOnly bool   `toml:"read_only"`

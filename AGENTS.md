@@ -303,6 +303,11 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
 - **Single Containerfile**: `Containerfile` at repository root is the sole build entry point. All `*.daedalus` aliases have been removed.
 - **i18n 多语言(强制)**: 所有插件的 UI 字符串必须经 `i18n.ts` 的 `t(key, ...args)` 走,不在源码里硬编码。locale 文件在 `<plugin>/i18n/<locale>.json`(POSIX 下划线命名,`en_US` / `zh_CN` / `ja_JP` / `ko_KR` 等); manifest 声明 `"i18n": ["en_US", "zh_CN"]` 数组形式,en_US 必定位兜底。声明 ↔ 实物用 `scripts/plugin-i18n-sync.sh` 双向校验,CI 走严模式(exit 1 拒漂移),开发者加新 locale 走 `--autofix` 自动改写 manifest。locale 探测: `LC_ALL` > `LANG` > `en_US`,支持精确匹配 → 语言级回退(精确 `zh_CN` → 语言级 `zh` → 兜底 `en_US`)。命名: `<key>` 风格 + `{0}` `{1}` printf 占位符。Go 侧 MCP server 的字符串翻译在 P1 单独做(共享同一份 JSON 文件,经 `embed.FS` 嵌入二进制)。
 - **本仓库边界**: 本仓装的是 daedalus 运行时(本仓 Go 静态二进制 + `cmd/` 5 个 core runtime) + 官方自带 copilot 插件(`plugin/copilot/`) + 6 个能力插件(主源在 `../daedalus-plugins/<cap>/`,本仓只持 `bin/` 构建产物) + 这些官方插件的运维工具(`scripts/plugin-i18n-sync.sh` 等)。**插件开发脚手架**(生成新插件骨架、`daedalus-plugin-scaffold new` 之类)属另一个仓库,本仓库不实现; **外部作者的插件**各自维护在各自仓库,通过 `daedalus-host` 加载(后续 plan)。
+- **禁止注释引用计划编号**: `todo N` / `决策 N` / `oracle review` / `round-N` 等进度信息写 commit message 或 `.omo/plans/`,不进源码注释。
+- **注释只写 why,不写 what**: 代码可自解释处不加注释。
+- **单文件注释密度软上限 ~15%**: 后续可接 CI 门禁。
+- **跨仓/跨语言对齐注释不写精确行号**: `py:43-53` 这类行号会腐烂,只写行为语义。
+- **文件头 ≤8 行**: 一句 what + 关键 invariant + 指回 README/AGENTS 的链接。
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - **NEVER** `shell=True` / `bash -c` / `sh -c` in subprocess.

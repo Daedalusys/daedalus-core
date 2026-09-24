@@ -18,7 +18,7 @@ if ((globalThis as any).Deno?.env?.set) {
   process.env.LC_ALL = "en_US.UTF-8";
 }
 
-// state 记忆基线锁(T20 同族纪律):todo 28 后 runQueryTurn 默认经
+// state 记忆基线锁(同族纪律): runQueryTurn 默认经
 // readStateSummary 真实读文件。把 DAEDALUS_STATE_PATH 钉到不存在的临时
 // 路径 → 全文件默认态读恒 NotFound 静默(env 存在即唯一候选,镜像
 // internal/dirs.File 的 env 独占链),开发者真实 ~/.local/share 状态
@@ -418,7 +418,7 @@ Deno.test("Copilot Main - translate fallback: error without kind renders raw msg
 });
 
 Deno.test("Copilot Main - translate structured timeout error renders i18n text with seconds + audits endpoint/timeout_ms", async () => {
-  // W1 形状: Object.assign(new Error(msg), { kind, fields })(决策 7: Error+属性非子类)
+  // W1 形状: Object.assign(new Error(msg), { kind, fields })(Error+属性非子类)
   const buildTimeoutError = (timeoutMs: number) =>
     Object.assign(
       new Error("The operation was aborted due to timeout"),
@@ -1498,7 +1498,7 @@ Deno.test("Copilot Main - L2 (rm -rf) display path: danger banner + reason line,
 });
 
 Deno.test("Copilot Main - L0 translate audit carries risk_level='safe'; display path reject carries tiered risk", async () => {
-  // risk_level 审计字段(pivot 决策 11):L0 的 copilot_translate 与
+  // risk_level 审计字段:L0 的 copilot_translate 与
   // 两条 confirm 路径(auto / y-n)均携带 risk_level;展示路径的档位
   // 由 copilot_reject 的 risk 字段承载(前两个用例已钉)。
   setup();
@@ -1632,7 +1632,7 @@ Deno.test("Copilot Main - defaultReadStdinAll returns empty string when stream e
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// todo 27:事务通道接线(tx.propose / tx.apply / tx.rollback → execTx* 分派)
+// 事务通道接线(tx.propose / tx.apply / tx.rollback → execTx* 分派)
 //
 // LLM 事务提议编码:command = "tx.propose"|"tx.apply"|"tx.rollback",
 // args = [目标, 期望态?]。safe 定级(tx_propose 恒 safe;tx_apply
@@ -1869,7 +1869,7 @@ Deno.test("Copilot Main - tx L2 (reload -> danger) display-only: danger banner +
   const allStdout = stdoutChunks.join("");
   expect(allStdout).toContain("🚨");
   expect(allStdout).toContain("Reason:");
-  // danger 借 risk.pattern.shutdown 文案(T24 钉:reload 中断在途服务)
+  // danger 借 risk.pattern.shutdown 文案(reload 中断在途服务)
   expect(allStdout).toContain("Shutdown/reboot; interrupts all sessions");
 
   const rejectLog = auditLogs.find((l) => l.tool === "copilot_reject");
@@ -1971,7 +1971,7 @@ Deno.test("Copilot Main - tx apply structured failure renders i18n error (no sta
   expect(code).toBe(1);
   expect(tx.calls).toEqual(["begin", "propose", "preview", "apply"]);
   const stderr = stderrChunks.join("");
-  // T26 TxFailure 的 error 字段经 t("tx.error.run") 渲染;绝不抛栈
+  // TxFailure 的 error 字段经 t("tx.error.run") 渲染;绝不抛栈
   expect(stderr).toContain("Transaction step apply failed: step 1 failed: systemctl exit 1");
   expect(stderr).not.toContain("    at ");
   // 成功文案「Transaction <id> applied」绝不得出现(preview header 的
@@ -1983,7 +1983,7 @@ Deno.test("Copilot Main - tx apply structured failure renders i18n error (no sta
 });
 
 Deno.test("Copilot Main - defaultTxBegin spawns DAEDALUS_TX_BIN fake binary (real process) and parses tx_id per stdout contract", async () => {
-  // 真实假二进制(T26 TX_FIXTURE 同族思路,begin 单行 JSON 文档即可):
+  // 真实假二进制(TX_FIXTURE 同族思路,begin 单行 JSON 文档即可):
   // 验证 begin 解析链的进程边界保真度 —— argv 直传 + 单层转义 JSON 一次解析。
   const dir = await Deno.makeTempDir({ prefix: "t27-txbegin-" });
   const okBin = `${dir}/tx-ok`;
@@ -2013,14 +2013,14 @@ Deno.test("Copilot Main - defaultTxBegin spawns DAEDALUS_TX_BIN fake binary (rea
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// daedalus-pkg-kind todo 17:package 域事务通道接线
+// package 域事务通道接线
 // (tx.propose/tx.apply "package <name>" <state> → package.set 适配器路由)
 //
-// 严格沿用上方 todo 27 service.set 测试组的 mock/stub 手法(4 个 tx mock
+// 严格沿用上方 service.set 测试组的 mock/stub 手法(4 个 tx mock
 // 经 CopilotOptions 注入),唯一增量是捕获 propose 的 (txId, adapter, args)
 // 实参:钉住「package 域 target 只把裸包名喂给 daedalus-tx,绝不泄漏
 // "package " 域前缀」与「before/after 走同款 tx.preview.diff 渲染管线」。
-// classifyTxProposal 的 package 分级(todo 16)由 policy.test.ts 钉,此处
+// classifyTxProposal 的 package 分级由 policy.test.ts 钉,此处
 // 只验通道分流,不重复分级断言。
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2098,7 +2098,7 @@ Deno.test("Copilot Main - tx_propose package target routes package.set adapter w
   expect(code).toBe(0);
   expect(tx.calls).toEqual(["begin", "propose", "preview", "apply"]);
 
-  // propose 实参路由钉死:package.set 适配器 + args 恰为裸包名二元组,
+  // propose 实参路由锁定:package.set 适配器 + args 恰为裸包名二元组,
   // "package htop" 前缀形态绝不进 daedalus-tx 的 args JSON
   expect(tx.proposeCalls.length).toBe(1);
   expect(tx.proposeCalls[0].txId).toBe(TX_ID);
@@ -2179,7 +2179,7 @@ Deno.test("Copilot Main - tx_apply package latest is L1 caution: display-only, n
       readLineCalls++;
       return "y";
     },
-    // latest 依赖 dnf 仓库元数据 → todo 16 定级 caution → 展示分流,L1 绝不 apply
+    // latest 依赖 dnf 仓库元数据 → 定级 caution → 展示分流,L1 绝不 apply
     translateFn: txTranslate("tx.apply", ["package htop", "latest"]),
     execFn: async () => ({ stdout: "", stderr: "", returncode: 0, error: null }),
     recordAuditFn: mockRecordAudit,
@@ -2208,15 +2208,13 @@ Deno.test("Copilot Main - tx_apply package latest is L1 caution: display-only, n
   expect(rejectLog?.args.desired_state).toBe("latest");
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// todo 28:state 记忆注入 runQueryTurn 测试组
+// state 记忆注入 runQueryTurn 测试组
 //
 // 覆盖三面:① 非空摘要 → translate 的 system prompt 追加段 + revise 循环
 // history[0] 同构注入;② 读取失败(PermissionDenied 分类)→ stderr 可见、
 // 无审计、翻译照常、绝不 throw;③ 空/缺失态 → 兜底文案绝不污染 prompt。
 // 另有 readStateSummary 直调测试钉真实文件解析链(newest-wins / 坏行 /
 // kind 过滤 / NotFound 静默 / PermissionDenied 可见)。
-// ─────────────────────────────────────────────────────────────────────────────
 
 const stateConfig = () => ({
   provider: "openai" as const,
@@ -2279,7 +2277,7 @@ Deno.test("Copilot Main - TestRunQueryTurn_StateInjection: state summary appende
   // 注入内容 = formatStateSummary 产物,逐字节一致
   expect(capturedSystemContext).toBe(formatStateSummary(entries));
   const block = capturedSystemContext ?? "";
-  // 块标记(与 T30 落位的 en_US state.summary.header 文案一致,大小写不敏感钉 token)
+  // 块标记(与 en_US state.summary.header 文案一致,大小写不敏感钉 token)
   expect(block.toLowerCase()).toContain("known state");
   expect(block).toContain("sshd.service: ActiveState=active, SubState=running (observed 2026-09-07T02:00:00Z)");
   expect(block).toContain("crond.service: ActiveState=inactive");
@@ -2496,7 +2494,6 @@ Deno.test("readStateSummary - PermissionDenied is classified into errors (never 
   await Deno.remove(dir, { recursive: true });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // review M-2 域判定等价契约（plan daedalus-pkg-kind §D，零生产改动）
 //
 // 双侧双写正则锁步断言：
@@ -2510,7 +2507,6 @@ Deno.test("readStateSummary - PermissionDenied is classified into errors (never 
 // 无包名、多词）分类 caution（服务域 + 未知态 present 亦非 service 安全态）
 // 且路由 service.set —— 等价式双侧同假。failure 时 try/catch 重抛携带
 // row.target，精确定位分叉样本行。
-// ─────────────────────────────────────────────────────────────────────────────
 Deno.test("Copilot Main - review M-2: package 域判定等价契约 (classifier ⇔ router 双写正则锁步)", async () => {
   // 样本表 = plan §D 冻结六行（含前后空白、无包名、多词等边界形态）
   const rows: Array<{ target: string }> = [

@@ -1,6 +1,6 @@
 // Command daedalus-host 是 Daedalus 的插件宿主 CLI:发现/检视/校验/审计。
 //
-// ★ 安全边界(计划决策 16):宿主不是任何 MCP 服务器的父进程。
+// ★ 安全边界:宿主不是任何 MCP 服务器的父进程。
 // run-plugin / render-unit 只**打印**由 manifest 构造的启动命令 / systemd
 // ExecStart 片段;真正的进程父是 systemd,它按渲染出的 ExecStart 直接执行
 // 服务器二进制,并保留每服务的 DynamicUser/Landlock/seccomp/LoadCredential
@@ -39,7 +39,7 @@ const (
 	exitUsage   = 2
 )
 
-// DefaultPluginDir 是镜像内插件根目录(决策 22:构建期内建,无运行时安装)。
+// DefaultPluginDir 是镜像内插件根目录(构建期内建,无运行时安装)。
 const DefaultPluginDir = "/opt/daedalus/plugins"
 
 // EnvPluginDir 覆盖默认插件目录(开发态用);-dir 旗标又优先于环境变量。
