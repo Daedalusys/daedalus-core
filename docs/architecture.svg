@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="920" viewBox="0 0 1280 920">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#37474f"/>
+  </marker>
+</defs>
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <text x="640.0" y="30" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="22" font-weight="bold" fill="#212121" text-anchor="middle">Daedalus 完整架构图</text>
+  <text x="640.0" y="52" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">主链:声明 → 事务 → 真实系统 → 观测;横切:策略 + 审计;下层:运行时进程与三仓</text>
+  <rect x="430" y="68" width="420" height="50" rx="8" fill="#e8eaf6" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="640.0" y="90" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="16" font-weight="bold" fill="#212121" text-anchor="middle">用户 / AI agent</text>
+  <text x="640.0" y="112" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">自然语言意图 · MCP 工具调用</text>
+  <rect x="70" y="150" width="470" height="105" rx="8" fill="#e3f2fd" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="305.0" y="172" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="14" font-weight="bold" fill="#212121" text-anchor="middle">copilot 命令顾问  (daedalus.copilot)</text>
+  <text x="305.0" y="194" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">本地静态分级 L0/L1/L2,LLM 不自评风险</text>
+  <text x="305.0" y="211" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">L0 → y/n 后进入 shell 沙箱 或 事务五步</text>
+  <text x="305.0" y="228" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">L1/L2 → 仅展示 + 手动执行提示,不进执行通道</text>
+  <rect x="620" y="150" width="590" height="105" rx="8" fill="#e8f5e9" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="915.0" y="172" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="14" font-weight="bold" fill="#212121" text-anchor="middle">capability 服务器 × 7  (Go 静态二进制 · 只读)</text>
+  <text x="915.0" y="194" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">fs · shell · pkg · sysinfo · service · blueprint · dupe</text>
+  <text x="915.0" y="211" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">service.query / service.list 等 MCP 工具</text>
+  <text x="915.0" y="228" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">查询严格只读;写状态一律经 daedalus-tx</text>
+  <polyline points="640,118 640,134 305,134 305,150" fill="none" stroke="#37474f" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <polyline points="640,118 640,150" fill="none" stroke="#37474f" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <rect x="55" y="285" width="1170" height="250" rx="10" fill="none" stroke="#546e7a" stroke-width="1.2" stroke-dasharray="4,3" opacity="0.55"/>
+  <text x="65" y="303" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" font-weight="bold" fill="#546e7a" text-anchor="start">三面架构(核心数据流)</text>
+  <rect x="85" y="325" width="310" height="145" rx="8" fill="#fff8e1" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="240.0" y="347" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="15" font-weight="bold" fill="#212121" text-anchor="middle">声明面 Spec</text>
+  <text x="240.0" y="369" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">系统应该是什么样</text>
+  <text x="240.0" y="386" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">Resource = kind + name + desired_state</text>
+  <text x="240.0" y="403" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">标准动词:set / delete(→absent)</text>
+  <text x="240.0" y="420" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">改的是资源声明,不是裸命令字符串</text>
+  <rect x="455" y="325" width="330" height="145" rx="8" fill="#ffebee" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="620.0" y="347" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="15" font-weight="bold" fill="#212121" text-anchor="middle">执行面 Tx  (daedalus-tx)</text>
+  <text x="620.0" y="369" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">怎么改、怎么恢复</text>
+  <text x="620.0" y="386" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">begin → propose → preview → y/n → apply</text>
+  <text x="620.0" y="403" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">事务日志 + before/after 快照 + 回滚计划</text>
+  <text x="620.0" y="420" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">网关:enabled_kinds 放行 service / package</text>
+  <rect x="845" y="325" width="350" height="145" rx="8" fill="#eceff1" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="1020.0" y="347" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="15" font-weight="bold" fill="#212121" text-anchor="middle">真实系统  (OS 即事实源)</text>
+  <text x="1020.0" y="369" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">systemd 单元 · dnf/rpm · 文件系统</text>
+  <text x="1020.0" y="386" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">无 etcd 式集中期望态库</text>
+  <text x="1020.0" y="403" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">journal 存期望,OS 存现实,事务是桥</text>
+  <line x1="395" y1="397" x2="453" y2="397" stroke="#37474f" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="424" y="387" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="11" fill="#546e7a" text-anchor="middle">一个事务</text>
+  <line x1="785" y1="397" x2="843" y2="397" stroke="#37474f" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="814" y="387" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="11" fill="#546e7a" text-anchor="middle">副作用</text>
+  <rect x="300" y="485" width="620" height="62" rx="8" fill="#e0f7fa" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="610.0" y="507" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="14" font-weight="bold" fill="#212121" text-anchor="middle">观测面 Observe  (只读对账)</text>
+  <text x="610.0" y="529" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">query / list · state.jsonl 最新值缓存 · 给 diff、审计、下一步决策供料</text>
+  <polyline points="1020,470 1020,516 920,516" fill="none" stroke="#37474f" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <polyline points="300,516 240,516 240,470" fill="none" stroke="#37474f" stroke-width="1.8" stroke-dasharray="6,4" marker-end="url(#arrow)"/>
+  <text x="270" y="506" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="10" fill="#546e7a" text-anchor="middle">回读对账</text>
+  <polyline points="305,255 305,325" fill="none" stroke="#37474f" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <polyline points="1180,255 1245,255 1245,516 920,516" fill="none" stroke="#37474f" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <rect x="55" y="553" width="1170" height="78" rx="10" fill="none" stroke="#546e7a" stroke-width="1.2" stroke-dasharray="4,3" opacity="0.55"/>
+  <text x="65" y="571" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" font-weight="bold" fill="#546e7a" text-anchor="start">两道横切(作用于每一面、每一条通道)</text>
+  <rect x="90" y="577" width="530" height="46" rx="8" fill="#f3e5f5" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="355.0" y="599" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="13" font-weight="bold" fill="#212121" text-anchor="middle">策略面  policy.toml</text>
+  <text x="355.0" y="621" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">缺省 fail-closed · enabled_kinds 网关 · 15 命令白名单 · 凭证隔离</text>
+  <rect x="660" y="577" width="530" height="46" rx="8" fill="#f3e5f5" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="925.0" y="599" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="13" font-weight="bold" fill="#212121" text-anchor="middle">证据面  audit.jsonl 哈希链</text>
+  <text x="925.0" y="621" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">唯一写入口 daedalus-audit · begin/apply/rollback 盖 TxID+TxStep</text>
+  <rect x="55" y="649" width="560" height="155" rx="10" fill="none" stroke="#546e7a" stroke-width="1.2" stroke-dasharray="4,3" opacity="0.55"/>
+  <text x="65" y="667" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" font-weight="bold" fill="#546e7a" text-anchor="start">运行时进程(零 spawn · systemd 沙箱)</text>
+  <rect x="80" y="677" width="510" height="115" rx="8" fill="#efebe9" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="335.0" y="699" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="13" font-weight="bold" fill="#212121" text-anchor="middle">启动链</text>
+  <text x="335.0" y="721" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">daedalus-host:list/inspect/verify — 只打印启动命令,绝不 spawn</text>
+  <text x="335.0" y="738" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">systemd 单元:DynamicUser + Landlock + seccomp + LoadCredential</text>
+  <text x="335.0" y="755" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">76 脚本构建期渲染 ExecStart → 服务器由 systemd 执行</text>
+  <text x="335.0" y="772" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">一切落盘审计走 daedalus-audit CLI</text>
+  <rect x="645" y="649" width="580" height="155" rx="10" fill="none" stroke="#546e7a" stroke-width="1.2" stroke-dasharray="4,3" opacity="0.55"/>
+  <text x="655" y="667" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" font-weight="bold" fill="#546e7a" text-anchor="start">三仓拓扑与制品流(平级 clone)</text>
+  <rect x="670" y="677" width="175" height="100" rx="8" fill="#f5f5f5" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="757.5" y="699" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="13" font-weight="bold" fill="#212121" text-anchor="middle">daedalus-core</text>
+  <text x="757.5" y="721" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">镜像 + 5 runtime</text>
+  <text x="757.5" y="738" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">copilot 源码</text>
+  <text x="757.5" y="755" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">internal/{controller,tx}</text>
+  <rect x="860" y="677" width="175" height="100" rx="8" fill="#f5f5f5" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="947.5" y="699" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="13" font-weight="bold" fill="#212121" text-anchor="middle">daedalus-sdk</text>
+  <text x="947.5" y="721" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">对象模型 / 策略</text>
+  <text x="947.5" y="738" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">审计 / 观测缓存</text>
+  <text x="947.5" y="755" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">公开 contract 包</text>
+  <rect x="1050" y="677" width="175" height="100" rx="8" fill="#f5f5f5" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
+  <text x="1137.5" y="699" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="13" font-weight="bold" fill="#212121" text-anchor="middle">daedalus-plugins</text>
+  <text x="1137.5" y="721" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">7 个 capability</text>
+  <text x="1137.5" y="738" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">插件 monorepo</text>
+  <text x="1137.5" y="755" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">zip + sha256 分发</text>
+  <text x="925" y="797" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="11" fill="#546e7a" text-anchor="middle">just plugin-pack / sync / build → bootc 镜像(构建期内建,无运行时联网安装)</text>
+  <text x="640.0" y="906" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="11" fill="#546e7a" text-anchor="middle">保证附着于通道:走资源+事务通道 → 可回滚、有日志、有哈希链;其余通道在硬边界内存在,平台不背书。</text>
+</svg>
