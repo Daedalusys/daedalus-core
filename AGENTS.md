@@ -88,7 +88,7 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 | `shellpolicy` | Go pkg | `../daedalus-sdk/shellpolicy/` | 15 命令 / 4 bin 目录 / 路径规则权威实现 (CLEAN_ENV, 30s, rc 126/124) |
 | `pathguard` | Go pkg | `../daedalus-sdk/pathguard/` | fs 路径校验 (ALLOWED_DIRS 前缀边界, 空字节, realpath) |
 | `audit` | Go pkg | `../daedalus-sdk/audit/` | 哈希链审计库, Python 金样字节级兼容 (三种序列化模式) |
-| `objectmodel` | Go pkg | `../daedalus-sdk/objectmodel/` | 对象模型 schema 单一事实源;Kind 封闭枚举 7 类 |
+| `objectmodel` | Go pkg | `../daedalus-sdk/objectmodel/` | 对象模型 schema 单一事实源;Kind 封闭枚举 7 类 + spec/status 信封 `Object` |
 | `cmd/daedalus-{fs,shell,pkg,sysinfo,service,blueprint,dupe}` | Go binaries | `../daedalus-plugins/{fs,shell,pkg,sysinfo,service,blueprint,dupe}/cmd/` | 6 个 MCP stdio 能力服务器 (镜像态 = 插件内 `bin/`) |
 | `policy.toml` | TOML | `files/system/opt/daedalus/shared/policy.toml` | 安全策略单一事实源 ([shell]/[fs]/[audit]/[objectmodel]/[blueprints]) |
 | `daedalus.plugin.json` | manifest | `plugin/copilot/` + `../daedalus-plugins/<cap>/` | 插件声明 (id/type/runtime/executable/entrypoint/permissions/tools/resources/i18n) |
@@ -153,7 +153,7 @@ Traditional systems grant AI agents or LLM clients unrestricted shell access, po
 
 > 本段由 plan `aios-object-model-alignment` W7/T31 增量追加 (决策 25 落地;完整决策与执行模型细节见 `.omo/plans/aios-object-model-alignment.md`,此处不重复)。
 
-- **单一事实源**: 对象模型 schema 只有 `../daedalus-sdk/objectmodel/` 一处定义。`Resource` 是 manifest 声明类型,三字段元组 `kind` + `name` + `desired_state` (JSON 键 `kind`/`name`/`desired_state`),绝不掺入 systemctl 字段;`ServiceState` 是查询/状态载荷共用类型 (`kind`/`name`/`desired_state`/`properties`,Properties 键为 systemctl 属性名原文)。id / metadata 等其它维度未进入 v1 声明模式。
+- **单一事实源**: 对象模型 schema 只有 `../daedalus-sdk/objectmodel/` 一处定义。`Resource` 是 manifest 声明类型,三字段元组 `kind` + `name` + `desired_state` (JSON 键 `kind`/`name`/`desired_state`),绝不掺入 systemctl 字段;`ServiceState` 是查询/状态载荷共用类型 (`kind`/`name`/`desired_state`/`properties`/`conditions`,Properties 键为 systemctl 属性名原文、Conditions 是其上的派生语义层,两层并存不互替)。信封 `Object`(`api_version`/`kind`/`metadata{name,labels,annotations,generation}`/`spec`/`status{observed_generation,conditions,properties}`)同在 `objectmodel/envelope.go`,两类载荷都投影进它;`internal/controller` 的同名类型是它的**别名**,不得出现第二份形状。labels/annotations/generation 目前只有读侧 API(`MatchLabels`/`GetCondition`/`UpsertCondition`)无填充方,填充归调和循环;uid/resourceVersion/ownerRef/finalizers 未落地(出现真实消费者再谈),id 也未进入 v1 声明模式。
 - **资源种类**: `Kind` 封闭枚举共 7 类 (service / package / container / capability / task / transaction / policy),v1 仅 `service` 与 `package` 有 provider;其余五类是保留枚举位,校验器接受、策略网关 fail-closed 拒绝。**新增资源种类必须先在 `../daedalus-sdk/objectmodel/` 加 Kind 常量 + `kindRegistry` 登记 + 校验分支**,再经 `policy.toml [objectmodel].enabled_kinds` 放行(三点漂移测试钉死)。
 - **package kind (plan `daedalus-pkg-kind` 增量追加)**: `package` 自此有 provider — 只读观测走 `../daedalus-plugins/pkg/` 的 `dnf_query`/`dnf_list_installed` (`../daedalus-sdk/pkgquery`),状态变更一律经 `daedalus-tx` 的 `package.set` 适配器(事务通道, begin→propose→apply→rollback);`desired_state` 为 `present`/`absent`/`latest` 三值冻结三元组,映射 dnf `install`/`remove`/`upgrade` (`packageSetVerbs`,表外值拒绝);适配器 euid==0 守门(错串 `package.set requires root (euid=0); re-run via sudo`,与 `service.set` 的 user-scope-only 强制镜像对称 — package 强制 root,service 拒绝 root 单元);回滚依托 `dnf history undo`,Apply 以"捕获 dnf history id + sidecar 落盘 (`<txID>-<step.Index>.dnf_history_id`,tx-id 经 D-1 裁决的 ctx 侧路透传给适配器,`tx.Step` 六键线上契约不动)"为**成功必要条件** — 捕获或落盘任一失败都整体判 Apply 失败,杜绝"Apply 成功但 Rollback 不可用" (fail-closed 哲学);Rollback 读侧 sidecar 缺失/不可读→严格 error,不兜底、绝不猜 history id,history 已清理时 `present`/`latest` best-effort `remove` 兜底、`absent` 严格 error 且 dnf 物理零调用(不可逆)。
 - **transactable**: 不是所有资源都事务化。事务性资源(目前 service / package)的状态变更走 `daedalus-tx` (begin→propose→apply→rollback) 通道;未启用 / 无 tx 适配器的非事务性资源被策略网关与适配器注册表拒绝,连 begin→propose→apply 序列都无法发起。v1 执行模型: `daedalus-tx` 是用户态调用的 CLI,无 systemd 单元(决策 25)。
@@ -374,6 +374,7 @@ podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release
 
 ## NOTES
 - 本仓(`daedalus-core`)、`../daedalus-sdk/`、`../daedalus-plugins/` 平级 clone 是 dev 桥的唯一拓扑;`go.work` 不入库,模板 `go.work.example` 入库 — clone 后 `cp go.work.example go.work`,跑 `just verify-dev-layout` 守门。
+- 模板除 `use` 全部 cap 外,还对 SDK 的 `v0.0.0` 与 `v0.0.0-00010101000000-000000000000` 各钉一行 `replace => ../daedalus-sdk`:workspace 级 replace 覆盖各 cap `go.mod` 里面向插件仓 CI 的 `../daedalus-sdk`,否则 `just go-test` 撞 "conflicting replacements"。本地跑插件测试走该 workspace(`go test github.com/Daedalusys/daedalus-plugins/<cap>/...`),不需要符号链接桥。
 - `scripts/sync-daedalus.sh` copies safely: systemd leg uses targeted stale-delete (only `daedalus-*`, upstream assets untouched); plugin leg uses `--delete --delete-excluded` (vendor mirrors source exactly); `base_image/plugin/` sits outside the Containerfile COPY whitelist so it never reaches rootfs.
 - `base_image/` carries upstream dormant CI targeting upstream repos — do NOT mistake for Daedalus CI.
 - Deno install (`65-ai-safety.sh`) pulls from `https://deno.land/install.sh` to `/usr/local/bin/deno` — used **only** by the copilot plugin now.
