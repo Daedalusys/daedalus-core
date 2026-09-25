@@ -125,11 +125,12 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | k8s 概念 | Daedalus 现状 | 缺口分级 | 归属 |
 | --- | --- | --- | --- |
 | CRD | `objectmodel.go` Kind 封闭枚举 + manifest `resources` | A 定义层 | v1 已交付 |
-| apiVersion | 无 | A | P3 |
-| metadata.labels / annotations / uid / generation | 无 | A | P3 |
-| metadata.resourceVersion | 无(tx 单写者) | A | P3 |
-| spec/status 分离 | Resource(3 字段)与 ServiceState(4 字段)分载,`objectmodel.go:74-91` | A | P3 |
-| Conditions | Properties 平铺 map,无条件列表 | A | P3 |
+| apiVersion | 信封有 `api_version` 键,无版本化需求,投影恒空 | A | when-needed |
+| metadata.labels / annotations / generation | 信封 `objectmodel.Metadata` 已在场,读侧 `MatchLabels`;尚无填充方 | A | P4 填值 |
+| metadata.uid | 无 | A | when-needed |
+| metadata.resourceVersion | 无(tx 单写者) | A | when-needed |
+| spec/status 分离 | 信封 `objectmodel.Object{api_version,kind,metadata,spec,status}`,Resource 与 ServiceState 双投影 | A | v1 已交付 |
+| Conditions | `objectmodel.Condition` 三态 + `UpsertCondition`;`service.query` 产出 `Ready` | A | v1 已交付 |
 | controller / reconcile | 无(tx 用户显式调用) | B | 契约缝 ReconcileFunc → P4 |
 | list-watch / informer | 无(state.jsonl 最新值) | B | P4 |
 | workqueue / backoff | 无 | B | P4 |
@@ -138,7 +139,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | scheduler | **故意无**(桌面单机) | — | 故意无 |
 | namespace | 无(DynamicUser 隔离替代) | C | P4+ |
 | RBAC | 无 | C | 开放问题 |
-| finalizer / ownerRef / GC | 无 | A | P3+ |
+| finalizer / ownerRef / GC | 无 | A | when-needed(随 delete 适配器) |
 | events | audit 是证据链,非事件流 | B | P4 |
 | server-side apply | 无(tx 全量快照) | C | 开放问题 |
 | kubectl diff | tx status 可回放日志;preview 限事务 | C | P4 |
@@ -206,15 +207,15 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus 每笔事务自带 
 
 ## §8 对象模型缺口盘点
 
-分级:A 定义层(资源形状)、B 架构层(驱动资源的机器)、C 体感层(使用手感)。公共前提:契约缝已在 `internal/controller` 钉死形状,P3/P4 是让形状长出行为。
+分级:A 定义层(资源形状)、B 架构层(驱动资源的机器)、C 体感层(使用手感)。公共前提:契约缝形状的唯一事实源已在 SDK `objectmodel`(core 的 `internal/controller` 是其别名),P4 是让形状长出行为。
 
-### A 定义层(P3)
+### A 定义层
 
 | 缺口 | 现在 | 为什么后做 |
 | --- | --- | --- |
-| metadata 块 | Resource 仅 3 字段 | v1 无第三方按标签筛选;先摆字段只会得到空格 |
-| spec/status 信封 | 两类型分载,事实已分离 | 等同一消费者需同读期望与观测时再统一 |
-| Conditions | 平铺 map | v1 无多维裁决消费者;随 status 写回落地 |
+| metadata 块 | 信封 `Metadata{name,labels,annotations,generation}` 已在;`Resource` 声明仍 3 字段 | 按标签筛选的消费者是调和循环,声明侧预先造值只会得到空格 |
+| spec/status 信封 | **已闭合**:`Object{api_version,kind,metadata,spec,status}`,`Resource.Object()` 与 `ServiceState.Object()` 双投影 | — |
+| Conditions | **已闭合**:`Condition` 三态 + `UpsertCondition`(同状态写回不刷新转换时刻);`service.query` 产出 `Ready` | 执行面转换时刻随 tx apply 落地 |
 | ownerRef / finalizer | 无父子、无延迟删除 | 先有 delete 适配器,才谈延迟删除 |
 
 ### B 架构层(P4)
@@ -223,7 +224,7 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus 每笔事务自带 
 | --- | --- | --- |
 | reconcile 循环 | 用户显式调用 | 次序选择(§7②);ReconcileFunc 类型已钉 |
 | list-watch / informer | 快照缓存 | 单机快照够用;reconcile 出现后才有必要 |
-| Generation 比较 | 字段位归 P3 | 语义只在 reconcile 循环里成立 |
+| Generation 比较 | 字段位已在 | 语义只在 reconcile 循环里成立 |
 | CRD 式动态注册 | 新增 kind 要改四处 | 外部 controller 生态前置;第一个外部 controller 前属空转 |
 | events 流 | 只有 audit 证据链 | 两者目的不同;生产者是常驻控制器,机器未上线 |
 
@@ -263,7 +264,7 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus 每笔事务自带 
 | 阶段 | 内容 | 理由 |
 | --- | --- | --- |
 | P2 | package kind + 事务适配器 | **已交付 v1.1**(plan daedalus-pkg-kind,2026-09-15) |
-| P3 | 契约类型被真实消费(Condition、Generation) | 对象模型类型在 SDK 仓,消费方在 core 仓,改动横跨两仓 |
+| P3 | 契约类型被真实消费(Condition、Generation) | **Condition 已交付**(2026-09-26:信封升入 SDK、`service.query` 产出 `Ready`);Generation 字段在场但无填充方,其消费者是 P4 投影管道 |
 | P4 | controller runtime + 外部 controller 插件 | list-watch/reconcile 把已钉的契约缝长出行为 |
 | P5 | 文档/示例/评估 harness 运营化 | 三仓各自演进,无强制迁移 |
 

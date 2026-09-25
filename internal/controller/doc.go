@@ -22,7 +22,9 @@
 // 类型不需要改动宿主一行代码。
 //
 // 文件布局:
-//   - types.go:契约类型与动词常量(v2 消费者的线上契约,改动即破坏);
+//   - types.go:契约类型与动词常量(v2 消费者的线上契约,改动即破坏);其中
+//     Object/Metadata/Status/Condition 是 SDK objectmodel 信封的别名——信封
+//     形状不能留在 internal/(插件仓 import 不到),两处并存即第二事实源;
 //   - 对应 VISION.md 的 controller runtime 章节(v2 蓝图,本包是其 v1.5
 //     类型锚点)。
 package controller
