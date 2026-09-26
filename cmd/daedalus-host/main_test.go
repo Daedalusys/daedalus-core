@@ -548,6 +548,31 @@ func TestAudit_EverySubcommand(t *testing.T) {
 	}
 }
 
+func TestAudit_MissingIDIsAudited(t *testing.T) {
+	// Given: 子命令缺 <id> 位置参数(空 id 分支)。
+	root := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	t.Setenv(audit.EnvLogPath, logPath)
+
+	// When: 四个 id 型子命令各跑一次缺 id。
+	for _, cmd := range []string{"inspect", "verify", "run-plugin", "render-unit"} {
+		code, _, _ := runCapture(t, cmd, "-dir", root)
+		if code != exitUsage {
+			t.Fatalf("%s 缺 id 退出码 = %d, want 2", cmd, code)
+		}
+	}
+
+	// Then: 空 id 也是被拒的调用,必须逐条落 denied 审计(修复前此分支静默
+	// 返回 exit 2 不落任何记录——拒绝无痕即证据边界漏记)。
+	recs := readAuditLines(t, logPath, 4)
+	wantTools := []string{"host_inspect", "host_verify", "host_run_plugin", "host_render_unit"}
+	for i, rec := range recs {
+		if rec["tool"] != wantTools[i] || rec["outcome"] != "denied" {
+			t.Errorf("记录 %d = %v/%v, want %s/denied", i, rec["tool"], rec["outcome"], wantTools[i])
+		}
+	}
+}
+
 func TestAudit_BrokenLogPathIsSilent(t *testing.T) {
 	// Given: 审计日志写到不可能成功的路径(父组件是已存在的普通文件)。
 	blocker := filepath.Join(t.TempDir(), "blocker")
