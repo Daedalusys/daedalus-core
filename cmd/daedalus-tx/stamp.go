@@ -1,8 +1,8 @@
 package main
 
-// stamp.go —— 事务审计盖章 + 跨进程事务链续接(todo 15 承重)。
+// stamp.go —— 事务审计盖章 + 跨进程事务链续接。
 //
-// 盖章规则(review round 1, 与 todo 23(d) 消歧后钉死):
+// 盖章规则:
 //   - 只有 begin(step 0)/ apply(步 1..N 升序)/ rollback(步 N+1..)携带 Entry.TxID/TxStep;
 //   - propose 与 status 发出**空 TxID**条目(tx-id 仅存在于 args 对象里)。
 //   - identity=daedalus-tx, tool=daedalus_tx_<sub>; 尽力而为发射(写失败静默,

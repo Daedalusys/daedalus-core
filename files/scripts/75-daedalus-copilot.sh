@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -xeuo pipefail
 
-# Daedalus Copilot 权限收尾(计划 todo 11 三层迁移后)。
+# Daedalus Copilot 权限收尾。
 #
 # copilot 源码态已迁至 daedalus-core/plugin/copilot/(代码逻辑与插件定义层,镜像外);
-# 镜像内权威安装态是 /opt/daedalus/plugins/daedalus.copilot/(todo 8 打包产物,
+# 镜像内权威安装态是 /opt/daedalus/plugins/daedalus.copilot/(打包产物,
 # 随 rootfs 树 sync/COPY 落位,文件权限由 plugin-pack 解压器固定)。
 # 旧镜像内 copilot 源目录(/opt/daedalus 下的 deno 子树)已废弃,不再在镜像内创建。
 echo "=== Configuring Daedalus Copilot CLI permissions ==="

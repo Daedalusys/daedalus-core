@@ -1,6 +1,6 @@
 package main
 
-// service_set_exec.go —— service.set 的进程与文件助手层(todo 22)。
+// service_set_exec.go —— service.set 的进程与文件助手层。
 //
 // service_set.go 负责三段生命周期的编排与校验; 本文件只做两件机械事:
 // systemctl argv 直发(含超时/退出码规范化)与单元文件的逐字快照/恢复。

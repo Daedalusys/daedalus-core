@@ -67,7 +67,7 @@ func TestCLI_PackThenVerify(t *testing.T) {
 	}
 }
 
-// TestCLI_UsageErrors 钉死用法错误退出码 2:互斥旗标、缺参、无参。
+// TestCLI_UsageErrors 锁定用法错误退出码 2:互斥旗标、缺参、无参。
 func TestCLI_UsageErrors(t *testing.T) {
 	tests := []struct {
 		name string

@@ -1,11 +1,7 @@
 /**
- * Daedalus OS Copilot 哈希链审计日志记录器。
- *
- * 使用 Deno.Command 调用 Go 审计 CLI（daedalus-audit），
- * 以确保 SHA-256 加密哈希链接和文件锁定（哈希链契约与 Python 版逐字节兼容）。
- * 当系统日志目录（/var/log/daedalus）不可写时，
- * 提供回退至非特权用户级目录（~/.local/share/daedalus）。
- *
+ * Daedalus OS Copilot 哈希链审计日志记录器：经 Deno.Command 调用 Go 审计
+ * CLI（daedalus-audit）写入，保证 SHA-256 哈希链与文件锁契约（与 Python 版
+ * 逐字节兼容）；/var/log/daedalus 不可写时回退 $HOME/.local/share/daedalus。
  * 严禁使用 Deno 文件系统 API 直接写入审计文件。
  */
 
@@ -16,7 +12,7 @@ export const ALLOWED_AUDIT_TOOLS = new Set([
   "copilot_edit",
   "copilot_cancel",
   "copilot_error",
-  // 事务通道专属审计事件族(决策 25 落地,plan todo 27 起由 main.ts runTxTurn 发出):
+  // 事务通道专属审计事件族(由 main.ts runTxTurn 发出):
   // copilot_tx_propose = 事务开账并快照步骤提议;copilot_tx_apply = 用户授权后真实应用;
   // copilot_tx_reject = 用户在 y/n 处放弃(日志留 proposed 态,零副作用)。
   "copilot_tx_propose",
@@ -37,9 +33,6 @@ export type AuditTool =
 
 export type AuditOutcome = "success" | "denied" | "error";
 
-/**
- * 探测文件/路径是否可访问（stat 成功即视为存在）。
- */
 function pathExists(target: string): boolean {
   try {
     if (typeof (Deno as any).statSync === "function") {
@@ -56,10 +49,8 @@ function pathExists(target: string): boolean {
 }
 
 /**
- * 确定调用哈希链审计所使用的 Go CLI 二进制（daedalus-audit）路径。
- * 解析顺序：DAEDALUS_AUDIT_BIN 环境变量 → 生产默认 /usr/local/bin/daedalus-audit →
- *   开发态仓库构建产物 daedalus-core/bin/daedalus-audit（含向上回溯最多 10 层父目录）。
- * 全部探测失败时回退到生产路径（让用户看到友好错误）。
+ * 审计 CLI（daedalus-audit）路径解析：DAEDALUS_AUDIT_BIN → 生产默认
+ * /usr/local/bin/daedalus-audit → 仓库构建产物；全部探测失败回退生产路径。
  */
 export function getAuditBinary(): string {
   const envBinary = Deno.env.get("DAEDALUS_AUDIT_BIN");
@@ -79,7 +70,6 @@ export function getAuditBinary(): string {
       return rel;
     }
   }
-  // 向上回溯最多 10 层父目录查找仓库内构建产物
   let cwd = Deno.cwd();
   for (let i = 0; i < 10; i++) {
     const tryPath = `${cwd}/daedalus-core/bin/daedalus-audit`;
@@ -94,10 +84,8 @@ export function getAuditBinary(): string {
 }
 
 /**
- * 解析适用的审计日志文件路径。
- * 1. 若设置了 DAEDALUS_AUDIT_LOG_PATH 环境变量则优先使用。
- * 2. 尝试主系统路径 /var/log/daedalus/audit.jsonl。
- * 3. 若父目录不可访问/不可写，则回退至 $HOME/.local/share/daedalus/audit.jsonl。
+ * 审计日志路径解析：DAEDALUS_AUDIT_LOG_PATH → /var/log/daedalus/audit.jsonl
+ * → 父目录不可访问时回退 $HOME/.local/share/daedalus/audit.jsonl。
  */
 export function resolveAuditPath(): string {
   const envPath = Deno.env.get("DAEDALUS_AUDIT_LOG_PATH");
@@ -133,15 +121,8 @@ export function resolveAuditPath(): string {
 }
 
 /**
- * 通过调用 Go 审计 CLI（daedalus-audit）记录一条审计日志条目。
- * 捕获所有子进程故障和异常，记录至 console.error，
- * 并返回 false 而不抛出异常。
- *
- * @param tool 审计工具名称（必须在 ALLOWED_AUDIT_TOOLS 中）
- * @param args 参数载荷（对象或数组）
- * @param outcome 调用结果（'success' | 'denied' | 'error'）
- * @param logPath 可选的显式日志路径覆盖
- * @returns Promise<boolean> 若记录成功返回 true，否则返回 false
+ * 经 daedalus-audit CLI 记录一条审计条目；捕获全部子进程故障与异常、
+ * 记至 console.error 并返回 false，绝不抛出（tool 必须在 ALLOWED_AUDIT_TOOLS 中）。
  */
 export async function recordAudit(
   tool: string,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 76-daedalus-plugin-gen.sh —— 构建期插件单元渲染 + 策略一致性 + 自校验(计划 todo 9/13,决策 16/22)。
+# 76-daedalus-plugin-gen.sh —— 构建期插件单元渲染 + 策略一致性 + 自校验。
 #
 # 职责:
 #   1. 逐个读取镜像内安装态插件 /opt/daedalus/plugins/daedalus.<cap>/daedalus.plugin.json,
@@ -9,19 +9,19 @@
 #   3. 交叉核对 manifest.tools 与二进制真实暴露的 MCP tools/list(stdio 握手),不一致即构建失败;
 #   4. 沙箱语义防回归:单元主体的 DynamicUser/ProtectSystem/NoNewPrivileges 与
 #      .service.d/{landlock,credentials}.conf drop-in 必须原样存在,本脚本一个字节都不改它们;
-#   5. 策略单一事实源(todo 13):预检 /opt/daedalus/shared/policy.toml 的存在性、必需节与
+#   5. 策略单一事实源:预检 /opt/daedalus/shared/policy.toml 的存在性、必需节与
 #      [shell].allowed_commands 集合,并把 DAEDALUS_POLICY_PATH 注入能力服务器启动握手——
 #      显式指向的文件损坏/含未知键/字段缺失时,internal/policy 的 Go 解析器 fail-closed
 #      拒绝启动,握手随之失败,即由真实解析器(而非 bash 近似)完成 TOML 合法性校验;
-#   6. 策略消费约定(todo 13,拍板为"运行时读取"):单元**不渲染** Environment=ALLOW_COMMANDS,
+#   6. 策略消费约定(拍板为"运行时读取"):单元**不渲染** Environment=ALLOW_COMMANDS,
 #      Go 服务器启动时读取 policy.toml;若单元显式携带该覆盖,则必须与 [shell].allowed_commands
 #      逐字一致(集合相等),否则构建失败——单元不得成为第二事实源;其余能力单元注入
 #      ALLOW_COMMANDS 或用 DAEDALUS_POLICY_PATH 改指策略路径一律视为漂移,直接失败;
-#   7. DynamicUser 策略可读性(todo 13):ProtectSystem=strict 只是把 /opt 挂成只读,
+#   7. DynamicUser 策略可读性:ProtectSystem=strict 只是把 /opt 挂成只读,
 #      不拦截读取;DynamicUser 能否读到 policy.toml 取决于文件 o+r 位与祖先目录 o+x 位,
 #      逐项验证即可,**无需**任何 BindReadOnlyPaths/ReadWritePaths 放宽(放宽反而破坏
 #      "整盘只读 + 单点策略"的沙箱语义)。不满足即构建失败,防止服务器开机 fail-closed。
-#   8. 对象模型资源门禁(aios 计划 todo 10):CAPS 扩至 5 能力(fs/shell/pkg/sysinfo/service,
+#   8. 对象模型资源门禁:CAPS 扩至 5 能力(fs/shell/pkg/sysinfo/service,
 #      daedalus.service 单元同样经 render-unit 渲染回写并幂等自校验);策略预检额外断言
 #      [objectmodel].enabled_kinds 非空且包含 service(service 资源的唯一授权来源,
 #      缺失/剔除即 fail-closed 拒构建);逐插件交叉核对 manifest.resources[].kind ⊆
@@ -44,7 +44,7 @@ PLUGINS="${ROOT%/}/opt/daedalus/plugins"
 UNIT_DIR="${ROOT%/}/usr/lib/systemd/system"
 HOST="${ROOT%/}/usr/local/bin/daedalus-host"
 POLICY="${ROOT%/}/opt/daedalus/shared/policy.toml"
-# 能力清单(aios 计划 todo 10 新增 service;blueprint-p1 todo 22 新增 blueprint):
+# 能力清单:
 # 循环按 cap 推导 id=daedalus.<cap>、单元=daedalus-<cap>.service、drop-in 目录=daedalus-<cap>.service.d。
 # daedalus.blueprint 与既有能力完全同构:manifest → render-unit → ExecStart 幂等回写 +
 # tools/list 交叉核对 + landlock/credentials drop-in 沙箱语义防回归。blueprint 的
@@ -69,7 +69,7 @@ manifest_tools() {
 }
 
 # binary_tools <可执行文件> —— 通过 MCP stdio 握手(initialize → initialized → tools/list)
-# 取回二进制实际注册的工具名并排序。sleep 保活防 stdin 提前 EOF 掐死响应(见 notepad todo 4)。
+# 取回二进制实际注册的工具名并排序。sleep 保活防 stdin 提前 EOF 掐死响应。
 # 服务器进程携带 DAEDALUS_POLICY_PATH(见下方策略预检),故握手成功同时证明
 # Go 解析器接受了该策略文件——损坏策略在 main() 的 applyPolicy 即 os.Exit(1)。
 binary_tools() {
@@ -97,7 +97,7 @@ policy_toml_list() {
         | norm_csv
 }
 
-# —— 0) 策略单一事实源预检(todo 13):存在性 → 必需节/键 → shell 白名单集合非空 ——
+# —— 0) 策略单一事实源预检:存在性 → 必需节/键 → shell 白名单集合非空 ——
 [ -f "$POLICY" ] || fail "policy.toml 缺失: $POLICY(单一事实源必须随镜像落位)"
 [ -s "$POLICY" ] || fail "policy.toml 为空文件: $POLICY"
 for sec in '^\[shell\]' '^\[fs\]' '^\[audit\]'; do
@@ -109,17 +109,17 @@ grep -Eq '^[[:space:]]*log_path[[:space:]]*=' "$POLICY" || fail "policy.toml 损
 POLICY_ALLOW="$(policy_toml_list allowed_commands "$POLICY")"
 [ -n "$POLICY_ALLOW" ] || fail "policy.toml 损坏: [shell].allowed_commands 无法解析出任何命令项"
 
-# —— 0+') 对象模型资源门禁预检(aios 计划 todo 10):[objectmodel] 节与
+# —— 0+') 对象模型资源门禁预检:[objectmodel] 节与
 # enabled_kinds 键必须存在,且启用集合必须包含 service —— daedalus-service
 # provider 与 daedalus.service 插件声明的唯一授权来源。fail-closed:
 # 空列表/缺 service 一律拒构建(与 Go 侧 internal/policy 的 requireList 语义同向)。
-grep -q '^\[objectmodel\]' "$POLICY" || fail "policy.toml 损坏: 缺节 ^[objectmodel] (对象模型策略节必须存在,todo 10)"
+grep -q '^\[objectmodel\]' "$POLICY" || fail "policy.toml 损坏: 缺节 ^[objectmodel] (对象模型策略节必须存在)"
 grep -Eq '^[[:space:]]*enabled_kinds[[:space:]]*=' "$POLICY" || fail "policy.toml 损坏: [objectmodel] 缺 enabled_kinds"
 OM_KINDS="$(policy_toml_list enabled_kinds "$POLICY")"
 printf '%s\n' "$OM_KINDS" | grep -qx 'service' \
     || fail "policy.toml enabled_kinds does not include 'service'([objectmodel].enabled_kinds{$(echo "$OM_KINDS" | tr '\n' ' ')},fail-closed:service 资源种类未授权,daedalus.service 单元拒绝渲染)"
 
-# —— 0a) DynamicUser 策略可读性(todo 13):ProtectSystem=strict 不拦读,
+# —— 0a) DynamicUser 策略可读性:ProtectSystem=strict 不拦读,
 # 读取可行性 = 文件 o+r 位 + ROOT 子树内祖先目录 o+x 位(DynamicUser 以
 # world/other 身份访问)。不满足即构建失败,而非部署后开机 fail-closed。
 # 无需也不允许在此加 BindReadOnlyPaths 类放宽——只读整盘语义保持原样。
@@ -169,10 +169,9 @@ for cap in $CAPS; do
     got="$(binary_tools "$exe")" || fail "$id: 二进制未应答 tools/list(启动失败、30s 超时,或 DAEDALUS_POLICY_PATH 指向的策略被 Go 解析器拒绝): $exe"
     [ "$want" = "$got" ] || fail "$id: tools 与二进制不符 —— manifest{$(echo "$want" | tr '\n' ' ')} vs 二进制{$(echo "$got" | tr '\n' ' ')}"
 
-    # —— 3b) 资源 kind 交叉核对(aios 计划 todo 10):manifest.resources[].kind 必须
+    # —— 3b) 资源 kind 交叉核对:manifest.resources[].kind 必须
     # 全部落在 policy.toml [objectmodel].enabled_kinds 内。resources 条目 schema 的
-    # 单一事实源:daedalus-sdk/objectmodel/objectmodel.go(计划
-    # .omo/plans/aios-object-model-alignment.md 决策 25)——本处只做授权核对,不重复校验规则。
+    # 单一事实源是 daedalus-sdk/objectmodel/objectmodel.go ——本处只做授权核对,不重复校验规则。
     # jq 解析安装态清单(JSON 权威形态),
     # 无 resources 字段 → 空集恒过(现有 fs/shell/pkg/sysinfo 即此形态);
     # 任一 kind 未启用 → 该 provider 越权声明资源,fail-closed 拒构建。——
@@ -200,7 +199,7 @@ for cap in $CAPS; do
     sed -i "s|^ExecStart=.*|${rendered}|" "$unit"
     grep -Fxq "$rendered" "$unit" || fail "$id: 写回后复读与渲染不符(单元写入异常): $rendered"
 
-    # —— 6) 策略消费一致性(todo 13,约定 = 运行时读取):
+    # —— 6) 策略消费一致性(约定 = 运行时读取):
     # 单元不渲染 Environment=ALLOW_COMMANDS,白名单唯一来源是 policy.toml;
     # 若单元显式携带该覆盖,值必须与 [shell].allowed_commands 集合逐字相等,
     # 否则单元就成了第二事实源,构建失败。ALLOW_COMMANDS 只对 shell 有意义,

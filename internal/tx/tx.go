@@ -1,22 +1,22 @@
-// 事务(tx)生命周期与日志(journal)原语 —— AIOS 对象模型 C3 核心(todo 14)。
+// 事务(tx)生命周期与日志(journal)原语 —— AIOS 对象模型 C3 核心。
 //
 // 职责边界(与后续消费者的分工):
 //   - 本包只做状态机 + 持久化 + 回滚计划生成;不执行任何适配器动作
-//     (service.set 的快照/应用/回滚在 todo 22),不写审计(todo 15 的 CLI 负责打桩),
+//     (service.set 的快照/应用/回滚在 adapter 侧),不写审计(由 daedalus-tx CLI 负责),
 //     不做网络 I/O,不 spawn 任何子进程。
-//   - daedalus-tx CLI(todo 15)消费本包的 Begin/Load/Append/Mark*/BuildRollbackPlan;
-//     JSON 形态(OpResult 四键、Step 六键、Transaction 五键)是为 T15/T22/T23
-//     的 JSON 消费者钉死的线上契约,改动即跨 todo 破坏。
+//   - daedalus-tx CLI 消费本包的 Begin/Load/Append/Mark*/BuildRollbackPlan;
+//     JSON 形态(OpResult 四键、Step 六键、Transaction 五键)是为 JSON 消费者
+//     锁定的线上契约,改动即破坏下游解析。
 //
 // 持久化模型:每个事务一个 JSON 文件 `<root>/<tx-id>.json`,root 由
 // internal/dirs.TxRoot() 解析(env DAEDALUS_TX_DIR → /var/lib/daedalus/tx →
 // $HOME/.local/share/daedalus/tx),本包绝不复制任何路径字面量。
 // 整个 Transaction 序列化为一个 JSON 文档,在 flock(LOCK_EX) 下整体重写
-// (镜像 audit.go:125-136 的加锁纪律:O_RDWR|O_CREATE 打开 → LOCK_EX →
+// (镜像 audit.go 的加锁纪律:O_RDWR|O_CREATE 打开 → LOCK_EX →
 // defer 注册晚于 Close → LIFO 退出时先 LOCK_UN 再 Close,保证链式写无竞态、
 // 文件内容永远是完整文档而不是撕裂的半截)。
 //
-// 路径安全(round-2/3 fold 钉死,三道防线按序生效):
+// 路径安全(三道防线按序生效):
 //  1. 形状门:tx-id 必须匹配 ^[a-f0-9]{16}$(crypto/rand 8 字节小写十六进制)。
 //     Begin 用自带生成器 + 同款正则自检(纵深防御:生成器若被改坏,正则仍拦截);
 //     Load/journalPath 对 CLI 传入的任意 id 先过同一道门,**通过后才允许
@@ -48,7 +48,7 @@ import (
 	"github.com/Daedalusys/daedalus-sdk/dirs"
 )
 
-// Status 是事务生命周期状态,小写线协议 token 与 JSON 消费者(T15 status 输出)逐字节一致。
+// Status 是事务生命周期状态,小写线协议 token 与 JSON 消费者逐字节一致。
 type Status string
 
 // 状态全集。语义:
@@ -81,7 +81,7 @@ var legalTransitions = map[Status]map[Status]bool{
 	StatusApplied:  {StatusRolledBack: true},
 }
 
-// 哨兵错误:CLI(todo 15)用 errors.Is 区分退出码(非法 id → exit 2 用法错;
+// 哨兵错误:CLI 用 errors.Is 区分退出码(非法 id → exit 2 用法错;
 // 未找到 → exit 1;非法迁移 → exit 1 状态冲突)。
 var (
 	// ErrInvalidID 表示 tx-id 未通过 ^[a-f0-9]{16}$ 形状门(路径安全第 1 道防线)。
@@ -94,15 +94,15 @@ var (
 	ErrInvalidTransition = errors.New("tx: 非法状态迁移")
 )
 
-// txIDPattern 钉死 tx-id 形状:crypto/rand 8 字节 → 16 位小写十六进制。
+// txIDPattern 锁定 tx-id 形状:crypto/rand 8 字节 → 16 位小写十六进制。
 // 该正则同时排除 `/`、`\`、空字节、`..`、大写与前缀多余字符——
-// journalPath 在拼接之前先过这道门(round-2 fold 路径安全)。
+// journalPath 在拼接之前先过这道门。
 var txIDPattern = regexp.MustCompile(`^[a-f0-9]{16}$`)
 
 // journalFileMode 是日志文件权限,与审计日志惯例一致(内容非机密,0644)。
 const journalFileMode = 0o644
 
-// OpResult 是步骤执行的规范化结果,JSON 键为 T15/T22/T23 钉死的线上契约
+// OpResult 是步骤执行的规范化结果,JSON 键为线上契约
 // (集成测试断言 OpResult.returncode;copilot exec.ts 解析 returncode/error)。
 type OpResult struct {
 	Returncode int    `json:"returncode"`
@@ -130,7 +130,7 @@ type RollbackPlan struct {
 }
 
 // Transaction 是一个事务的完整内存态,序列化后即日志文件全文(JSON 五键为
-// T15 status 子命令的线上契约)。未导出字段(journalPath/互斥锁)不参与序列化。
+// 即 status 子命令的线上契约)。未导出字段(journalPath/互斥锁)不参与序列化。
 type Transaction struct {
 	ID           string       `json:"id"`
 	CreatedAt    time.Time    `json:"created_at"`
@@ -138,7 +138,7 @@ type Transaction struct {
 	Steps        []Step       `json:"steps,omitempty"`
 	RollbackPlan RollbackPlan `json:"rollback_plan"`
 
-	// journalPath 是构造期即钉死的日志路径(已过三道路径安全门)。
+	// journalPath 是构造期即锁定的日志路径(已过三道路径安全门)。
 	journalPath string
 	// mu 串行化同进程内对同一 *Transaction 的并发 Append/Mark*(跨进程由 flock 兜底)。
 	mu sync.Mutex
@@ -258,7 +258,7 @@ func (t *Transaction) MarkRolledBack() error { return t.mark(StatusRolledBack) }
 func (t *Transaction) MarkFailed() error     { return t.mark(StatusFailed) }
 
 // mark 是所有状态迁移的唯一入口(表驱动,表外即拒)。置为 applied 时顺带
-// 固化回滚计划(BuildRollbackPlan 纯函数,适配器逆向动作属 todo 22)。
+// 固化回滚计划(BuildRollbackPlan 纯函数,适配器逆向动作不属于本包)。
 func (t *Transaction) mark(to Status) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -277,8 +277,6 @@ func (t *Transaction) mark(to Status) error {
 	}
 	return nil
 }
-
-// ──── 路径安全与持久化内核 ────
 
 // newTxID 用 crypto/rand 生成 8 字节小写十六进制 id,并过同款正则自检
 // (纵深防御:即使生成逻辑被改坏,非法形状也绝不出门)。
@@ -330,7 +328,7 @@ func (t *Transaction) create() error { return t.persist(os.O_RDWR | os.O_CREATE 
 func (t *Transaction) save() error   { return t.persist(os.O_RDWR | os.O_CREATE) }
 
 // persist 以指定 flags 打开日志并在 LOCK_EX 下重写全文。加锁纪律镜像
-// audit.go:145-156:open → LOCK_EX → defer 注册晚于 Close → LIFO 退出时先
+// audit.go 同款纪律:open → LOCK_EX → defer 注册晚于 Close → LIFO 退出时先
 // LOCK_UN 再 Close;锁加在文件自身 fd 上,跨进程互斥,保证文件内容永远是
 // 完整 JSON 文档(撕裂写不可能;O_EXCL 新建场景下截断空文件是恒等操作,
 // 截断只发生在持锁之后,读者绝看不到半截文档)。

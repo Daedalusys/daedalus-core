@@ -1,6 +1,6 @@
 {
   "id": "daedalus.service",
-  "name": "Daedalus Service",
+  "name": "Daedalus Service Query",
   "version": "0.1.0",
   "type": "capability",
   "runtime": {
@@ -30,8 +30,8 @@
     }
   ],
   "checksums": {
-    "bin/daedalus-service": "sha256:58210c03dbdf3a00fa068ef9df35963f3e56d053168f2ba88f5e86f8adfded0a",
-    "daedalus.plugin.json": "sha256:fccda1a99918c85a097371ac6a9393d5d327bcb4f938f37296f4598b5f64f3a6"
+    "bin/daedalus-service": "sha256:bb25f6f767505e3fcaa80485e5ca2c62f5ced5ea53a35a48b18b53ab14c61bd4",
+    "daedalus.plugin.json": "sha256:e5fb31e268f615dc8463e8e20cb44a8b53dc2e7c6c09cee950e32bbb0539842a"
   },
   "api_version": "0.1.0",
   "license": "Apache-2.0",

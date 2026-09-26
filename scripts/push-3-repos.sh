@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 三仓拆分推送脚本(V3 构建机用;本机无 gh,review Issue H 降级产物)。
 #
-# 背景:todo 12 物理改名已完成(daedalus/{core,plugin,files} → daedalus-core/),
+# 背景:物理改名已完成(daedalus/{core,plugin,files} → daedalus-core/),
 # 主仓根布局 = daedalus-core/ + daedalus-sdk/ + daedalus-plugins/ + 仓根文件。
 # 本脚本在 V3 构建机(有 gh + 网络)上执行:
 #   1) gh repo create 创建 3 个公开仓
@@ -22,7 +22,7 @@ cd "$ROOT"
 
 # 布局自检:三个源树必须都在
 for d in daedalus-core daedalus-sdk daedalus-plugins; do
-    [ -d "$d" ] || { echo "错误:缺少 $d/,请确认 todo 12 物理改名已完成" >&2; exit 1; }
+    [ -d "$d" ] || { echo "错误:缺少 $d/,请确认物理改名已完成" >&2; exit 1; }
 done
 
 # ============ 1. 创建 3 个 GitHub 仓 ============
@@ -88,7 +88,7 @@ git branch -D split-sdk split-plugins 2>/dev/null || true
 # ============ 4. branch protection(要求 PR + 1 review + CI pass) ============
 echo "=== 4/4 配置 main 分支保护 ==="
 # 说明:3 仓 main 均要求 PR + 1 个 review + 状态检查通过。
-# CI 在 todo 14 配置,届时把 required_status_checks.contexts 填上实际 job 名;
+# CI 就绪后把 required_status_checks.contexts 填上实际 job 名;
 # 当前先启用 PR review 门,CI 就绪后补 contexts。
 for repo in daedalus-core daedalus-sdk daedalus-plugins; do
     # 注意:必须用 --input 传 JSON body;gh -f 会把 true/1/null 当字符串,
@@ -109,4 +109,4 @@ echo "=== 完成:3 仓已创建并推送 ==="
 echo "  https://github.com/Daedalusys/daedalus-core"
 echo "  https://github.com/Daedalusys/daedalus-sdk"
 echo "  https://github.com/Daedalusys/daedalus-plugins"
-echo "后续:todo 13 在 3 仓平级 clone 后配 go.work;todo 14 补 CI 后回填 required_status_checks.contexts。"
+echo "后续:在 3 仓平级 clone 后配 go.work;补 CI 后回填 required_status_checks.contexts。"

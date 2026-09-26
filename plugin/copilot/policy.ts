@@ -1,14 +1,6 @@
 /**
- * Daedalus OS Copilot 策略与验证。
- *
- * 实现严格的提议验证、LLM 输出解析以及确定性的系统提示词生成。
- *
- * ★ 冻结副本声明 ★
- * 下方的白名单常量与网关校验器（validateCommand / validateArg /
- * validatePath / isPathLike）是 Go 侧 `daedalus-core/internal/shellpolicy`
- * 的**保持一致的冻结副本**（原始来源为已退役的 Deno shell 服务器实现）。
- * Copilot 在进程内做与 `daedalus-shell` Go 二进制完全相同的策略校验，
- * 保证“提议即执行”路径零策略偏离。
+ * ★ 冻结副本声明 ★ 下方白名单常量与网关校验器（validateCommand/validateArg/validatePath/isPathLike）是
+ * Go 侧 `daedalus-core/internal/shellpolicy` 的冻结副本，Copilot 进程内校验与 `daedalus-shell` 二进制零策略偏离。
  * **修改 Go 侧 internal/shellpolicy 时必须同步修改本文件。**
  */
 
@@ -59,24 +51,17 @@ export const BLOCKED_PATHS = [
   "/root",
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 风险分级模型（QQ pivot，决策 2/3/8）
-//
-// 产品定位从「白名单拒绝」转向「本地 classify 标注」：
+// 风险分级模型（产品定位从「白名单拒绝」转向「本地 classify 标注」）：
 //   L0 = 沙箱可执行集（沿用 15 命令白名单，与 policy.toml 三点防漂移链一致）；
 //   L1 = caution（改系统状态但通常可回滚）；
 //   L2 = danger（通常不可逆，架构上无法被 daedalus-shell 执行）。
-// 风险判定权在本地静态表（决策 2）：classifyProposal 不读 LLM 输出的任何
+// 风险判定权在本地静态表：classifyProposal 不读 LLM 输出的任何
 // 风险自标注字段，防 prompt injection 操纵。
-// 风险表内联于本文件（决策 8）：是产品设计决策，非用户可配置的运行时策略，
+// 风险表内联于本文件：是产品设计决策，非用户可配置的运行时策略，
 // 绝不放 policy.toml，避免扩大白名单三点防漂移链。
-// ─────────────────────────────────────────────────────────────────────────────
 
-// L0 沙箱可执行集：即现有 15 命令白名单（DEFAULT_ALLOW_COMMANDS）的别名，
-// 不新造集合，保证与 policy.toml / internal/shellpolicy 防漂移链零偏离（决策 4）。
 export const L0_WHITELIST: ReadonlySet<string> = DEFAULT_ALLOW_COMMANDS;
 
-// L1 caution 命令集（改系统状态，通常可回滚；plan 4.1 节清单原样）
 export const L1_CAUTION_CMDS: ReadonlySet<string> = new Set([
   "sudo", "doas",
   "git",     // push/commit/reset/clean 触发 caution；clone/log/diff 等只读子命令走豁免逻辑
@@ -168,10 +153,7 @@ export const L2_DANGER_PATTERNS: ReadonlyArray<{ re: RegExp; reasonKey: string }
   },
 ];
 
-/**
- * 判断参数是否类似于文件系统路径。
- * （internal/shellpolicy 冻结副本）
- */
+/** （internal/shellpolicy 冻结副本） */
 export function isPathLike(arg: string): boolean {
   if (arg.includes("\0")) {
     return true;
@@ -188,10 +170,7 @@ export function isPathLike(arg: string): boolean {
   return false;
 }
 
-/**
- * 针对不存在路径的基础路径规范化工具。
- * （internal/shellpolicy 冻结副本）
- */
+/** 针对不存在路径的基础路径规范化工具。（internal/shellpolicy 冻结副本） */
 function normalizePath(path: string): string {
   const parts = path.split("/").filter((p) => p.length > 0 && p !== ".");
   const stack: string[] = [];
@@ -205,11 +184,7 @@ function normalizePath(path: string): string {
   return "/" + stack.join("/");
 }
 
-/**
- * 规范化并验证路径参数。
- * 确保路径不触及受阻路径且保持在允许的目录范围内。
- * （internal/shellpolicy 冻结副本）
- */
+/** 规范化并验证路径参数:不触及受阻路径且保持在允许的目录范围内。（internal/shellpolicy 冻结副本） */
 export function validatePath(pathStr: string): string {
   if (typeof pathStr !== "string" || pathStr.length === 0) {
     throw new Error("Path must be a non-empty string.");
@@ -218,7 +193,6 @@ export function validatePath(pathStr: string): string {
     throw new Error("Null bytes are not allowed in path arguments.");
   }
 
-  // 若路径存在则解析规范 realpath，若不存在则进行规范化
   let resolved: string;
   try {
     resolved = Deno.realPathSync(pathStr);
@@ -230,7 +204,6 @@ export function validatePath(pathStr: string): string {
     resolved = normalizePath(absolute);
   }
 
-  // 检查显式禁止的路径
   for (const blocked of BLOCKED_PATHS) {
     const cleanBlocked = blocked.replace(/\/+$/, "");
     if (resolved === cleanBlocked || resolved.startsWith(cleanBlocked + "/")) {
@@ -238,7 +211,6 @@ export function validatePath(pathStr: string): string {
     }
   }
 
-  // 检查允许的目录前缀
   let allowed = false;
   for (const prefix of ALLOWED_PATH_PREFIXES) {
     const cleanPrefix = prefix.replace(/\/+$/, "");
@@ -257,10 +229,7 @@ export function validatePath(pathStr: string): string {
   return resolved;
 }
 
-/**
- * 验证单个参数是否包含空字节和嵌入路径。
- * （internal/shellpolicy 冻结副本）
- */
+/** 验证单个参数无空字节和嵌入路径。（internal/shellpolicy 冻结副本） */
 export function validateArg(arg: string): void {
   if (typeof arg !== "string") {
     throw new Error(`Argument must be a string, got ${typeof arg}`);
@@ -280,10 +249,7 @@ export function validateArg(arg: string): void {
   }
 }
 
-/**
- * 依据白名单验证命令名称，并确保无路径遍历行为。
- * （internal/shellpolicy 冻结副本）
- */
+/** 白名单验证命令名称 + 路径遍历检查。（internal/shellpolicy 冻结副本） */
 export function validateCommand(command: string): string {
   if (!command || typeof command !== "string") {
     throw new Error("Command must be a non-empty string.");
@@ -322,16 +288,12 @@ export interface CommandProposal {
   explanation: string;
 }
 
-/**
- * 将 LLM 输出解析并严格验证为 CommandProposal。
- * 如果存在 markdown 代码块标记则予以去除，并强制检查数据结构格式。
- */
+/** 将 LLM 输出严格验证为 CommandProposal（结构格式强校验）。 */
 export function parseProposal(text: string): CommandProposal {
   if (typeof text !== "string" || text.trim().length === 0) {
     throw new Error("LLM output schema validation failed: output must be non-empty text");
   }
 
-  // 如果存在 markdown 代码块标记则予以去除（例如 ```json ... ``` 或 ``` ... ```）
   const cleanedText = text.replace(/```json|```/g, "").trim();
 
   let parsed: unknown;
@@ -374,20 +336,14 @@ export function parseProposal(text: string): CommandProposal {
 }
 
 /**
- * 构建用于 LLM 命令转换的不可变、确定性系统提示词（QQ command advisor 定位）。
- *
- * ★ 本函数按 locale 选 prompt 语言 ★
- * - locale 为 zh_CN / zh（或其它 zh_* 变体）时返回中文 prompt，
- *   LLM 在中文 prompt 下 explanation 字段会自然用中文输出，与 query 语言一致；
- * - locale 为空或非 zh 范围时返回英文原文。
- * 注意：JSON schema 字段名（command/args/explanation）在任何语言下都保持英文，
- * 译文只翻引导性说明，不翻字段名——否则 LLM 输出的 JSON 解析会失败。
- *
- * 设计要点（决策 10）：不再枚举 15 命令白名单，LLM 作为 Linux 专家生成最合适的
- * 命令；风险判定交给本地 classifyProposal 静态表，LLM 不参与风险自标注（决策 2）。
+ * 构建用于 LLM 命令转换的不可变、确定性系统提示词。
+ * ★ 按 locale 选语言：zh_CN/zh* 变体 → 中文 prompt（explanation 自然用中文、
+ * 与 query 语言一致），locale 为空或非 zh → 英文原文。
+ * ★ JSON schema 字段名（command/args/explanation）任何语言下都保持英文，
+ * 译文只翻引导性说明、不翻字段名——否则 LLM 输出的 JSON 解析会失败。
+ * 设计要点：不枚举白名单，LLM 以 Linux 专家身份生成命令；风险判定在本地静态表。
  */
 export function buildSystemPrompt(locale?: string): string {
-  // locale 归一化：zh_CN / zh-xx / zh_* 均视为中文；空值与其它语言一律英文
   const normalized = (locale ?? "").trim().replace(/-/g, "_").toLowerCase();
   const useChinese = normalized === "zh" || normalized.startsWith("zh_");
 
@@ -426,18 +382,13 @@ Rules:
 - Reply with JSON only, no prose, no markdown fences.`;
 }
 
-/**
- * 事务分类维度（aios-object-model-alignment 计划 todo 24）。
- * RiskAssessment.tx_kind 的取值集合。
- */
+/** RiskAssessment.tx_kind 的取值集合（事务分类维度）。 */
 export type RiskTxKind = "shell" | "tx_propose" | "tx_apply" | "tx_rollback";
 
 /**
- * 风险评估结果（QQ pivot）。
  * level：L0=safe / L1=caution / L2=danger；
- * reasonKey：i18n key（risk.pattern.* / risk.reason.*），UI 层经 t() 渲染；
- * safe/null 表示白名单内且无危险模式命中。
- * tx_kind：事务分类扩展字段（todo 24），**可选**——classifyProposal 的全部
+ * reasonKey：i18n key（risk.pattern.* / risk.reason.*），UI 层经 t() 渲染；safe/null 表示白名单内且无危险模式命中。
+ * tx_kind：事务分类扩展字段，**可选**——classifyProposal 的全部
  * 既有 shell 路径不携带该键，缺省（undefined）即视为 "shell"（消费方按
  * `risk.tx_kind ?? "shell"` 归一），保证既有输出逐对象不变、向后兼容；
  * classifyTxProposal 则恒显式设置三类 tx 意图之一。
@@ -448,11 +399,7 @@ export type RiskAssessment = {
   tx_kind?: RiskTxKind;
 };
 
-/**
- * git 只读子命令豁免：这些子命令不改系统状态，虽 git 在 L1 集，
- * 仍落到「白名单外 safe」标签（plan 4.1 节注释：clone/log/diff 仍是
- * 非 caution 的普通命令）。
- */
+/** git 只读子命令豁免：不改系统状态，虽在 L1 集仍落「白名单外 safe」（clone/log/diff 等非 caution）。 */
 const GIT_READONLY_SUBCOMMANDS = new Set([
   "clone", "log", "diff", "status", "show", "branch", "remote",
   "describe", "rev-parse", "blame", "ls-files", "version", "--version",
@@ -460,14 +407,8 @@ const GIT_READONLY_SUBCOMMANDS = new Set([
 ]);
 
 /**
- * 本地风险分类器（决策 2：纯静态表查，不读 LLM 输出的任何风险自标注字段）。
- * 四步算法（plan 4.2）：
- *   1. L2 模式优先——command+args 全文匹配，任一命中即 danger；
- *   2. L0 白名单（仅取 basename，容忍 /usr/bin/df 形态）→ safe/null；
- *   3. L1 集（git 只读子命令豁免后）→ caution/"risk.reason.caution_command"；
- *   4. 白名单外、非 caution/danger → safe/"risk.reason.outside_sandbox"
- *      （不可执行，但无害；用户手动执行）。
- * ★ todo 24 竞态条款 ★ 事务意图绝不进入本 shell 路径：tx_propose /
+ * 本地风险分类器（纯静态表查，不读 LLM 风险自标注）；四步算法见函数内编号注释。
+ * ★ 竞态条款 ★ 事务意图绝不进入本 shell 路径：tx_propose /
  * tx_apply / tx_rollback 由 classifyTxProposal 独立定级（不查 L0_WHITELIST），
  * 消费方据此跳过 shell_exec 分派，L0 路径与 tx 路径互不抢占（no race）。
  */
@@ -488,12 +429,10 @@ export function classifyProposal(proposal: CommandProposal): RiskAssessment {
     }
   }
 
-  // 命令 basename 归一化（/usr/bin/df → df）
   const lastSlash = cmd.lastIndexOf("/");
   const cmdBase = lastSlash >= 0 ? cmd.slice(lastSlash + 1) : cmd;
 
-  // 2. L0 白名单(含 L0∩L1 交集后检(主控裁决 2026-09-01):systemctl 等既在
-  //    白名单又在 caution 集,整命令族统一 ⚠️,子命令细分留后续)
+  // 2. L0 白名单（含 L0∩L1 交集后检：systemctl 等整命令族统一 ⚠️，子命令细分留后续）
   if (L0_WHITELIST.has(cmdBase)) {
     if (L1_CAUTION_CMDS.has(cmdBase)) {
       return { level: "caution", reasonKey: "risk.reason.caution_command" };
@@ -513,66 +452,39 @@ export function classifyProposal(proposal: CommandProposal): RiskAssessment {
     }
   }
 
-  // 4. 白名单外、非 caution/danger → safe（不可执行；风险来源是
-  //    daedalus-shell 拒 → 用户得手动复制）
+  // 4. 白名单外 → safe（不可执行；风险来源是 daedalus-shell 拒 → 用户手动复制）
   return { level: "safe", reasonKey: "risk.reason.outside_sandbox" };
 }
 
-// v1 事务动词集与 daedalus-tx service.set 适配器（todo 22）保持一致：
+// v1 事务动词集与 daedalus-tx service.set 适配器保持一致：
 // started|stopped|restarted|enabled|disabled；分类器与适配器若漂移，
 // 会出现"分类放行 / 执行拒绝"或反向的分裂语义，改一侧必查另一侧。
 const TX_APPLY_SAFE_STATES: ReadonlySet<string> = new Set(["started", "stopped"]);
 
-// v1 事务状态词与 daedalus-tx package.set 适配器（daedalus-pkg-kind todo 6/8）
+// v1 事务状态词与 daedalus-tx package.set 适配器
 // 保持一致：present|absent|latest；present/absent 是确定性操作（与 service 的
 // started/stopped 同档 L0），latest 依赖 dnf 仓库元数据、可能拉网络 → L1。
 // 分类器与适配器若漂移，同样出现"分类放行 / 执行拒绝"分裂语义，改一侧必查另一侧。
 const TX_APPLY_PACKAGE_L0_STATES: ReadonlySet<string> = new Set(["present", "absent"]);
 
 /**
- * 事务提议风险分类器（aios-object-model-alignment 计划 todo 24）。
- *
- * ★ L0_WHITELIST 竞态条款（镜像 plan 措辞）★
- * 本分类器把 L0_WHITELIST 推理扩展到事务：当意图是事务时跳过 shell_exec
- * 分派（事务性意图绝不走 shell 路径），使 L0 执行路径与 tx 执行路径
- * 互不竞争——tx_* 提议永不被当作白名单 shell 命令重复定级。
- *
- * 规则表（plan todo 24 钉死，纯静态查表，与 classifyProposal 同样不读
- * LLM 风险自标注，决策 2）：
- *   tx_propose              → safe/null（仅展示 + 记录，不落任何变更）
- *   tx_apply:
- *     target = "package <name>"（package 域，daedalus-pkg-kind todo 16）:
- *       tx_apply package <name> present → safe/null（确定性操作）
- *       tx_apply package <name> absent  → safe/null（确定性、不依赖外部元数据，
- *                              与 service 的 started/stopped 同档）
- *       tx_apply package <name> latest  → caution/risk.reason.caution_command
- *                              （依赖 dnf 仓库元数据、可能拉网络）
- *       其余未知状态词                   → caution（fail-closed：不进 safe
- *                              执行通道）
- *     其余（service 域）:
- *     started | stopped     → safe/null（启停意图明确、事务快照可回滚）
- *     restarted/enabled/
- *     disabled              → caution/risk.reason.caution_command
- *     reload                → danger（daemon-reload 中断在途服务；todo 22
- *                             适配器已在 propose 时逐字拒绝 reload，v1 不
- *                             存在 apply 路径——danger 标注仅保持动词表对齐
- *                             与展示层兜底，分类先行于执行）
- *     其余未知动词           → caution（fail-closed：不进 safe 执行通道）
- *   tx_rollback             → caution/risk.reason.caution_command
- *
- * intent 不在 tx_propose/tx_apply/tx_rollback 集合 → 抛错（静态表无此
- * 行的 neither-safe 兜底，配置期 bug 必须响亮暴露，fail-closed）。
- * target 为空 → 抛错（plan QA 断言字面量 "classifyTxProposal: target is
- * empty"，钉死文案勿改）。
- *
- * ★ package 域形态 ★ 形态与 service 域完全同构（args[1] 期望态位置不变），
- * 仅 target 首词不同：`package <name>`。name 的合法性（单段、无 `@` 组语法、
- * 字符集白名单）由 daedalus-tx 侧 parsePackageSetArgs/sanitizePackageName
- * 把关（daedalus-pkg-kind todo 6），分类器**不校验 name 形态**——那是
- * parseArgs 的职责，分类器只按 (域 × 期望态) 查表定级。
- *
+ * ★ L0_WHITELIST 竞态条款 ★ 本分类器把 L0_WHITELIST 推理扩展到事务：
+ * 意图是事务时跳过 shell_exec 分派（事务性意图绝不走 shell 路径），使 L0
+ * 执行路径与 tx 执行路径互不竞争——tx_* 提议永不被当作白名单 shell 命令
+ * 重复定级。
+ * 规则表（纯静态查表，不读 LLM 风险自标注）：tx_propose → safe/null；tx_apply
+ * 按（域 × 期望态）查 TX_APPLY_*（safe/caution；reload → danger，适配器已拒绝
+ * reload）；tx_rollback → caution；未知动词/状态词 → caution（fail-closed）。
+ * intent 不在 tx_propose/tx_apply/tx_rollback 集合 → 抛错（静态表无此行的
+ * neither-safe 兜底，配置期 bug 必须响亮暴露，fail-closed）。
+ * target 为空 → 抛错（断言字面量 "classifyTxProposal: target is
+ * empty"，文案勿改）。
+ * ★ package 域形态 ★ 与 service 域完全同构（args[1] 期望态位置不变），仅
+ * target 首词为 `package <name>`；name 的合法性（单段、无 `@` 组语法、字符集
+ * 白名单）由 daedalus-tx 侧 parsePackageSetArgs/sanitizePackageName 把关，
+ * 分类器不校验 name 形态，只按 (域 × 期望态) 查表定级。
  * reasonKey 仅复用已落地 i18n 键：reload→danger 借用语义最近的
- * "risk.pattern.shutdown"（中断在途服务）；tx.* 专用键族由 todo 30 落地
+ * "risk.pattern.shutdown"（中断在途服务）；tx.* 专用键族由后续落地
  * 后替换，本文件届时同步——在此之前不得引用不存在的键。
  */
 export function classifyTxProposal(
@@ -591,30 +503,18 @@ export function classifyTxProposal(
 
     case "tx_apply": {
       const state = typeof desiredState === "string" ? desiredState.trim() : "";
-      // package 域：target 形如 "package <name>"（detectTxIntent 传
-      // args[0]→target、args[1]→desiredState，形态与 service 域同构）。
-      // 按 (域 × 期望态) 查表：present/absent → safe，latest → caution，
-      // 未知状态词 → caution（fail-closed）。name 形态校验归 daedalus-tx
-      // 侧 parsePackageSetArgs，分类器不越权。
       if (/^package\s+\S+$/.test(target.trim())) {
         if (TX_APPLY_PACKAGE_L0_STATES.has(state)) {
           return { level: "safe", reasonKey: null, tx_kind: "tx_apply" };
         }
-        // latest（依赖 dnf 仓库元数据，可能拉网络）及一切未知状态词 →
-        // caution（fail-closed，只展示不执行）
         return { level: "caution", reasonKey: "risk.reason.caution_command", tx_kind: "tx_apply" };
       }
-      // 以下为既有 service 域分支（保持原行为零变化）
       if (TX_APPLY_SAFE_STATES.has(state)) {
         return { level: "safe", reasonKey: null, tx_kind: "tx_apply" };
       }
       if (state === "reload") {
-        // danger 借用 risk.pattern.shutdown 文案（中断会话/服务）；适配器已拒
-        // reload（todo 22），此处无 apply 通道，仅定级展示。todo 30 换 tx.* 键。
         return { level: "danger", reasonKey: "risk.pattern.shutdown", tx_kind: "tx_apply" };
       }
-      // restarted / enabled / disabled 及一切未知动词 → caution（fail-closed，
-      // 只展示不执行）
       return { level: "caution", reasonKey: "risk.reason.caution_command", tx_kind: "tx_apply" };
     }
 
@@ -628,13 +528,8 @@ export function classifyTxProposal(
 }
 
 /**
- * 依据 DaedalusShell 安全网关规则验证 CommandProposal（向后兼容门）。
- *
- * QQ pivot 后内部改为调 classifyProposal：仅 L2 danger 时抛错（main.ts
- * 捕获后走 copilot_reject / exit 126 路径）；L1 caution / 白名单外 safe
- * 只标注不拒（L1/L2 架构上本就无法被 daedalus-shell 执行）。
- * 错误消息保留 "not in ALLOW_COMMANDS" 短语：main.test.ts 拒绝路径断言
- * 依赖该文案，向后兼容不破坏既有审计/退出码语义。
+ * 安全网关验证（向后兼容门）：仅 L2 danger 抛错（copilot_reject/exit 126），
+ * L1/白名单外只标注不拒。错误消息保留 "not in ALLOW_COMMANDS"——main.test.ts 断言依赖，勿改。
  */
 export function validateProposal(proposal: CommandProposal): void {
   if (!proposal || typeof proposal !== "object") {
@@ -649,7 +544,6 @@ export function validateProposal(proposal: CommandProposal): void {
     throw new Error("Invalid proposal: 'command' must be a non-empty string");
   }
 
-  // 1. L2 danger 模式 → 抛错（含 basename，保留 ALLOW_COMMANDS 文案供兼容断言）
   const risk = classifyProposal(proposal);
   if (risk.level === "danger") {
     throw new Error(
@@ -657,11 +551,9 @@ export function validateProposal(proposal: CommandProposal): void {
     );
   }
 
-  // 2. 白名单外（safe/outside_sandbox、caution）→ 沙箱网关原样拒绝非白名单命令
-  //    （此检查同时覆盖 L1/L2 的二进制目录校验；danger 已在步骤 1 先行拒绝）
+  // 白名单外由沙箱网关拒绝；此检查同时覆盖 L1/L2 的二进制目录校验
   validateCommand(proposal.command);
 
-  // 3. 参数校验（空字节 / 路径白名单，冻结副本语义不变）
   for (const arg of proposal.args) {
     validateArg(arg);
   }

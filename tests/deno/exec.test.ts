@@ -388,11 +388,11 @@ Deno.test("Copilot Exec - default resolution finds the real Go daedalus-shell bi
 });
 
 Deno.test("Copilot Exec - env-unset resolution order pins production-precedence then first live candidate", async () => {
-  // 钉死解析顺序(计划 T3 强化项):env 未设时,经 mock Deno.Command 捕获
+  // 锁定解析顺序:env 未设时,经 mock Deno.Command 捕获
   // 实际被 spawn 的二进制路径,断言其逐字符等于按实现同款顺序计算出的期望:
   //   生产路径存在 → 生产路径(② 字节冻结守护轨优先于一切开发态候选);
   //   否则 devCandidates 序首个存在者(④ —— 开发机/CI 上 /usr/local/bin 无
-  //     实物、安装态随仓 checkout,故本断言实际钉死"仓库根 cwd 下解析返回
+  //     实物、安装态随仓 checkout,故本断言实际锁定"仓库根 cwd 下解析返回
   //     files/system/usr/local/bin/daedalus-shell");
   //   全缺 → 回退生产路径(友好错误)。
   setup();
@@ -443,28 +443,27 @@ Deno.test("Copilot Exec - handles watchdog timeout triggering SIGKILL and return
 
 // ===========================================================================
 // execTxPropose / execTxPreview / execTxApply —— daedalus-tx 事务原语调用层
-// (计划 todo 26)。
 //
-// ★ 与上面 shell_exec 桥接的本质区别: daedalus-tx 是**纯 CLI**(todo 15 的
-// stdout 契约), 不是 MCP 服务器 —— 没有 JSON-RPC 握手、没有 result.content
+// ★ 与上面 shell_exec 桥接的本质区别: daedalus-tx 是**纯 CLI**,
+// stdout 即契约, 不是 MCP 服务器 —— 没有 JSON-RPC 握手、没有 result.content
 // 的 text 二次包裹。这些测试用**真实派生**的假 tx 二进制(Deno.makeTempDir +
 // 自描述 fixture 脚本)而非 mock Deno.Command: argv 形状与 stdout 单行 JSON
 // 文档的解析保真度只能在真实 spawn 边界上验证。
 //
-// ★ MCP-wire 教训(todo 15 round-3 fold 的镜像面): MCP tools/call 路径里结果
+// ★ MCP-wire 教训的镜像面: MCP tools/call 路径里结果
 // JSON 被嵌进 `text` 字符串字段, 线上是**双层转义**(grep 必须找 \"ActiveState\");
 // 本层直接解析 CLI stdout —— 文档级**单层转义**(非 ASCII 原样透传, 与 Go
-// json.Marshal 同策略), JSON.parse 一次即得终值。下面专门有一条测试钉死
+// json.Marshal 同策略), JSON.parse 一次即得终值。下面专门有一条测试锁定
 // 这个差异, 防止有人把 shell_exec 的二次解析照搬过来。
 // ===========================================================================
 
 const TX_FIXTURE_ID = "a1b2c3d4e5f60718";
 
-// 假 daedalus-tx: 按 todo 15 stdout 契约吐 canned JSON 文档;
+// 假 daedalus-tx: 按 stdout 契约吐 canned JSON 文档;
 // env TX_FIXTURE_MODE 选失败形态, argv 逐次落盘到 TX_FIXTURE_ARGV_LOG
 // (JSON 数组一行), 精确 stdout 字节落盘到 TX_FIXTURE_STDOUT_LOG 供转义审计。
 const TX_FIXTURE_SRC = String.raw`#!/usr/bin/env -S deno run -A
-// 测试专用假 daedalus-tx(todo 26): 捕获 argv + 吐 todo 15 stdout 契约文档。
+// 测试专用假 daedalus-tx: 捕获 argv + 吐 stdout 契约文档。
 const a = Deno.args;
 const argvLog = Deno.env.get("TX_FIXTURE_ARGV_LOG");
 if (argvLog) Deno.writeTextFileSync(argvLog, JSON.stringify(a) + "\n", { append: true });
@@ -597,7 +596,7 @@ Deno.test("TestExecTxPropose - spawns tx binary with [propose,id,adapter,argsJso
     expect(result.step.index).toBe(0);
     expect(result.step.adapter).toBe("service.set");
     expect(result.step.op_result.returncode).toBe(0);
-    // BeforeState/AfterState 视图来自 propose 回吐的日志全文(计划 todo 26 验收)
+    // BeforeState/AfterState 视图来自 propose 回吐的日志全文,此处验收实际取值
     expect((result.beforeState as Record<string, unknown>).unit_file).toContain(
       "笔记@1.service",
     );

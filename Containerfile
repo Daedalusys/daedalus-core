@@ -54,41 +54,34 @@ RUN --mount=type=tmpfs,dst=/tmp \
     /ctx/build_files/build.sh 64
 
 # === Stage 1:Base OS(vendor 上游脚本 10-50) ===
-# 改这里极罕见(基本是同步上游 base_image),命中 cache 概率高
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=cache,target=/var/cache/dnf,sharing=locked \
     /ctx/build_files/build.sh 10 20 30 40 50
 
 # === Stage 2:Daedalus 目录结构(60-ai-middleware + 63-object-model-state) ===
-# 纯 mkdir + chown,几乎不变
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     /ctx/build_files/build.sh 60 63
 
 # === Stage 3:AI 安全基础(65-ai-safety) — dnf install curl/unzip/deno ===
-# 改这里:通常不会变(deno 版本固定);变了就整个 stage 重跑
-# cache mount:dnf 包跨 build 缓存(避重复下载)。依赖 Stage 0.5 已切阿里云。
+# 依赖 Stage 0.5 已切国内源。
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=cache,target=/var/cache/dnf,sharing=locked \
     /ctx/build_files/build.sh 65
 
 # === Stage 4:Daedalus 服务(70 + 70a + 75) ===
-# 改这里:极罕见(只有 plugin manifest / systemd unit 改动才触发)
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     /ctx/build_files/build.sh 70 70a 75
 
 # === Stage 5:Daedalus 插件生成(76-daedalus-plugin-gen) ===
-# 改这里:中等频率(改 systemd ExecStart / 插件接线)
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     /ctx/build_files/build.sh 76
 
 # === Stage 6:xrdp 装包(77-xrdp) — dnf install epel-release + xrdp ===
-# 改这里:经常调(xrdp 配置 / firewall / 用户组)
-# cache mount:dnf 包跨 build 缓存
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=cache,target=/var/cache/dnf,sharing=locked \
@@ -104,7 +97,6 @@ RUN --mount=type=tmpfs,dst=/tmp \
     /ctx/build_files/build.sh 78 79
 
 # === Stage 7:签名 + image info(90 + 91) ===
-# 改这里:罕见(签名 key 改动 / image-info 格式改动)
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     /ctx/build_files/build.sh 90 91

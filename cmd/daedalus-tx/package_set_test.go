@@ -1,6 +1,6 @@
 package main
 
-// package_set_test.go —— package.set 适配器的纯函数边界测试(plan daedalus-pkg-kind todo 12)。
+// package_set_test.go —— package.set 适配器的纯函数边界测试。
 //
 // 覆盖三层: 边界解析(parsePackageSetArgs 的未知键/尾随数据/缺字段门)、
 // 名称与 desired_state 守卫(经 parseAndGuard 管线 helper 测, 逐字镜像 Propose
@@ -8,8 +8,8 @@ package main
 // 调后两道门, 该形态差已记入 learnings)、适配器注册表(package.set 注册 +
 // service.set 零回归)。
 //
-// 全程零进程调用: 不碰 dnf/rpm, 不覆写任何 mock var(那是 todo 13/14/15 的
-// Propose/Apply/Rollback 行为测试区, 分区注释见文件尾部)。
+// 全程零进程调用: 不碰 dnf/rpm, 不覆写任何 mock var(那是本文件后段的
+// Propose/Apply/Rollback 行为测试区)。
 
 import (
 	"bytes"
@@ -22,13 +22,11 @@ import (
 	"strings"
 	"testing"
 
-	// todo 14 编译必需(tx.Step/tx.OpResult 断言类型)。Go 规范要求全部 import 位于
-	// 其他声明之前, 无法落在分区内 —— 沿 task-13 先例(import 块补 context/errors)
-	// 在头部块追加, 属唯一非 append 改动, 不动任何既有用例。
-	// todo 15 再补 bytes/os/path/filepath 与 audit: Rollback 区经真文件往返 +
-	// E2E 直接驱动四个子命令编排函数并用真实 JSONL 回放审计链(编译必需)。
-	"github.com/Daedalusys/daedalus-sdk/audit"
+	// 编译必需(tx.Step/tx.OpResult 断言类型)。Go 规范要求全部 import 位于其他声明
+	// 之前, 无法落在分区内, 故在头部块追加, 属唯一非 append 改动, 不动任何既有用例。
+	// bytes/os/path/filepath 与 audit 服务于 Rollback 区的真文件往返与 E2E 审计链回放。
 	"github.com/Daedalusys/daedalus-core/internal/tx"
+	"github.com/Daedalusys/daedalus-sdk/audit"
 )
 
 // parseAndGuard 组合管线: parsePackageSetArgs → sanitizePackageName → desiredStateOK。
@@ -135,8 +133,8 @@ func TestParsePackageSetArgs_RejectsMissingDesiredState(t *testing.T) {
 //   - 前缀门: 单独 `.` 或 `.hidden` 只被 HasPrefix(".") 拒;
 //   - 双点门: `foo..bar` 是唯一只被 Contains("..") 拒的形态(task-6 实测教训:
 //     裸 `..` 被前缀门双覆盖, 摘掉双点检查后仍挂前缀门就测不出回归);
-//   - glob 门(review C-1): 通配星号落在白名单字符类内, 只被 set 域专属的
-//     Contains 星号检查拒——`*` 与 `bash*` 钉死批量变更放大面。
+//   - glob 门: 通配星号落在白名单字符类内, 只被 set 域专属的
+//     Contains 星号检查拒——`*` 与 `bash*` 锁定批量变更放大面。
 func TestParsePackageSetArgs_RejectsBadName(t *testing.T) {
 	cases := []struct {
 		name string
@@ -215,7 +213,7 @@ func TestPackageSet_DesiredStateVerbMap(t *testing.T) {
 	}
 }
 
-// TestAdapterRegistry_PackageSet 钉 todo 11 的注册: package.set 在 registry 且
+// TestAdapterRegistry_PackageSet 钉注册契约: package.set 在 registry 且
 // 类型正确; 顺带钉 service.set 注册零回归。
 func TestAdapterRegistry_PackageSet(t *testing.T) {
 	a, ok := lookupAdapter("package.set")
@@ -235,13 +233,12 @@ func TestAdapterRegistry_PackageSet(t *testing.T) {
 	}
 }
 
-// ─────────────────── todo 13/14/15 追加区(勿改上方 8 函数) ───────────────────
 // 后续 worker 在本分隔线之后 append Propose/Apply/Rollback 行为测试:
 // mock 注入契约见 package_set.go 头部注释(六个包级 var 缝 + geteuid + withTxID 通道)。
 
-// stubRpmQuery 覆写 rpmQueryFn 注入缝并登记 t.Cleanup 还原 —— plan 325 行的
-// "defer 中恢复"与本形态语义等价(测试函数返回时执行), 沿用 todo 9/12 既成惯例。
-// 生产调用点自 todo 7 起就走 var 缝, 本 helper 即 oracle C3 mock 契约的消费端。
+// stubRpmQuery 覆写 rpmQueryFn 注入缝并登记 t.Cleanup 还原 —— t.Cleanup 与
+// "defer 中恢复"语义等价(测试函数返回时执行)。
+// 生产调用点走 var 缝, 本 helper 即 mock 注入契约的消费端。
 func stubRpmQuery(t *testing.T, fn func(context.Context, string) (bool, string, error)) {
 	t.Helper()
 	orig := rpmQueryFn
@@ -334,8 +331,8 @@ func TestPackageSet_Propose_HappyNotInstalled(t *testing.T) {
 	}
 }
 
-// TestPackageSet_Propose_RejectsBadArgs 钉"任何拒绝都发生在 rpm 查询之前"(todo 8
-// 设计契约): 五种守卫出口(未知键/尾随数据/缺字段走解析门, 非法名走名称门,
+// TestPackageSet_Propose_RejectsBadArgs 钉"任何拒绝都发生在 rpm 查询之前"的
+// 设计契约: 五种守卫出口(未知键/尾随数据/缺字段走解析门, 非法名走名称门,
 // 表外值走三元组门)逐一 err 非 nil + 错误串逐字前缀 + before/after 双 nil +
 // stub 调用计数恒 0。
 func TestPackageSet_Propose_RejectsBadArgs(t *testing.T) {
@@ -396,8 +393,6 @@ func TestPackageSet_Propose_RpmQueryError(t *testing.T) {
 	}
 }
 
-// ─────────────────── todo 14 追加区: Apply 行为测试(勿改上方 todo 12/13 分区) ───────────────────
-
 // applyTxID 是 happy 系 ctx 携带的事务 id: 16 位小写十六进制, 与 tx 日志的 id
 // 形状门同形态 —— sidecar 三元组断言里 txID 分量要逐字回比对, 用真形状而非任意串。
 const applyTxID = "0a1b2c3d4e5f6071"
@@ -428,9 +423,9 @@ type applySpy struct {
 }
 
 // stubApplyDeps 一次性覆写 geteuid/dnfExecFn/readDnfHistoryIDFn/
-// writeDnfHistorySidecarFn 四条包级 var(oracle C3 mock 注入契约的消费端),
+// writeDnfHistorySidecarFn 四条包级 var(mock 注入契约的消费端),
 // 每条缝各自登记 t.Cleanup 还原原值 —— 一缝一还原, 杜绝跨测试状态泄漏。
-// 绝不绕过 var 直改原始函数(plan 348 行明文: 那样 mock 不会生效)。
+// 绝不绕过 var 直改原始函数(那样 mock 不会生效)。
 func stubApplyDeps(t *testing.T, st applyStubs) *applySpy {
 	t.Helper()
 	spy := &applySpy{}
@@ -475,7 +470,7 @@ func applyArgsJSON(desiredState string) json.RawMessage {
 }
 
 // runApplyHappy 驱动一次全 happy 路径的 Apply(euid=0 + dnf rc=0 带 Stdout +
-// history id=42 + sidecar 写成功), ctx 经 withTxID 携带事务 id(D-1 通道);
+// history id=42 + sidecar 写成功), ctx 经 withTxID 携带事务 id;
 // verb/三元组断言留在各测试函数自持。stepIndex 取互不相同的非零值, 证明
 // sidecar 三元组第二分量确实搬运 step.Index 而非任何默认值。
 func runApplyHappy(t *testing.T, desiredState string, stepIndex int) (tx.OpResult, *applySpy) {
@@ -500,8 +495,8 @@ func assertDnfArgv(t *testing.T, spy *applySpy, verb string) {
 	}
 }
 
-// TestPackageSet_Apply_RejectsNonRoot 钉 root 守门(oracle C3 fix): geteuid 缝翻
-// 1000 → rc=1 + 逐字锁定错串(全等断言天然蕴含 plan 要求的 "requires root" 子串),
+// TestPackageSet_Apply_RejectsNonRoot 钉 root 守门: geteuid 缝翻
+// 1000 → rc=1 + 逐字锁定错串(全等断言天然蕴含 "requires root" 子串),
 // 且 dnf/history/sidecar 三条缝物理零调用 —— 守门排在一切副作用之前。
 func TestPackageSet_Apply_RejectsNonRoot(t *testing.T) {
 	spy := stubApplyDeps(t, applyStubs{euid: 1000, histID: 42})
@@ -587,8 +582,8 @@ func TestPackageSet_Apply_RejectsBadDesiredState(t *testing.T) {
 
 // TestPackageSet_Apply_DnfExecFails 钉 dnf 失败的原样透传: stub 返 rc=1 带
 // Stderr → 返回的 OpResult 与 stub 值整体全等(rc/Stdout/Stderr/Error 一字不改),
-// 且 read/sidecar 两条缝零调用 —— dnf 失败绝不进 sidecar 路径(review critical #1
-// 守门: 失败的事务没有回滚材料可写)。
+// 且 read/sidecar 两条缝零调用 —— dnf 失败绝不进 sidecar 路径
+// (失败的事务没有回滚材料可写)。
 func TestPackageSet_Apply_DnfExecFails(t *testing.T) {
 	boom := tx.OpResult{Returncode: 1, Stderr: "Error: Unable to find a match: htop"}
 	spy := stubApplyDeps(t, applyStubs{euid: 0, dnf: boom, histID: 42})
@@ -664,11 +659,9 @@ func TestPackageSet_Apply_SidecarWriteFails(t *testing.T) {
 	}
 }
 
-// TestPackageSet_Apply_MissingTxIDCtx 【D-1 裁决新增第 9 测试, 不在 plan 8 函数
-// 名单内 —— orchestrator D-1 指令要求把 todo 9 scratch case (f) 正式化, F1 审查
-// 按 8+1 复核】: 裸 context.Background()(txID 未透传)→ rc=1 + 逐字锁定错串,
-// 且 dnf 缝零调用 —— 守门位于一切 dnf 副作用之前(裁决第 3 条: 拿不到 txID
-// 绝不先跑 dnf, 否则改造成不可回滚的既成事实)。euid 桩给 0, 排除被 root 门
+// TestPackageSet_Apply_MissingTxIDCtx: 裸 context.Background()(txID 未透传)→
+// rc=1 + 逐字锁定错串, 且 dnf 缝零调用 —— 守门位于一切 dnf 副作用之前: 拿不到
+// txID 绝不先跑 dnf, 否则改造成不可回滚的既成事实。euid 桩给 0, 排除被 root 门
 // 误拒的假绿。
 func TestPackageSet_Apply_MissingTxIDCtx(t *testing.T) {
 	spy := stubApplyDeps(t, applyStubs{euid: 0, histID: 42})
@@ -686,8 +679,7 @@ func TestPackageSet_Apply_MissingTxIDCtx(t *testing.T) {
 	}
 }
 
-// TestPackageSet_Apply_HistoryCmdlineMismatchFailClosed 钉【review M-1 fix】的
-// 调用点契约: 真 readDnfHistoryID 在末行 Command line 与本次事务不符时抛
+// TestPackageSet_Apply_HistoryCmdlineMismatchFailClosed 钉调用点契约: 真 readDnfHistoryID 在末行 Command line 与本次事务不符时抛
 // "与本次事务命令不符" error(其自身行为由 package_set_exec_test.go 钉)——
 // Apply 必须把本次实发的 verb 与包名透传给注入缝(桩侧断言收到
 // wantVerb=="install"/wantName=="htop", 证明新参数确实从调用点传到位),
@@ -720,13 +712,12 @@ func TestPackageSet_Apply_HistoryCmdlineMismatchFailClosed(t *testing.T) {
 	}
 }
 
-// ─────────────────── todo 15 追加区: Rollback 行为测试 + E2E 审计链(勿改上方 todo 12/13/14 分区) ───────────────────
 //
-// Rollback 守门次序即契约(package_set.go todo 10): 三连重校验 → geteuid →
+// Rollback 守门次序即契约: 三连重校验 → geteuid →
 // txIDFromCtx → readDnfHistorySidecar(真文件读)→ dnfHistoryExistsFn 探测 →
 // 分流(undo 透传 / remove best-effort / absent 严格 error)。sidecar 读门排在
-// 探测之前, 探测排在一切 dnf 动作之前 —— 各负例测试用对应缝的零调用计数钉死。
-// 读侧不设 mock 缝(todo 10 裁决): 测试经 DAEDALUS_TX_DIR 指临时根后真写、真读,
+// 探测之前, 探测排在一切 dnf 动作之前 —— 各负例测试用对应缝的零调用计数锁定。
+// 读侧不设 mock 缝: 测试经 DAEDALUS_TX_DIR 指临时根后真写、真读,
 // 往返形态更接近生产。
 
 // isolateTxDir 把事务根指进隔离临时目录(dirs 覆盖链首位, 值必须绝对路径)。
@@ -738,7 +729,7 @@ func isolateTxDir(t *testing.T) {
 
 // seedSidecar 用真实 writeDnfHistorySidecar 预置回滚材料(与生产 readDnfHistorySidecar
 // 同源同格式: `<txID>-<stepIndex>.dnf_history_id`, 内容为十进制裸 id)。直调原始函数
-// 而非 var 缝: 覆写与否互不干扰, 真文件 IO 零系统副作用(todo 10 无 mock 缝裁决)。
+// 而非 var 缝: 覆写与否互不干扰, 真文件 IO 零系统副作用。
 func seedSidecar(t *testing.T, txID string, stepIndex int, id int64) {
 	t.Helper()
 	if err := writeDnfHistorySidecar(txID, stepIndex, id); err != nil {
@@ -769,7 +760,7 @@ func stubRollbackExists(t *testing.T, exists bool, probeErr error) *existsSpy {
 }
 
 // runRollback 以给定 ctx 驱动一次 Rollback(ctx 是否为 withTxID 产物由各测试自持,
-// 与生产 cmdRollback 的 D-1 注入点同通道)。
+// 与生产 cmdRollback 的注入点同通道)。
 func runRollback(ctx context.Context, desiredState string, stepIndex int) tx.OpResult {
 	return packageSetAdapter{}.Rollback(ctx,
 		tx.Step{Index: stepIndex, Adapter: "package.set", Args: applyArgsJSON(desiredState)})
@@ -844,7 +835,7 @@ func TestPackageSet_Rollback_BestEffortAfterHistoryCleanup(t *testing.T) {
 	}
 }
 
-// TestPackageSet_Rollback_AbsentNoFallback 钉【oracle critical #1】守门:
+// TestPackageSet_Rollback_AbsentNoFallback 钉 absent 严格守门:
 // exists=false + absent → 严格 error、rc=1、逐字长串(全等断言), dnf 缝物理零调用 ——
 // dnf remove 对已 absent 包是空操作, 兜底会把"什么都没回滚"误报成回滚成功。
 // dnf 桩故意返回 rc=0: 若分流被改坏, 调用计数断言必然 first 失败。
@@ -891,7 +882,7 @@ func TestPackageSet_Rollback_RejectsNonRoot(t *testing.T) {
 	}
 }
 
-// TestPackageSet_Rollback_NoSidecar 钉【review important #3】: sidecar 文件缺失 →
+// TestPackageSet_Rollback_NoSidecar 钉 sidecar 读门: sidecar 文件缺失 →
 // 严格 rc=1 + Error 逐字(不插值)、读失败细节走 Stderr 诊断通道, 且**不探测、
 // 不兜底**(exists/dnf 双零调用)——回滚材料不存在即到此为止。
 func TestPackageSet_Rollback_NoSidecar(t *testing.T) {
@@ -953,8 +944,7 @@ func TestPackageSet_Rollback_BestEffortFails(t *testing.T) {
 	assertDnfArgv(t, spy, "remove")
 }
 
-// TestPackageSet_Rollback_MissingTxIDCtx 【D-1 对称守门, 非 plan 7 函数名单 ——
-// orchestrator §2 指令按 7+1+1 复核, 与 Apply 侧同名 case 对称】: 裸 ctx → rc=1 +
+// TestPackageSet_Rollback_MissingTxIDCtx(与 Apply 侧同名 case 对称): 裸 ctx → rc=1 +
 // 逐字串, 探测/dnf/sidecar 各缝零调用 —— txID 守门排在 sidecar 读之前, 读之后
 // 一切下游皆不该发生。euid 桩给 0 排除被 root 门误拒的假绿; sidecar 预置证明
 // 拒因是 ctx 缺 txID 而非文件缺失。
@@ -977,19 +967,18 @@ func TestPackageSet_Rollback_MissingTxIDCtx(t *testing.T) {
 	}
 }
 
-// TestPackageSet_EndToEnd_AuditChain 钉【review minor #7 / oracle I4】端到端证据链:
+// TestPackageSet_EndToEnd_AuditChain 钉端到端证据链:
 // 真实 JSONL 审计文件(不 mock audit 子系统)、cmdBegin→cmdPropose→cmdApply→cmdRollback
 // 四步 exit code 全 0、audit.Verify 全链回放无错、链长 ≥4、in-tx 条目 TxID 全一致、
 // 末条 prev_hash 与倒数第二条 entry_hash 衔接(64 hex 形状)。
 //
-// 【orchestrator 对 plan 373 行的裁决记录】plan 写"mock writeDnfHistorySidecarFn 返
-// fake id"——**不采纳**: mock 掉写缝后 Rollback 的真 readDnfHistorySidecar 读不到
-// 文件、进程内链断。本测试不覆写该缝, Apply 真写 sidecar 到 DAEDALUS_TX_DIR 临时根
+// 注意:**不要** mock writeDnfHistorySidecarFn 返 fake id:那样 Rollback 的真
+// readDnfHistorySidecar 读不到文件、进程内链断。本测试不覆写该缝, Apply 真写 sidecar
+// 到 DAEDALUS_TX_DIR 临时根
 // (纯文件 IO 零系统副作用), Rollback 真读 —— dnf 缝实参逐字出现 "history undo -y 42"
 // 即往返成功的铁证(42 只能来自真文件, 且探测桩只认 id==42)。
 //
-// 探测 error 三态(dnfHistoryExistsFn 返 err)的错串形态 plan 未授权逐字钉,
-// todo 10 移交注记"待 F1 复核"维持 —— 本文件不新增该形态断言。
+// 探测 error 三态(dnfHistoryExistsFn 返 err)的错串形态不在本文件钉。
 func TestPackageSet_EndToEnd_AuditChain(t *testing.T) {
 	isolateTxDir(t)
 	logPath := filepath.Join(t.TempDir(), "audit.jsonl")
@@ -1021,7 +1010,7 @@ func TestPackageSet_EndToEnd_AuditChain(t *testing.T) {
 	t.Cleanup(func() { dnfHistoryExistsFn = origEx })
 	dnfHistoryExistsFn = func(_ context.Context, id int64) (bool, error) { return id == 42, nil }
 
-	// 驱动链: 直接调四个子命令编排函数(与生产同进程同函数, D-1 注入点走真通道)。
+	// 驱动链: 直接调四个子命令编排函数(与生产同进程同函数, txID 注入点走真通道)。
 	var out, errBuf bytes.Buffer
 	if code := cmdBegin(&out, &errBuf); code != exitOK {
 		t.Fatalf("begin 退出码 = %d; stderr: %s", code, errBuf.String())

@@ -8,8 +8,8 @@ set -xeuo pipefail
 #       /var/lib/daedalus 的镜像内预建落位。
 #
 # 分工说明：
-#   - todo 16（dirs 链）：Go 侧统一解析状态/日志目录路径约定；
-#   - todo 9（StateDirectory）：systemd 单元（如 daedalus-fs.service）声明
+#   - dirs 链：Go 侧统一解析状态/日志目录路径约定；
+#   - StateDirectory：systemd 单元（如 daedalus-fs.service）声明
 #     StateDirectory=daedalus，经 DynamicUser 沙箱时由 systemd 提供
 #     /var/lib/daedalus 的 bind-mount 私有视图（每次启动全新目录）；
 #   - 本脚本：镜像 rootfs 内预建该目录本身——用户态（非 DynamicUser）进程

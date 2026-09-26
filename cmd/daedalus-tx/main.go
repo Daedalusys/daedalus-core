@@ -1,4 +1,4 @@
-// Command daedalus-tx 是 Daedalus 的事务原语 CLI(AIOS 对象模型 C3, todo 15)。
+// Command daedalus-tx 是 Daedalus 的事务原语 CLI(AIOS 对象模型 C3)。
 //
 //	子命令:
 //
@@ -8,7 +8,7 @@
 //	daedalus-tx rollback <tx-id> [--unit-dir <path>]
 //	daedalus-tx status   <tx-id>
 //
-// stdout 契约(每条子命令**恰一份**机器可读 JSON 文档; todo 26 的 copilot 层
+// stdout 契约(每条子命令**恰一份**机器可读 JSON 文档; 上层 copilot 层
 // 解析 CLI stdout, 而非 JSON-RPC):
 //   - begin   → {"tx_id":"<16hex>"}
 //   - propose/apply/rollback/status → 事务日志全文(id/created_at/status/steps/rollback_plan)
@@ -17,15 +17,15 @@
 // 退出码与 daedalus 家族 CLI 对齐(镜像 cmd/daedalus-host/main.go):
 // 0 成功, 1 运行期, 2 用法错误。
 //
-// ★ v1 执行模型(计划 todo 16): daedalus-tx 是**调用用户自己的进程**, 无 systemd
-// 单元; 用户域限制由适配器(todo 22)路径守卫无条件强制。本二进制**允许 spawn**
-// 子进程(备份/回滚), 与"宿主绝不 spawn"(决策 16)分属不同二进制, 互不违反。
+// ★ v1 执行模型: daedalus-tx 是**调用用户自己的进程**, 无 systemd 单元; 用户域
+// 限制由适配器路径守卫无条件强制。本二进制**允许 spawn** 子进程(备份/回滚),
+// 与"宿主绝不 spawn"分属不同二进制, 互不违反。
 //
-// ★ 审计盖章规则(计划 review round 1, 本文件承重): 只有 begin(step 0)/
+// ★ 审计盖章规则(本文件承重): 只有 begin(step 0)/
 // apply(步 1..N 升序)/rollback(步 N+1..)的事务条目携带 Entry.TxID/TxStep;
 // propose 与 status 发出**空 TxID** 条目(tx-id 只在 args 里)。identity=daedalus-tx,
 // tool=daedalus_tx_<sub>。begin 的 tx_prev_hash 由 internal/audit 的 flock 内播种
-// (见 audit.LogAudit todo 15 外科改动); apply/rollback 的步链由本 CLI 扫描审计日志
+// (见 audit.LogAudit); apply/rollback 的步链由本 CLI 扫描审计日志
 // 取该事务上一条 in-tx 记录 entry_hash 显式串接(跨进程续链)。
 package main
 
@@ -92,7 +92,7 @@ func run(argv []string, stdout, stderr io.Writer) int {
 
 // wantIDArgs 校验 <id 型子命令> 的位置参数: 恰好 1 个且匹配 tx-id 形状。
 // 返回 (id, exitCode, ok)。ok=false 时 exitCode ∈ {exitUsage}; 形状非法在
-// **触碰日志路径之前**即拒(round-2 fold 路径安全: 非法 id 绝不参与拼路径/落盘)。
+// **触碰日志路径之前**即拒(非法 id 绝不参与拼路径/落盘)。
 func wantIDArgs(args []string, stdout, stderr io.Writer) (string, int, bool) {
 	if len(args) != 1 {
 		fmt.Fprint(stderr, usage())
@@ -162,9 +162,8 @@ func usage() string {
 		"退出码: 0 成功 / 1 运行期 / 2 用法错误。\n"
 }
 
-// registeredAdapterNames 从 registry 动态列出已注册 adapter 名(review minor #6
-// fix: propose --help 一眼可见可用 adapter), 升序排序保证 help 文本确定性
-// (map 遍历序随机, 不排序则非确定性输出)。package.set 待 todo 11 注册后自动出现。
+// registeredAdapterNames 从 registry 动态列出已注册 adapter 名(propose --help 一眼
+// 可见可用 adapter), 升序排序保证 help 文本确定性(map 遍历序随机, 不排序则非确定性输出)。
 func registeredAdapterNames() []string {
 	names := make([]string, 0, len(registry))
 	for name := range registry {

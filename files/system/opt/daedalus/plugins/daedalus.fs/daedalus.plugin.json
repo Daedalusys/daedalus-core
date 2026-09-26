@@ -1,6 +1,6 @@
 {
   "id": "daedalus.fs",
-  "name": "Daedalus Filesystem",
+  "name": "Daedalus Filesystem Access",
   "version": "0.1.0",
   "type": "capability",
   "runtime": {
@@ -27,8 +27,8 @@
     "move_file"
   ],
   "checksums": {
-    "bin/daedalus-fs": "sha256:a7cb213ef4706b19b7d044ec881a16e989b058354dde1e89ddba5c574fc805b4",
-    "daedalus.plugin.json": "sha256:b8578665f514e62851b70229b6b93b380b8a1aa77028fd41abdf0a38a299e134"
+    "bin/daedalus-fs": "sha256:b4ee6333f2c4cfb723c36ec685f5c17860fa0a9ab09257da53e46b8314db2857",
+    "daedalus.plugin.json": "sha256:b4c0b11518586c38713dafd994ac6c2196f31cebc0b874620d48410b4a76480c"
   },
   "api_version": "0.1.0",
   "license": "Apache-2.0",

@@ -216,7 +216,7 @@ Deno.test("Copilot LLM - translate sends correct JSON-formatted payload and head
     expect(capturedBody.response_format).toEqual({ type: "json_object" });
     expect(Array.isArray(capturedBody.messages)).toBe(true);
     expect(capturedBody.messages[0].role).toBe("system");
-    // QQ pivot:system prompt 不再枚举白名单(决策 10),改为 advisor 定位
+    // QQ pivot:system prompt 不再枚举白名单,改为 advisor 定位
     expect(capturedBody.messages[0].content).toContain("No fixed whitelist");
     expect(capturedBody.messages[1].role).toBe("user");
     expect(capturedBody.messages[1].content).toBe("show disk usage");
@@ -271,7 +271,7 @@ Deno.test("Copilot LLM - translate sends correct payload and headers to Anthropi
     expect(capturedBody.model).toBe("claude-3-5-haiku-latest");
     expect(capturedBody.max_tokens).toBe(1024);
     expect(typeof capturedBody.system).toBe("string");
-    // QQ pivot:system prompt 不再枚举白名单(决策 10),改为 advisor 定位
+    // QQ pivot:system prompt 不再枚举白名单,改为 advisor 定位
     expect(capturedBody.system).toContain("No fixed whitelist");
     expect(Array.isArray(capturedBody.messages)).toBe(true);
     expect(capturedBody.messages.length).toBe(1);
