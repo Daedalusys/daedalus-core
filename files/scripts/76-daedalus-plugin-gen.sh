@@ -11,7 +11,7 @@
 #      .service.d/{landlock,credentials}.conf drop-in 必须原样存在,本脚本一个字节都不改它们;
 #   5. 策略单一事实源:预检 /opt/daedalus/shared/policy.toml 的存在性、必需节与
 #      [shell].allowed_commands 集合,并把 DAEDALUS_POLICY_PATH 注入能力服务器启动握手——
-#      显式指向的文件损坏/含未知键/字段缺失时,internal/policy 的 Go 解析器 fail-closed
+#      显式指向的文件损坏/含未知键/字段缺失时,SDK policy 包 的 Go 解析器 fail-closed
 #      拒绝启动,握手随之失败,即由真实解析器(而非 bash 近似)完成 TOML 合法性校验;
 #   6. 策略消费约定(拍板为"运行时读取"):单元**不渲染** Environment=ALLOW_COMMANDS,
 #      Go 服务器启动时读取 policy.toml;若单元显式携带该覆盖,则必须与 [shell].allowed_commands
@@ -112,7 +112,7 @@ POLICY_ALLOW="$(policy_toml_list allowed_commands "$POLICY")"
 # —— 0+') 对象模型资源门禁预检:[objectmodel] 节与
 # enabled_kinds 键必须存在,且启用集合必须包含 service —— daedalus-service
 # provider 与 daedalus.service 插件声明的唯一授权来源。fail-closed:
-# 空列表/缺 service 一律拒构建(与 Go 侧 internal/policy 的 requireList 语义同向)。
+# 空列表/缺 service 一律拒构建(与 Go 侧 SDK policy 包 的 requireList 语义同向)。
 grep -q '^\[objectmodel\]' "$POLICY" || fail "policy.toml 损坏: 缺节 ^[objectmodel] (对象模型策略节必须存在)"
 grep -Eq '^[[:space:]]*enabled_kinds[[:space:]]*=' "$POLICY" || fail "policy.toml 损坏: [objectmodel] 缺 enabled_kinds"
 OM_KINDS="$(policy_toml_list enabled_kinds "$POLICY")"
@@ -136,7 +136,7 @@ while [ "$pol_dir" != "$pol_stop" ] && [ "$pol_dir" != "/" ]; do
 done
 
 # 显式指向策略:让 shell/fs 二进制的启动握手顺带充当"真实解析器可加载性"校验
-# (TOML 语法损坏/未知键/字段缺失 → internal/policy fail-closed → 服务器拒启 → 握手失败)。
+# (TOML 语法损坏/未知键/字段缺失 → SDK policy 包 fail-closed → 服务器拒启 → 握手失败)。
 export DAEDALUS_POLICY_PATH="$POLICY"
 echo "76-daedalus-plugin-gen: policy.toml 预检通过($(echo "$POLICY_ALLOW" | wc -l) 项 shell 白名单,DynamicUser 可读,objectmodel 启用 kinds:$(echo "$OM_KINDS" | tr '\n' ' '))"
 

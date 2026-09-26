@@ -65,5 +65,5 @@ type Decision struct {
 
 // AdmissionFunc 是 v2 动态准入链的缝。框架注释锁定:v1 静态准入 = policy.toml
 // 单实现(fail-closed);本类型是 v2 动态链的插入点,不是对现状的第二事实源
-// 宣称——policy.toml 的强制值今天、明天都由 internal/policy 独家承载。
+// 宣称——policy.toml 的强制值今天、明天都由 SDK policy 包独家承载。
 type AdmissionFunc func(op AdmissionOp, obj Object) Decision

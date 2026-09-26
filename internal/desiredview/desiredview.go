@@ -6,7 +6,7 @@
 //   - adapter→kind 是封闭映射表,表外忽略、表内解析失败即整体报错(fail-closed);
 //   - 视图是派生缓存,可删可重建,重建 = 全量 replay(无增量水位线)。
 //
-// 消费者是未来的 daedalus-controller(VISION §10 P4);本包零副作用、
+// 消费者是未来的 daedalus-controller;本包零副作用、
 // 不写任何文件、不驱动任何变更。
 package desiredview
 
@@ -38,7 +38,7 @@ type stepArgs struct {
 }
 
 // Entry 是期望视图一行:某资源当前期望 + 贡献该期望的最后事务 id。
-// SourceTx 是 generation 语义的第一个真实消费点(P4 B3 前置)。
+// SourceTx 是 generation 语义的第一个真实消费点。
 type Entry struct {
 	Kind         objectmodel.Kind `json:"kind"`
 	Name         string           `json:"name"`

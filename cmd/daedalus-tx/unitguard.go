@@ -26,7 +26,7 @@ import (
 
 // unitNamePattern 单元名字符集整词匹配: 字母数字下划线点 @ 连字符。
 // 字符类天然排除 `/` `\` 空格 ; | $ ( ) 引号 空字节等 —— 路径分隔与 shell
-// 注入面在源头即不存在(T6 同源手法)。
+// 注入面在源头即不存在。
 // 首字符类刻意排除 `-`:单元名语法上不存在前导中划线,而前导 `-` 会被
 // `systemctl --user show <unit> ...` 解析成选项旗标(argv 注入),源头即拒。
 var unitNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.@][A-Za-z0-9_.@-]*$`)
@@ -35,7 +35,7 @@ var unitNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.@][A-Za-z0-9_.@-]*$`)
 var systemScopeRejectDirs = []string{"/etc/systemd/system", "/usr/lib/systemd/system"}
 
 // unitDirCtxKey --unit-dir 的 context 载体键(commands.go 写入, 适配器读取;
-// 不改 T15 的 Adapter 接口签名, 旗标只影响解析目录)。
+// 不改 Adapter 接口签名, 旗标只影响解析目录)。
 type unitDirCtxKey struct{}
 
 // withUnitDir 把非空覆写目录挂进 ctx; 空串(未给旗标)原样返回。
