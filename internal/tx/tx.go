@@ -1,4 +1,4 @@
-// 事务(tx)生命周期与日志(journal)原语 —— AIOS 对象模型 C3 核心。
+// 事务(tx)生命周期与日志(journal)原语。
 //
 // 职责边界(与后续消费者的分工):
 //   - 本包只做状态机 + 持久化 + 回滚计划生成;不执行任何适配器动作
@@ -9,7 +9,7 @@
 //     锁定的线上契约,改动即破坏下游解析。
 //
 // 持久化模型:每个事务一个 JSON 文件 `<root>/<tx-id>.json`,root 由
-// internal/dirs.TxRoot() 解析(env DAEDALUS_TX_DIR → /var/lib/daedalus/tx →
+// daedalus-sdk/dirs.TxRoot() 解析(env DAEDALUS_TX_DIR → /var/lib/daedalus/tx →
 // $HOME/.local/share/daedalus/tx),本包绝不复制任何路径字面量。
 // 整个 Transaction 序列化为一个 JSON 文档,在 flock(LOCK_EX) 下整体重写
 // (镜像 audit.go 的加锁纪律:O_RDWR|O_CREATE 打开 → LOCK_EX →

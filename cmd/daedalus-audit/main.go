@@ -81,7 +81,7 @@ func runLog(argv []string) int {
 		return exitUsage
 	}
 
-	// --args: 先按 JSON 解析, 失败则整体作为原始字符串(audit-log.py:169-172)。
+	// --args: 先按 JSON 解析, 失败则整体作为原始字符串。
 	var argsVal *audit.Value
 	if v, err := audit.ParseValue(*argsRaw); err == nil {
 		argsVal = v

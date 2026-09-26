@@ -25,7 +25,7 @@
 // ★ 审计盖章规则(本文件承重): 只有 begin(step 0)/
 // apply(步 1..N 升序)/rollback(步 N+1..)的事务条目携带 Entry.TxID/TxStep;
 // propose、status 与 resolve 发出**空 TxID** 条目(tx-id 只在 args 里)。identity=daedalus-tx,
-// tool=daedalus_tx_<sub>。begin 的 tx_prev_hash 由 internal/audit 的 flock 内播种
+// tool=daedalus_tx_<sub>。begin 的 tx_prev_hash 由 SDK audit 包的 flock 内播种
 // (见 audit.LogAudit); apply/rollback 的步链由本 CLI 扫描审计日志
 // 取该事务上一条 in-tx 记录 entry_hash 显式串接(跨进程续链)。
 package main
@@ -175,10 +175,4 @@ func registeredAdapterNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// i18nUsageErr 保留一个稳定的未知子命令消息钩子(当前直接英文/中文内联, 不引 i18n
-// 键面, 以免 tx CLI 在未定义 locale 键时产生噪声; 未来 i18n 化在此收敛)。
-func i18nUsageErr(sub string) string {
-	return fmt.Sprintf("未知子命令: %s", sub)
 }

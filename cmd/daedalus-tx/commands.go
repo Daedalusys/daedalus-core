@@ -3,7 +3,7 @@ package main
 // commands.go —— 六个子命令的编排。
 //
 // 分工: 本文件只做"解析 → 调 internal/tx 与适配器 → 盖章 → 打印"的流程;
-// 生命周期/日志/回滚计划在 internal/tx, 审计播种在 internal/audit, 盖章链在 stamp.go。
+// 生命周期/日志/回滚计划在 internal/tx, 审计播种在 SDK audit 包, 盖章链在 stamp.go。
 // 一切副作用之前先过 id 形状门(wantIDArgs), 非法 id 绝不触碰日志路径。
 
 import (
@@ -22,7 +22,7 @@ func cmdBegin(stdout, stderr io.Writer) int {
 	if err != nil {
 		return failRuntime(stdout, stderr, fmt.Sprintf("创建事务失败: %v", err))
 	}
-	// begin 步 0: 传空 prevHash, 由 internal/audit 的 flock 内播种取最近非 tx 记录哈希。
+	// begin 步 0: 传空 prevHash, 由 SDK audit 包的 flock 内播种取最近非 tx 记录哈希。
 	stampTx("begin", t.ID, 0, "", "success", nil)
 	printJSON(stdout, beginDoc{TxID: t.ID})
 	return exitOK
