@@ -6,6 +6,7 @@ use (
 	../daedalus-plugins/dupe
 	../daedalus-plugins/fs
 	../daedalus-plugins/pkg
+	../daedalus-plugins/proc
 	../daedalus-plugins/service
 	../daedalus-plugins/shell
 	../daedalus-plugins/sysinfo
