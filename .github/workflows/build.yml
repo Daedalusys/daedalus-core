@@ -140,8 +140,9 @@ jobs:
 
       - name: Official manifest cross-repo gate
         # SDK 的 TestValidate_OfficialPluginManifests 在 SDK 仓 CI 里因缺兄弟仓
-        # 显式 skip,这里是它唯一的真实执行点:校验 7 个能力插件 manifest 通过
-        # C1 schema、copilot manifest 仍因缺 api_version/license/maintainer 被拒。
+        # 显式 skip,这里是它唯一的真实执行点:校验 9 个能力插件与 copilot 共
+        # 10 个官方 manifest 全部通过 C1 schema(api_version/license/maintainer
+        # 齐备;copilot 保留老字符串 runtime 形态)。
         # 只跑这一条,避免把 SDK 全量测试在 core CI 重复一遍(SDK 自己的 CI 覆盖其余)。
         shell: bash
         working-directory: daedalus-sdk
@@ -169,6 +170,16 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         run: bash tests/deno/i18n_keys.test.sh
+
+      - name: copilot install-state drift gate
+        # 入库的 copilot 安装态(files/system/opt/daedalus/plugins/daedalus.copilot/)
+        # 是 `just copilot-plugin` 的构建产物:从 plugin/copilot/ 源码再生后
+        # git diff 必须为零,否则说明源码改动未同步再生,镜像会带过期 copilot 出厂。
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          just copilot-plugin
+          git diff --exit-code files/system/opt/daedalus/plugins/daedalus.copilot/ || { echo "ERROR: copilot 安装态与源码漂移,请跑 just copilot-plugin 并提交再生成产物"; exit 1; }
 
       - name: testdata drift gate (production policy.toml ↔ SDK testdata)
         # 生产 policy.toml 与 SDK 的 testdata 副本必须

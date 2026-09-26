@@ -1,12 +1,6 @@
 /**
- * Daedalus OS Copilot LLM 适配器。
- *
- * 通过兼容 OpenAI 和 Anthropic 的 API 提供非流式转换和多轮修订。
- * 强制执行严格的模式配置;超时可配置(env DAEDALUS_LLM_TIMEOUT_MS,
- * 默认 30s,clamp [1s, 5min]),失败时统一分类为 timeout/http/network/config
- * 四类并以 Error + kind/fields 附加属性抛出;瞬态错(timeout/network/5xx)
- * 在 callProvider 内部透明重试 1 次(固定 2s 退避),4xx 与 config 直接抛。
- * 修订轮次中保留不可变的系统提示词。
+ * Daedalus OS Copilot LLM 适配器（OpenAI/Anthropic 非流式转换与多轮修订）；失败分类
+ * timeout/http/network/config（Error+kind/fields），瞬态错在 callProvider 重试 1 次（2s 退避），4xx/config 直接抛。
  */
 
 import { buildSystemPrompt } from "./policy.ts";
@@ -23,9 +17,6 @@ export interface ChatMessage {
   content: string;
 }
 
-/**
- * 在 Deno 和 Node/Bun 环境中安全获取环境变量。
- */
 function getEnv(key: string): string | undefined {
   if (typeof (globalThis as any).Deno?.env?.get === "function") {
     return (globalThis as any).Deno.env.get(key);
@@ -33,9 +24,6 @@ function getEnv(key: string): string | undefined {
   return process.env?.[key];
 }
 
-/**
- * 解析 ~/.config/daedalus/copilot.json 的路径或 DAEDALUS_CONFIG_PATH 覆盖路径。
- */
 function resolveConfigFilePath(): string {
   const envPath = getEnv("DAEDALUS_CONFIG_PATH");
   if (envPath) {
@@ -45,10 +33,6 @@ function resolveConfigFilePath(): string {
   return `${home}/.config/daedalus/copilot.json`;
 }
 
-/**
- * 尝试读取并解析 JSON 配置文件。
- * 若文件不存在、无法读取或 JSON 无效，则静默返回 null。
- */
 function tryReadConfigFile(configPath: string): Record<string, unknown> | null {
   try {
     let content: string | null = null;
@@ -78,19 +62,11 @@ function tryReadConfigFile(configPath: string): Record<string, unknown> | null {
 }
 
 /**
- * 读取并解析 LLM 配置。
- *
- * 优先级：
- * 1. 显式覆盖对象 overrides
- * 2. 环境变量（DAEDALUS_LLM_API_KEY, DAEDALUS_LLM_PROVIDER, DAEDALUS_LLM_MODEL, DAEDALUS_LLM_BASE_URL）
- * 3. 配置文件（~/.config/daedalus/copilot.json 或 DAEDALUS_CONFIG_PATH）
- *
- * 默认值：
- * - Provider: "openai"
- * - OpenAI: model 为 "gpt-4o-mini", baseUrl 为 "https://api.openai.com/v1"
- * - Anthropic: model 为 "claude-3-5-haiku-latest", baseUrl 为 "https://api.anthropic.com"
- *
- * 若解析出的 apiKey 为空则抛出异常。
+ * 优先级（高 → 低）：1. 显式覆盖对象 overrides；2. 环境变量
+ * （DAEDALUS_LLM_API_KEY / PROVIDER / MODEL / BASE_URL）；3. 配置文件
+ * （~/.config/daedalus/copilot.json 或 DAEDALUS_CONFIG_PATH）。
+ * 缺省：provider "openai"；OpenAI gpt-4o-mini / api.openai.com/v1；
+ * Anthropic claude-3-5-haiku-latest / api.anthropic.com。apiKey 为空即抛异常。
  */
 export function readConfig(overrides?: {
   provider?: string;
@@ -177,14 +153,10 @@ export function readConfig(overrides?: {
   };
 }
 
-// ---------------------------------------------------------------------------
-// advisor-robustness:错误规范化与可配置超时(plan 3.1-3.3)
-// ---------------------------------------------------------------------------
-
-/** 错误分类:4 种覆盖所有失败模式(决策 3) */
+/** 错误分类:4 种覆盖所有失败模式 */
 export type ErrorKind = "timeout" | "http" | "network" | "config";
 
-/** 规范化错误形状;throw 时以普通属性附加到 Error 上(决策 7:不引入子类) */
+/** 规范化错误形状;throw 时以普通属性附加到 Error 上(不引入子类) */
 export interface NormalizedLLMError {
   kind: ErrorKind;
   fields: {
@@ -201,25 +173,19 @@ export interface NormalizedLLMError {
   };
 }
 
-/** 默认超时毫秒数:env 未设/非法时的兜底(决策 2) */
 const DEFAULT_TIMEOUT_MS = 30_000;
-/** 唯一一次重试的固定退避毫秒数(决策 5:1 次重试 + 2s,无指数退避) */
+/** 唯一一次重试的固定退避毫秒数(1 次重试 + 2s,无指数退避) */
 const RETRY_DELAY_MS = 2_000;
 
 /**
- * 重试退避的测试注入口:内部重试读取 `.ms` 作为真实等待时长。
- * 测试置 0 免等真 2s,生产缺省 2000 不动。
+ * 重试退避的测试注入口:内部重试读 `.ms` 作为真实等待时长,测试置 0 免等真 2s。
  * 必须是可变对象属性——ESM 导入绑定不允许 importer 重新赋值。
  */
 export const _retryDelayMsForTest: { ms: number } = { ms: RETRY_DELAY_MS };
 
 /**
- * 解析 LLM 请求超时(毫秒)。
- *
- * 读 env DAEDALUS_LLM_TIMEOUT_MS(决策 1,与 exec.ts 的
- * DAEDALUS_WATCHDOG_TIMEOUT_MS 同款命名);
- * 未设/非数字/空白/非正一律回退默认 30000,合法值 clamp 到 [1000, 300000]
- * (决策 2:防 0 立即 abort、防超大值永久挂起)。
+ * 解析 LLM 请求超时(毫秒):env DAEDALUS_LLM_TIMEOUT_MS 未设/非数字/非正回退
+ * 默认 30000,合法值 clamp 到 [1000, 300000](防 0 立即 abort、防超大值永久挂起)。
  */
 export function parseTimeoutMs(): number {
   const raw = getEnv("DAEDALUS_LLM_TIMEOUT_MS");
@@ -230,12 +196,9 @@ export function parseTimeoutMs(): number {
 }
 
 /**
- * 把任意 fetch 层错误归一化为 NormalizedLLMError(plan 3.3)。
- *
- * - 自带 kind 属性(我们 attempt() 自抛的 http/config 结构化错误)→ 原样返回
- * - name === "TimeoutError"(含 AbortSignal.timeout 抛的 DOMException)→ timeout
- * - TypeError(fetch 网络层:DNS/拒绝连接/断连)→ network(带 err.message)
- * - 其余 → network(兜底,保守分类)
+ * 把任意 fetch 层错误归一化为 NormalizedLLMError:自带 kind(我们 attempt()
+ * 自抛的结构化错误)原样返回;TimeoutError(含 AbortSignal.timeout 的
+ * DOMException)→ timeout;TypeError(fetch 网络层)与其余 → network(兜底保守分类)。
  */
 export function classifyFetchError(
   err: unknown,
@@ -265,9 +228,8 @@ export function classifyFetchError(
 }
 
 /**
- * 是否值得重试(决策 4)。
- * timeout/network/5xx 是典型瞬态错 → 重试大概率成功;
- * 4xx(含 408/429)与 config 是语义错(请求构造/权限/限流)→ 重试无意义。
+ * 是否值得重试:timeout/network/5xx 是瞬态错,重试大概率成功;
+ * 4xx(含 408/429)与 config 是语义错(构造/权限/限流),重试无意义。
  */
 export function isRetryable(n: NormalizedLLMError): boolean {
   if (n.kind === "timeout" || n.kind === "network") return true;
@@ -275,11 +237,7 @@ export function isRetryable(n: NormalizedLLMError): boolean {
   return false;
 }
 
-/**
- * 把规范化后的错误形状落回一个可 throw 的 Error(决策 7:Error + 附加属性)。
- * 若原错误已是自抛的结构化 Error(http/config)→ 原样返回;
- * 否则保留原始 message(timeout/network 分类场景),再附加 kind/fields。
- */
+/** 回落可 throw 的 Error(Error+kind/fields)：自抛结构化 Error(http/config)原样返回，否则保留原 message 再附加。 */
 function toThrowError(err: unknown, norm: NormalizedLLMError): Error {
   if (err instanceof Error && "kind" in err) {
     return err;
@@ -294,20 +252,16 @@ function toThrowError(err: unknown, norm: NormalizedLLMError): Error {
 }
 
 /**
- * 对配置的 LLM 提供商执行补全请求。
- *
- * 内部透明重试(决策 6):attempt() 每次新建 AbortSignal(timeout 信号不可复用,
- * 复用旧信号会让第二次 fetch 立即 abort);第一次失败 → classify →
- * 不可重试直接抛结构化错误;可重试则固定退避后第二次 attempt;
- * 第二次仍失败以第二次的规范化错误抛出(更新更准);
- * 重试成功则正常返回,不留任何 error 痕迹(决策 10)。
+ * 对配置的 LLM 提供商执行补全请求。内部透明重试:attempt() 每次新建
+ * AbortSignal(timeout 信号不可复用,复用旧信号会让第二次 fetch 立即 abort);
+ * 首次失败 classify 后不可重试即抛结构化错误,可重试则固定退避后第二次
+ * attempt,仍失败以第二次的规范化错误抛出(更新更准);成功则正常返回。
  */
 async function callProvider(
   messages: ChatMessage[],
   configOverrides?: Partial<Config>,
 ): Promise<string> {
   const config = readConfig(configOverrides);
-  // 超时不再硬编码:env > 默认 30000,clamp [1000, 300000]
   const timeoutMs = parseTimeoutMs();
 
   const baseUrlTrimmed = config.baseUrl.replace(/\/+$/, "");
@@ -315,7 +269,6 @@ async function callProvider(
     ? `${baseUrlTrimmed}/chat/completions`
     : `${baseUrlTrimmed}/v1/messages`;
 
-  // 请求构造按 provider 分支;fetch/错误处理两侧共用同一 attempt() 逻辑
   let headers: Record<string, string>;
   let body: string;
   if (config.provider === "openai") {
@@ -337,7 +290,6 @@ async function callProvider(
       response_format: { type: "json_object" },
     });
   } else {
-    // Anthropic 适配器
     const systemMsg = messages.find((m) => m.role === "system");
     const systemPrompt = systemMsg ? systemMsg.content : buildSystemPrompt();
     const userAssistantMessages = messages
@@ -360,7 +312,6 @@ async function callProvider(
     });
   }
 
-  /** 单次补全尝试:每次调用新建超时信号,失败以结构化 Error 抛出 */
   const attempt = async (): Promise<string> => {
     const signal = AbortSignal.timeout(timeoutMs);
     const response = await fetch(endpoint, {
@@ -441,11 +392,9 @@ async function callProvider(
 }
 
 /**
- * 将自然语言查询转换为原始 LLM 响应。
- * 单轮非流式请求。
- * systemContext（计划 todo 28）：可选的 system prompt 追加段（state 记忆
- * KNOWN STATE 块）；非空时以空行拼接到基础提示词之后，空/缺省时提示词
- * 逐字节保持不变（向后兼容，既有调用方与测试零回归）。
+ * 将自然语言查询转换为原始 LLM 响应（单轮非流式）。
+ * systemContext（state 记忆 KNOWN STATE 块）非空时以空行拼接到基础提示词之后；
+ * 空/缺省时提示词逐字节保持不变（向后兼容，既有调用方与测试零回归）。
  */
 export async function translate(
   query: string,
@@ -464,8 +413,7 @@ export async function translate(
 }
 
 /**
- * 根据用户反馈修订提议的命令。
- * 保留不变的系统提示词并追加用户反馈。
+ * 按用户反馈修订提议的命令：保留不变的系统提示词并追加用户反馈。
  */
 export async function revise(
   history: Array<{ role: "system" | "user" | "assistant"; content: string }>,
