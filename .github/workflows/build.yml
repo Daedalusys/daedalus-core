@@ -86,6 +86,17 @@ jobs:
           path: daedalus-sdk
           ref: ${{ steps.sdk-version.outputs.sdk_version != '' && format('v{0}', steps.sdk-version.outputs.sdk_version) || '' }}
 
+      - name: Checkout daedalus-plugins (sibling)
+        # SDK 的官方 manifest 跨仓校验读 `../../daedalus-plugins/<cap>/` 与
+        # `../../daedalus-core/plugin/copilot/`:从 SDK 包目录上溯两级正是本
+        # workspace 根,三仓平级检出即吃满。SDK 仓自己的 CI 里 Actions 不许
+        # checkout 逃出 GITHUB_WORKSPACE,那条测试在那边显式 skip,执行点在此。
+        # 走默认分支:manifest 唯一事实源就是插件仓源码,镜像里的 zip 是另一回事。
+        uses: actions/checkout@v4
+        with:
+          repository: Daedalusys/daedalus-plugins
+          path: daedalus-plugins
+
       - name: Set Up Go Toolchain
         # go.mod pins `go 1.25.0`;runner image 可能更老,显式 pin。
         # setup-go 缓存 go.sum;vendor/ 不入库,首次构建走 module proxy。
@@ -126,6 +137,15 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         run: just go-test
+
+      - name: Official manifest cross-repo gate
+        # SDK 的 TestValidate_OfficialPluginManifests 在 SDK 仓 CI 里因缺兄弟仓
+        # 显式 skip,这里是它唯一的真实执行点:校验 7 个能力插件 manifest 通过
+        # C1 schema、copilot manifest 仍因缺 api_version/license/maintainer 被拒。
+        # 只跑这一条,避免把 SDK 全量测试在 core CI 重复一遍(SDK 自己的 CI 覆盖其余)。
+        shell: bash
+        working-directory: daedalus-sdk
+        run: go test ./plugin/ -run TestValidate_OfficialPluginManifests -count=1
 
       - name: Build Core Binaries (Go)
         # Deno 套件的磁盘断言(audit.test.ts getAuditBinary / exec.test.ts tx 默认
