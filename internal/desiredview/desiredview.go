@@ -49,7 +49,7 @@ type Entry struct {
 type key struct{ kind, name string }
 
 // View 是 Current Desired View:派生缓存,只读投影结果。
-type View struct { m map[key]Entry }
+type View struct{ m map[key]Entry }
 
 // Get 返回指定资源当前期望;ok=false 表示无任何 applied 事务声明过它。
 func (v *View) Get(kind objectmodel.Kind, name string) (Entry, bool) {
