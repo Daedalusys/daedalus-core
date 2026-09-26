@@ -54,7 +54,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | 执行面 Tx | 怎么改、怎么恢复 | 事务五步;日志 + 快照 + 回滚计划 |
 | 观测面 Observe | 系统现在是什么样 | 只读查询 + state.jsonl 缓存 |
 | 横切 · 证据 | 操作是否可追溯 | audit.jsonl 哈希链,唯一写入口 `daedalus-audit` |
-| 横切 · 策略 | 通道是否被允许 | policy.toml,缺省 fail-closed |
+| 横切 · 策略 | 通道是否被允许 | policy.toml,fail-closed:文件缺失或损坏一律拒启(回退内置 `Default()` 需 `DAEDALUS_POLICY_MODE=development` 显式 opt-in) |
 
 **平台不变量**:凡声明为资源、并经事务通道执行的变更,由平台保证可回滚、有操作日志、有哈希链审计。这条保证不覆盖全部通道——保证附着于通道,而非平台每个角落。
 
@@ -78,7 +78,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | --- | --- |
 | `daedalus-host` | list / inspect / verify / run-plugin / render-unit——只打印启动命令,绝不 spawn(决策 16) |
 | systemd 单元 | 构建期由 76 脚本渲染 ExecStart;DynamicUser + Landlock + seccomp + LoadCredential |
-| capability × 7 | Go 静态二进制;query/list 严格只读,写走 `daedalus-tx` |
+| capability × 7 | Go 静态二进制;受治理的命令式/探索性能力,读写边界由 policy 分级强制;声明式状态变更走 `daedalus-tx` |
 | copilot 双通道 | L0 经 y/n 进 shell 沙箱或事务五步;L1/L2 仅展示 |
 | 审计 | 一切落盘经 `daedalus-audit` CLI |
 
@@ -91,7 +91,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | 值 | 含义 | 现状 |
 | --- | --- | --- |
 | `copilot` | 命令顾问 CLI | v1 已落地(`daedalus.copilot`) |
-| `capability` | 只读能力服务器包:fs/shell/pkg/sysinfo/service/blueprint/dupe 七件 | v1 已落地 |
+| `capability` | 受治理的命令式/探索性系统能力包(imperative / exploratory capability under policy boundaries):fs/shell/pkg/sysinfo/service/blueprint/dupe 七件。安全性由 policy 与 E/D 分级保证,不由"只读"假设保证 | v1 已落地 |
 | `controller` | 外部接入预留 | v1.5 声明性预留 |
 
 **轴二 · 资源 `kind`**(封闭枚举共七类):
@@ -112,7 +112,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 
 | 同名 | 含义区分 |
 | --- | --- |
-| capability | `type=capability` = 只读能力服务器**包**;`kind=capability` = 对象模型**保留位**。互不引用,同名巧合(已记于 `internal/controller/doc.go`) |
+| capability | `type=capability` = 受治理的能力服务器**包**(命令式/探索性,非"只读");`kind=capability` = 对象模型**保留位**。互不引用,同名巧合(已记于 `internal/controller/doc.go`) |
 | transaction | ① 枚举位 `KindTransaction`;② 状态机 token `tx.Status`;③ 文档里的「事务」= 执行面架构概念。三处按上下文落位 |
 | controller | ① 插件 type 预留值;② k8s Controller 概念(§5);③ `internal/controller` 契约包 |
 
