@@ -92,6 +92,9 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		}
 		if id == "" {
 			fmt.Fprintf(stderr, "daedalus-host: %s: %s\n", cmd, i18n.T("host.error.missing_id"))
+			// 空 id 也是被拒的调用:与 parse 失败/非法 id/多余参数各拒绝分支
+			// 同一纪律,必须先落 denied 审计再退出(证据边界不容漏记)。
+			hostAudit("host_"+auditSlug(cmd), pluginDir, "", exitUsage)
 			return exitUsage
 		}
 		tool := "host_" + auditSlug(cmd)
