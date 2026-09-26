@@ -994,10 +994,10 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 1;
   }
 
-  // 步骤 2.3:事务意图探测,命中保留动词改走 classifyTxProposal(shell 分类器不参与,竞态条款)
+  // 步骤 2:事务意图探测,命中保留动词改走 classifyTxProposal(shell 分类器不参与,竞态条款)
   const txIntent = detectTxIntent(proposal);
 
-  // 步骤 2.4:本地静态风险分级(LLM 不参与风险自标注)。shell:L0 = safe 且
+  // 步骤 3:本地静态风险分级(LLM 不参与风险自标注)。shell:L0 = safe 且
   // 白名单内 → 唯一可能沙箱执行的分级,其余一律展示;tx:静态表定级,
   // tx_propose/tx_apply(started|stopped)= safe → 事务通道,其余绝不 apply。
   let risk: RiskAssessment;
@@ -1077,7 +1077,7 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 0;
   }
 
-  // 步骤 2.5:verbose 先打印翻译结果(在任何可能触发 I/O 的动作之前)。
+  // 步骤 4:verbose 先打印翻译结果(在任何可能触发 I/O 的动作之前)。
   // recordAudit 可能 resolveAuditPath 后 fallback $HOME 并弹 deno 权限窗——
   // 用户先看翻译结果再决定 Ctrl-C,无须对权限盲授权。
   // dryRun 路径有自己的 [dry-run] 预览,这里跳过避免双打印。
@@ -1088,7 +1088,7 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     }
   }
 
-  // 步骤 2.7:审计翻译事件。挪到 verbose 之后,确保用户在看到任何可能弹窗
+  // 步骤 5:审计翻译事件。挪到 verbose 之后,确保用户在看到任何可能弹窗
   // 之前先看到翻译结果。审计哈希链对 args 序列化整体摘要,新增 key 天然兼容。
   await recordAuditFn(
     "copilot_translate",
@@ -1121,13 +1121,13 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 0;
   }
 
-  // 步骤 4:确认策略。TTY 默认 y/n,-y 跳过;非 TTY(管道/脚本)无 stdin 可读,
+  // 步骤 6:确认策略。TTY 默认 y/n,-y 跳过;非 TTY(管道/脚本)无 stdin 可读,
   // 仅沙箱白名单只读诊断运行,其余展示,与 -i 无关。-i 是冗余 alias(= 不传
   // -y),-y 是唯一跳过 y/n 的方式(给 CI/管道);-i + 非 TTY 已在 runCopilot
   // 入口报错拦截,不会到达这里。
   const requireConfirmation = isTerminal && !yes;
 
-  // 步骤 4.5:safe 事务(tx_propose / tx_apply started|stopped)分流到事务通道
+  // 步骤 7:safe 事务(tx_propose / tx_apply started|stopped)分流到事务通道
   // (begin→propose→preview→y/n→apply);caution/danger 已在展示分流处返回。
   if (isTxChannel && txIntent) {
     return await runTxTurn(ctx, proposal, txIntent);
