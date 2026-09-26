@@ -31,7 +31,7 @@
     "shell_exec"
   ],
   "checksums": {
-    "bin/daedalus-shell": "sha256:25890b8c49fafadab2a28d7fec73b9d3814abafbc34fe91a66ab915c2d48d9d1",
+    "bin/daedalus-shell": "sha256:4e63265c44b55272b213b9cf771aba6ebe54e53e2489e679e340e948189e48d2",
     "daedalus.plugin.json": "sha256:421d1cbc0492251b6420c60818c44c4c4cd00ac11a4abf1e58c1eab3d41ab461"
   },
   "api_version": "0.1.0",
