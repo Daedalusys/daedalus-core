@@ -33,7 +33,7 @@
     }
   ],
   "checksums": {
-    "bin/daedalus-service": "sha256:4e92564564712304caaa870cb4bdf7d4b8e14f3062b8d77a615945436a5296a2",
+    "bin/daedalus-service": "sha256:41f3626245e85aaba47cac6531693f4d119fe77d425240f5e4f870cf509d058e",
     "daedalus.plugin.json": "sha256:3ba5bb0c78bfcb41c82a35d3a314fbecf98ee226e66c6f4e5b3176e149f1f8d7"
   },
   "api_version": "0.1.0",
