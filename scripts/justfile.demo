@@ -22,15 +22,7 @@ go-build-demo: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
     cd daedalus-core
-    if ! command -v go >/dev/null 2>&1; then
-        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
-            if [ -x "$c" ]; then
-                export PATH="$(dirname "$c"):$PATH"
-                break
-            fi
-        done
-    fi
-    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    {{go_path_fallback}}
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -tags demo -trimpath -o bin/ ./cmd/...
 
 # 一键 demo 跑 copilot CLI(计划 checkbox):rebuild demo 二进制 → 安装
