@@ -30,7 +30,7 @@
     }
   ],
   "checksums": {
-    "bin/daedalus-pkg": "sha256:da1a34266f441d8cf83290d73614c71a828a05ab0041874dfb2792cd1cbf9032",
+    "bin/daedalus-pkg": "sha256:4e96ed0a56a2460599665a5525447857cf9942a1c3f06589f18ea24e89a6c196",
     "daedalus.plugin.json": "sha256:7b5f66d0e25a4ed551e574405d61ea50ca875ca9516155aafad9994f1c2fd115"
   },
   "api_version": "0.1.0",

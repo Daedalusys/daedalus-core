@@ -37,7 +37,7 @@
     "blueprint_remove"
   ],
   "checksums": {
-    "bin/daedalus-blueprint": "sha256:a9d7698fabd3c612a9b9483183ed6d0288c6fd38197dfd7b0499dc74f07e5fa5",
+    "bin/daedalus-blueprint": "sha256:09989dd7f45be68c13721c236de55e6b19c1023f505b7c01e8d3ab799b5d725c",
     "daedalus.plugin.json": "sha256:4cd2c9b7b748c52a46627c6a294b9ce920c213e32a0a1e6827c430945ef351e7"
   },
   "api_version": "0.1.0",
