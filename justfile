@@ -91,7 +91,7 @@ verify-dev-layout:
     cd "$root/daedalus-core"
     bash scripts/verify-dev-layout.sh
 
-# 打包 8 个能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/trace)为 daedalus-plugin
+# 打包 9 个能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/trace/proc)为 daedalus-plugin
 # (构建镜像前执行)
 # 同时安装带外 CLI 到 /usr/local/bin: host/audit/tx(本仓现构)+ shell/service
 # (插件仓现构;3 仓拆分后能力二进制出厂源已从 core 迁至 daedalus-plugins)
@@ -153,7 +153,7 @@ plugin-pack: blueprint-embed
     stage="${TMPDIR:-/tmp}/daedalus-plugin-pack-stage"
     find "${stage}" -mindepth 1 -delete 2>/dev/null || true
     declare -A cap_bin   # cap → 插件仓现构产物绝对路径,供 /usr/local/bin 双落位腿复用
-    for cap in fs shell pkg sysinfo service blueprint dupe trace; do
+    for cap in fs shell pkg sysinfo service blueprint dupe trace proc; do
         id="daedalus.${cap}"
         src="$root/daedalus-plugins/${cap}"
         manifest="${src}/daedalus.plugin.json"
@@ -183,11 +183,12 @@ plugin-pack: blueprint-embed
         cp -f "${src}/${exe}" "${stage}/${exe}"
         chmod 0755 "${stage}/${exe}"
         "./bin/daedalus-plugin-pack" -in "${stage}" -out "bin/${id}.plugin.zip"
-        if [ "${cap}" = "dupe" ] || [ "${cap}" = "trace" ]; then
-            # dupe/trace 仅 TMPDIR 解包校验、不进 files/system,理由(zip 照常产出到 core bin/):
-            #   1) 两者的安装态从未入库(git ls-files 中 daedalus.dupe/、daedalus.trace/ 零条目),
+        if [ "${cap}" = "dupe" ] || [ "${cap}" = "trace" ] || [ "${cap}" = "proc" ]; then
+            # dupe/trace/proc 仅 TMPDIR 解包校验、不进 files/system,理由(zip 照常产出到 core bin/):
+            #   1) 三者的安装态从未入库(git ls-files 中 daedalus.dupe/、daedalus.trace/、
+            #      daedalus.proc/ 零条目),
             #      往入库树写入是净新增未跟踪残留;
-            #      2) CI 镜像供料腿 fetch-plugins.sh 只解 6 个 zip、不含 dupe/trace;
+            #      2) CI 镜像供料腿 fetch-plugins.sh 只解 6 个 zip、不含 dupe/trace/proc;
             #   3) 校验语义不降级:zip 仍经 -verify --keep 解压到临时空目录,解压即完整校验、
             #      fail-closed。正式入库(安装态 commit + release + fetch)时删掉此分支即可。
             vdir="${TMPDIR:-/tmp}/daedalus-plugin-pack-verify/${id}"
@@ -221,7 +222,7 @@ plugin-pack: blueprint-embed
     #   render/handshake 环路)——与 audit 同款仅落 /usr/local/bin,服务 copilot spawn
     #   与用户直接 CLI(v1 执行模型 = 调用者进程)。
     install -Dm0755 "bin/daedalus-tx" "$root/daedalus-core/files/system/usr/local/bin/daedalus-tx"
-    echo "plugin-pack: 8 个能力插件 zip(fs/shell/pkg/sysinfo/service/blueprint/dupe/trace)-> daedalus-core/bin/;6 个已解包校验安装 -> daedalus-core/files/system/opt/daedalus/plugins/(dupe/trace 仅 TMPDIR 解包校验,理由见循环内注释);host/audit/tx(core 现构)+ shell/service(插件仓现构)-> daedalus-core/files/system/usr/local/bin/"
+    echo "plugin-pack: 9 个能力插件 zip(fs/shell/pkg/sysinfo/service/blueprint/dupe/trace/proc)-> daedalus-core/bin/;6 个已解包校验安装 -> daedalus-core/files/system/opt/daedalus/plugins/(dupe/trace/proc 仅 TMPDIR 解包校验,理由见循环内注释);host/audit/tx(core 现构)+ shell/service(插件仓现构)-> daedalus-core/files/system/usr/local/bin/"
 
 # 开发态本地安装:把 dev 产物装进用户前缀,免镜像即可使用全套 CLI。
 # 用法: just dev-install [前缀] (亦兼容 --prefix=X 形式);默认前缀 = $HOME/.local。
