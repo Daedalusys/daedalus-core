@@ -4,7 +4,7 @@ package main
 //
 // 盖章规则:
 //   - 只有 begin(step 0)/ apply(步 1..N 升序)/ rollback(步 N+1..)携带 Entry.TxID/TxStep;
-//   - propose 与 status 发出**空 TxID**条目(tx-id 仅存在于 args 对象里)。
+//   - propose、status 与 resolve 发出**空 TxID**条目(tx-id 仅存在于 args 对象里)。
 //   - identity=daedalus-tx, tool=daedalus_tx_<sub>; 尽力而为发射(写失败静默,
 //     绝不拖垮子命令本体), 镜像 daedalus-host/main.go 的 hostAudit。
 //
@@ -49,7 +49,7 @@ func argsVal(m map[string]any) *audit.Value {
 	return v
 }
 
-// stampPlain 发一条**空 TxID**的事务外围审计(propose/status): tx-id 只在 args 里。
+// stampPlain 发一条**空 TxID**的事务外围审计(propose/status/resolve): tx-id 只在 args 里。
 // best-effort: 任何写失败静默忽略(返回 "" 表示未落盘, 供调用方忽略即可)。
 func stampPlain(sub, id, outcome string) {
 	_, _ = audit.LogAudit(audit.Entry{ //nolint:errcheck // 尽力而为, 与 hostAudit 同纪律

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Daedalusys/daedalus-core/internal/tx"
 	"github.com/Daedalusys/daedalus-sdk/audit"
 )
 
@@ -274,4 +275,80 @@ func TestTx_FailedApplyMarksFailedAndPartialRollback(t *testing.T) {
 		t.Fatalf("失败/回滚 outcome 缺失: errApply=%v okRollback=%v", sawErrApply, sawOkRollback)
 	}
 	mustVerify(t, logPath) // 失败步仍是合法盖章链 → Verify 通过
+}
+
+// TestTx_ResolveCrashRecovery 守门测试:apply 中途进程崩溃留下的 applying 卡死态
+// 必须有一条显式恢复路径(resolve → failed),且恢复前 apply/rollback 双双拒入
+// (fail-closed, 不掩盖半途状态)、恢复后 rollback 不盲回滚未证步骤。
+// 崩溃形态用 tx.Load + MarkApplying 精确复刻:磁盘上是 applying 且各步
+// OpResult 未固化(全零),与真实半途被杀逐字节同形。
+func TestTx_ResolveCrashRecovery(t *testing.T) {
+	logPath, rc := harness(t)
+	id := doBegin(t, rc)
+	if c, _, e := rc("propose", id, "noop", `{}`); c != exitOK {
+		t.Fatalf("propose noop: %d %s", c, e)
+	}
+
+	// 复刻崩溃:journal 落盘为 applying(步骤 OpResult 停留在未执行形态)。
+	tt, err := tx.Load(id)
+	if err != nil {
+		t.Fatalf("载入 journal 失败: %v", err)
+	}
+	if err := tt.MarkApplying(); err != nil {
+		t.Fatalf("MarkApplying 失败: %v", err)
+	}
+
+	// 卡死态下 apply 重入与 rollback 都必须 exit 1 拒入。
+	if c, out, _ := rc("apply", id); c != exitRuntime || !strings.Contains(out, "无法进入 applying") {
+		t.Fatalf("applying 态 apply 重入应被拒, 得 %d / %q", c, out)
+	}
+	c, out, _ := rc("rollback", id)
+	if c != exitRuntime || !strings.Contains(out, "正在应用中") {
+		t.Fatalf("applying 态 rollback 应被拒, 得 %d / %q", c, out)
+	}
+	// 拒入消息必须指向恢复命令(操作员可发现性)。
+	if !strings.Contains(out, "resolve") {
+		t.Fatalf("rollback 拒绝消息应提示 resolve 恢复路径: %q", out)
+	}
+
+	// resolve → failed:stdout 回事务全文, 状态终态 failed。
+	c, out, errOut := rc("resolve", id)
+	if c != exitOK {
+		t.Fatalf("resolve 退出码 = %d; stderr: %s", c, errOut)
+	}
+	if st := parseStatus(t, out); st.Status != "failed" {
+		t.Fatalf("resolve 后状态 = %s, want failed", st.Status)
+	}
+	// 二次 resolve:非 applying 态 → exit 1(resolve 是一次性判定, 不可重放)。
+	if c, out, _ := rc("resolve", id); c != exitRuntime || !strings.Contains(out, "仅适用于卡在 applying") {
+		t.Fatalf("重复 resolve 应被拒, 得 %d / %q", c, out)
+	}
+	// resolve 后 rollback:failed 态, 但未证步骤前缀为空 → 不盲回滚, 成功且保持 failed。
+	c, out, errOut = rc("rollback", id)
+	if c != exitOK {
+		t.Fatalf("resolve 后 rollback 退出码 = %d; stderr: %s", c, errOut)
+	}
+	if st := parseStatus(t, out); st.Status != "failed" {
+		t.Fatalf("failed 态回滚后应保持 failed, 实得 %s", st.Status)
+	}
+
+	// 审计:resolve 是外围条目(空 tx_id, tool=daedalus_tx_resolve),
+	// 不污染事务盖章链; 整链 Verify 通过。
+	recs := readAudit(t, logPath)
+	var sawResolve, resolveInTx bool
+	for _, r := range recs {
+		if r.Tool == "daedalus_tx_resolve" {
+			sawResolve = true
+			if r.TxID != "" {
+				resolveInTx = true
+			}
+		}
+	}
+	if !sawResolve {
+		t.Fatal("审计缺少 daedalus_tx_resolve 条目")
+	}
+	if resolveInTx {
+		t.Fatal("resolve 条目必须空 tx_id(盖章规则: 仅 begin/apply/rollback 入链)")
+	}
+	mustVerify(t, logPath)
 }
