@@ -1,6 +1,6 @@
 package main
 
-// service_set_guard_test.go —— service.set 的论证防线测试(todo 22):
+// service_set_guard_test.go —— service.set 的论证防线测试:
 // 名称/参数门、UNCONDITIONAL 路径守卫、reload 拒绝。全部要求
 // "拒绝发生在读取文件与执行 systemctl 之前" —— 以 capture 文件根本不存在为证据。
 
@@ -27,8 +27,6 @@ func rejectPropose(t *testing.T, unitDir, args, wantErr string) {
 		t.Errorf("拒绝必须发生在 systemctl 执行之前(capture 已存在): %v", captureCalls(t, capture))
 	}
 }
-
-// ───────────────────────── 名称门(正则 + 路径字符)─────────────────────────
 
 func TestServiceSet_Propose_RejectsBadNames(t *testing.T) {
 	dir := t.TempDir()
@@ -70,14 +68,10 @@ func TestServiceSet_Propose_RejectsBadArgs(t *testing.T) {
 	}
 }
 
-// ───────────────────────── (f) reload 拒绝 ─────────────────────────
-
 func TestServiceSet_Propose_RejectsReload(t *testing.T) {
 	rejectPropose(t, t.TempDir(), `{"name":"demo","desired_state":"reload"}`,
 		"desired_state reload not supported in v1")
 }
-
-// ───────────────────────── UNCONDITIONAL 路径守卫 ─────────────────────────
 
 // 核心防线: --unit-dir(或解析结果)落入系统级单元目录 → 直接拒绝且不 exec。
 // 断言形态: 逐字错误 "v1 supports user-scope units only: <path>"。

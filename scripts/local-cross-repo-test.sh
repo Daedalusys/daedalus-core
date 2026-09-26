@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# local-cross-repo-test.sh: plan todo 15 本地等价全链集成测试(无 gh / 无网络兜底)。
+# local-cross-repo-test.sh: 本地等价全链集成测试(无 gh / 无网络兜底)。
 #
 # 与 V3 构建机/CI 的跨仓 release 流水线等价,全链 4 步:
 #   1) 本地构建 6 插件二进制 + daedalus-plugin-pack 打 6 个 zip;

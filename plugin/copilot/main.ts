@@ -1,15 +1,9 @@
 /**
- * Daedalus OS Copilot CLI 编排器。
- *
- * 实现交互式和单次自然语言 CLI 编排：
- * 1. CLI 参数解析（--verbose, --interactive, --dry-run, --yes, --provider, --model, --base-url, --help, --version）
- * 2. 交互式终端的 REPL 模式，每个查询具有独立的修订计数器
- * 3. 建议先行:所有命令先展示 + 风险标注;交互终端下白名单内只读诊断经 y/n 确认后由沙箱运行,白名单外只展示由用户手动执行;非 TTY 仅白名单只读诊断运行
- * 3.5 事务通道(计划 todo 27):tx.propose / tx.apply / tx.rollback 提议改走
- *     daedalus-tx 的 begin→propose→preview→(y/n)→apply,与 shell 沙箱通道互斥;
- *     仅 classifyTxProposal 定级 safe 的事务可申请执行,L1/L2 事务只展示
- * 4. 分步轮次循环：转换 -> 解析并验证 -> 确认/编辑/拒绝反馈循环 -> 执行
- * 5. 针对每个生命周期事件严格执行加密哈希链审计日志记录
+ * Daedalus OS Copilot CLI 编排器：交互式 REPL 与单次查询编排。
+ * 轮次循环：转换 -> 解析验证 -> y/n 确认/编辑/拒绝反馈循环 -> 执行。
+ * 建议先行：所有命令先展示 + 风险标注；白名单内只读诊断确认后沙箱运行，
+ * 白名单外只展示（非 TTY 仅白名单只读诊断运行）；事务通道与 shell 沙箱
+ * 通道互斥（见 ★ 事务通道 ★ 段）。每个生命周期事件严格落哈希链审计。
  */
 
 import {
@@ -79,33 +73,26 @@ export interface CopilotOptions {
   execFn?: typeof execAllowlisted;
   recordAuditFn?: typeof recordAudit;
   readConfigFn?: typeof readConfig;
-  // 事务通道注入点（todo 27）:begin 为 main.ts 本地实现（exec.ts 无 begin）,
-  // propose/preview/apply 直承 T26 的 execTx* 三函数,测试全部 mock 注入。
+  // 事务通道注入点:begin 本文件实现,propose/preview/apply 直承 exec.ts execTx*,测试可 mock
   txBeginFn?: typeof defaultTxBegin;
   txProposeFn?: typeof execTxPropose;
   txPreviewFn?: typeof execTxPreview;
   txApplyFn?: typeof execTxApply;
-  // state 记忆注入点(todo 28):镜像 translateFn 的可 stub 形态,测试注入
-  // 假摘要,默认实现为 readStateSummary(直读 state.jsonl 缓存,永不 throw)。
+  // state 记忆注入点:镜像 translateFn 可 stub 形态,默认 readStateSummary(直读 state.jsonl,永不 throw)
   readStateFn?: typeof readStateSummary;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 事务通道（aios-object-model-alignment 计划 todo 27）
+// 事务通道
 //
 // ★ 编码约定 ★ LLM 以 CommandProposal 形态提议事务:command 取保留动词
-// "tx.propose" / "tx.apply" / "tx.rollback",args = [目标, 期望态?]
-// （rollback 只需目标 = tx-id;期望态缺省空串）。detectTxIntent 命中即改走
-// classifyTxProposal（todo 24）定级,shell 分类器（classifyProposal /
-// L0_WHITELIST）绝不参与事务意图——两条执行通道互不竞争（竞态条款）。
+// "tx.propose"/"tx.apply"/"tx.rollback",args = [目标, 期望态?](rollback 仅
+// tx-id,期望态缺省空串)。detectTxIntent 命中即改走 classifyTxProposal 定级,
+// shell 分类器绝不参与事务意图——两条执行通道互不竞争(竞态条款)。
 //
-// ★ begin 归属 ★ T26 只交付 execTxPropose/Preview/Apply 三函数,均不自动
-// begin;而 daedalus-tx CLI 的 propose 走 mustLoad(空日志即 not found),
-// 故事务通道必须显式 begin 先行。begin 无 MCP/exec.ts 通道,在本文件内
-// 直接 spawn `daedalus-tx begin`（argv 直传,无 shell 解释;二进制解析链
-// 与 exec.ts resolveTxBinary 逐项镜像:DAEDALUS_TX_BIN → 生产路径 →
-// 仓库 dev 产物）。
-// ─────────────────────────────────────────────────────────────────────────────
+// ★ begin 归属 ★ exec.ts 只交付 execTxPropose/Preview/Apply,均不自动 begin;
+// daedalus-tx CLI propose 走 mustLoad(空日志即 not found),故事务通道必须显式
+// begin 先行。本文件直接 spawn `daedalus-tx begin`(argv 直传;二进制解析链与
+// exec.ts resolveTxBinary 逐项镜像)。
 
 /** 事务提议三元组:classifyTxProposal 的入参形态（intent 为下划线 token）。 */
 interface TxIntent {
@@ -114,18 +101,16 @@ interface TxIntent {
   desiredState: string;
 }
 
-/** v1 事务适配器之一（todo 22）;与 daedalus-tx 侧 service.set 词汇逐字一致。 */
+/** v1 事务适配器之一;与 daedalus-tx 侧 service.set 词汇逐字一致。 */
 const TX_ADAPTER_SERVICE_SET = "service.set";
 
-/** v1 事务适配器之二（daedalus-pkg-kind todo 17）;与 daedalus-tx 侧 package.set 适配器名逐字一致。 */
+/** v1 事务适配器之二;与 daedalus-tx 侧 package.set 适配器名逐字一致。 */
 const TX_ADAPTER_PACKAGE_SET = "package.set";
 
 /**
- * 判定事务目标是否属于 package 域（daedalus-pkg-kind todo 17）。
- * classifyTxProposal 用 `/^package\s+\S+$/` 区分域（todo 16 落地），本函数
- * 用同款正则识别，命中即剥掉 "package " 前缀返回裸包名——后续 propose 的
- * args JSON `{name, desired_state}` 只收裸名，不收 "package <name>" 前缀形态。
- * 导出仅供 tests/deno/main.test.ts 钉分类器/路由双侧域判定一致性（review M-2）。
+ * 判定事务目标是否属于 package 域:与 classifyTxProposal 同款正则,命中剥
+ * "package " 前缀返回裸包名(后续 propose 的 args JSON `{name, desired_state}`
+ * 只收裸名)。导出仅供 tests 钉分类器/路由双侧域判定一致性。
  */
 export function packageTargetName(target: string): string | null {
   const m = /^package\s+(\S+)$/.exec(target.trim());
@@ -143,10 +128,10 @@ const TX_COMMAND_INTENTS: Record<string, TxIntent["intent"]> = {
 };
 
 /**
- * 判定提议是否为事务意图。命中保留动词 → 返回 {intent, target, desiredState};
- * 否则返回 null（走既有 shell 路径）。target/desiredState 原样透传给
- * classifyTxProposal——空 target 由其抛 "classifyTxProposal: target is empty"
- * （fail-closed,plan QA 字面量）,调用方不得先行吞错。
+ * 判定提议是否为事务意图。命中保留动词 → {intent, target, desiredState};
+ * 否则 null(走 shell 路径)。target/desiredState 原样透传给 classifyTxProposal
+ * ——空 target 由其抛 "classifyTxProposal: target is empty"(fail-closed),
+ * 调用方不得先行吞错。
  */
 export function detectTxIntent(proposal: CommandProposal): TxIntent | null {
   const intent = TX_COMMAND_INTENTS[proposal.command];
@@ -165,15 +150,13 @@ export type TxBeginOutcome =
   | { ok: true; txId: string }
   | { ok: false; error: string };
 
-// tx_id 形状门（todo 15 契约:crypto/rand 8 字节 hex）;形态不符即解析失败。
+// tx_id 形状门（crypto/rand 8 字节 hex）;形态不符即解析失败。
 const TX_ID_RE = /^[a-f0-9]{16}$/;
 
 /**
- * 解析 begin 用的 daedalus-tx 二进制路径。
- * 与 exec.ts resolveTxBinary 镜像同链:DAEDALUS_TX_BIN 环境变量 → 生产
- * /usr/local/bin/daedalus-tx → 仓库 dev 产物 daedalus-core/bin/daedalus-tx。
- * （exec.ts 的解析器未导出,begin 属本 todo 新增调用面,此处为刻意最小镜像,
- * 若后续 exec.ts 补 execTxBegin 则收敛回单一实现。）
+ * 解析 begin 用的 daedalus-tx 二进制路径:与 exec.ts resolveTxBinary 镜像同链
+ * (DAEDALUS_TX_BIN → 生产 /usr/local/bin/daedalus-tx → 仓库 dev 产物)。
+ * exec.ts 解析器未导出,此处为刻意最小镜像;若后续补 execTxBegin 则收敛回单一实现。
  */
 function resolveTxBeginBinary(): string {
   const envPath = typeof (globalThis as any).Deno?.env?.get === "function"
@@ -208,10 +191,9 @@ function resolveTxBeginBinary(): string {
 }
 
 /**
- * `daedalus-tx begin` —— 开事务日志并取回 tx_id（stdout 契约:恰一份
- * JSON 文档 {"tx_id":"<16hex>"}）。失败归一化为 {ok:false,error},永不 throw,
- * 由 runTxTurn 经 t("tx.error.run") 渲染给用户。导出仅用于单元测试注入
- * 真实假二进制（DAEDALUS_TX_BIN）验证 spawn/解析链。
+ * `daedalus-tx begin` —— 开事务日志并取回 tx_id(stdout 契约:恰一份 JSON
+ * 文档 {"tx_id":"<16hex>"});失败归一化为 {ok:false,error},永不 throw,由
+ * runTxTurn 经 t("tx.error.run") 渲染。导出用于单元测试注入假二进制验证。
  */
 export async function defaultTxBegin(): Promise<TxBeginOutcome> {
   const CommandConstructor = (globalThis as any).Deno?.Command;
@@ -252,7 +234,7 @@ export async function defaultTxBegin(): Promise<TxBeginOutcome> {
     return { ok: false, error: errText };
   }
 
-  // todo 15 stdout 契约:单行紧凑 JSON,单层转义,JSON.parse 一次即得终值
+  // stdout 契约:单行紧凑 JSON,单层转义,JSON.parse 一次即得终值
   const line = stdout.split("\n").map((l) => l.trim()).filter((l) => l.length > 0)[0];
   if (!line) {
     return { ok: false, error: "daedalus-tx begin stdout 为空(契约要求恰一份 JSON 文档)" };
@@ -268,28 +250,19 @@ export async function defaultTxBegin(): Promise<TxBeginOutcome> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// state 记忆读取(aios-object-model-alignment 计划 todo 28)
+// state 记忆读取:copilot 是 internal/state 追加式观测缓存 state.jsonl 的
+// 用户态读取方,翻译前把每资源最新观测注入 system prompt 追加段(KNOWN STATE)。
 //
-// copilot 是 internal/state(todo 19)追加式观测缓存 state.jsonl 的**用户态
-// 读取方**:LLM 翻译前把每个服务资源的"最新一次观测"注入 system prompt 追加段
-// (KNOWN STATE 块),让提议基于当前系统状态而非凭空生成。
-//
-// ★ 为什么直读缓存文件而不是经 daedalus-service MCP ★ v1 state 按上下文隔离
-// (决策 25 补充条款/todo 16 KNOWN LIMITATION):daemon 态 daedalus-service 跑在
-// DynamicUser 命名空间里,其写入的 /var/lib/daedalus 实际落宿主
-// /var/lib/private/daedalus,用户态进程读不到;且 service.query 是实时
-// systemctl 查询而非缓存读取,manifest 的 --allow-run 亦未放行该二进制。
-// 消费面因此与 internal/dirs.File 链逐字镜像:
-// DAEDALUS_STATE_PATH(存在即唯一候选,env 独占语义)→
+// ★ 为什么不走 daedalus-service MCP ★ v1 state 按上下文隔离(KNOWN
+// LIMITATION):daemon 态 service 跑在 DynamicUser 命名空间,其写入的
+// /var/lib/daedalus 实际落宿主 /var/lib/private/daedalus,用户态读不到;
+// service.query 是实时 systemctl 查询,manifest --allow-run 亦未放行。
+// 消费面与 internal/dirs.File 链逐字镜像:DAEDALUS_STATE_PATH(env 独占)→
 // /var/lib/daedalus/state.jsonl → $HOME/.local/share/daedalus/state.jsonl。
 //
-// ★ 错误分类(todo 28 规格)★ NotFound(文件/目录缺失)静默——新镜像与 demo
-// 的正常态;PermissionDenied 及其它真实 I/O 错记入 errors[],由 runQueryTurn
-// 经 t("state.summary.error", path) 打到 stderr 后继续(配置期 bug 必须
-// 开发者可见,不静默吞)。两者都**不写审计事件**:state 是派生缓存,不是证据,
-// 与哈希链审计边界分离。readStateSummary 永不 throw。
-// ─────────────────────────────────────────────────────────────────────────────
+// ★ 错误分类 ★ NotFound 静默(新镜像/demo 正常态);PermissionDenied 及其它
+// 真实 I/O 错记入 errors[] 由 runQueryTurn 打 stderr 后继续(配置期 bug 必须
+// 可见)。两者不写审计:state 是派生缓存不是证据。readStateSummary 永不 throw。
 
 /** 摘要中的一条 service 观测(internal/state StateEntry + objectmodel.ServiceState 的消费侧形状)。 */
 export interface StateSummaryEntry {
@@ -446,9 +419,6 @@ export async function readStateSummary(): Promise<StateSummary> {
   return { entries, text: formatStateSummary(entries), errors };
 }
 
-/**
- * 将 CLI 参数数组解析为结构化标志和位置查询。
- */
 export function parseArgs(argv: string[]): ParsedArgs {
   const result: ParsedArgs = {
     yes: false,
@@ -531,9 +501,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return result;
 }
 
-/**
- * 检查标准输入是否连接到交互式终端。
- */
 function checkIsTerminal(): boolean {
   if (typeof (globalThis as any).Deno?.stdin?.isTerminal === "function") {
     try {
@@ -548,9 +515,6 @@ function checkIsTerminal(): boolean {
 let globalStdinBuffer = "";
 const globalStdinDecoder = new TextDecoder();
 
-/**
- * 跨 Deno / Node 环境的标准输入流回退按行读取器。
- */
 async function defaultReadLineFromStdin(): Promise<string | null> {
   while (true) {
     const idx = globalStdinBuffer.indexOf("\n");
@@ -594,16 +558,12 @@ async function defaultReadLineFromStdin(): Promise<string | null> {
 }
 
 /**
- * 当通过管道输入时，从标准输入读取所有内容的回退方法。
- *
- * Deno 2 已移除 `Deno.readAll`，管道读取必须使用
- * `Deno.stdin.readable` 的异步迭代（for await）逐块累积。
- * 任何读取异常都返回空串，由调用方处理空查询场景。
- * 导出仅用于单元测试注入 stdin.readable 场景。
+ * 管道输入时从标准输入读取全部内容的回退方法。Deno 2 已移除
+ * `Deno.readAll`,必须用 `Deno.stdin.readable` 异步迭代逐块累积;
+ * 读取异常返回空串由调用方处理空查询。导出仅用于单元测试注入。
  */
 export async function defaultReadStdinAll(): Promise<string> {
   const deno = (globalThis as any).Deno;
-  // 优先走原生 Deno 路径：异步迭代 stdin.readable 读取全部字节
   if (deno?.stdin?.readable) {
     try {
       const decoder = new TextDecoder();
@@ -618,7 +578,6 @@ export async function defaultReadStdinAll(): Promise<string> {
       return "";
     }
   }
-  // 非 Deno 环境（如 Node）下的兜底：同步读取 fd 0
   try {
     const fs = require("fs");
     return fs.readFileSync(0, "utf-8").trim();
@@ -627,9 +586,6 @@ export async function defaultReadStdinAll(): Promise<string> {
   }
 }
 
-/**
- * 初始化默认输入输出处理器。
- */
 function createIO(options?: CopilotOptions): CopilotIO {
   const isTerminal = options?.isTerminal ?? checkIsTerminal();
   const encoder = new TextEncoder();
@@ -684,10 +640,7 @@ function createIO(options?: CopilotOptions): CopilotIO {
   };
 }
 
-/**
- * 返回格式化的 CLI 使用说明。
- * 全部文案经 t() 走 i18n，逐段拼接保证 locale 切换后仍是连贯文本。
- */
+/** CLI 使用说明;全部文案经 t() 走 i18n,拼接保证 locale 切换后连贯。 */
 export function getHelpMessage(): string {
   return [
     t("help.banner"),
@@ -730,12 +683,12 @@ interface TurnContext {
   execFn: typeof execAllowlisted;
   recordAuditFn: typeof recordAudit;
   readConfigFn: typeof readConfig;
-  // 事务通道依赖（todo 27）,见 CopilotOptions 同名注入点
+  // 事务通道依赖(见 CopilotOptions 同名注入点)
   txBeginFn: typeof defaultTxBegin;
   txProposeFn: typeof execTxPropose;
   txPreviewFn: typeof execTxPreview;
   txApplyFn: typeof execTxApply;
-  // state 记忆读取依赖(todo 28),见 CopilotOptions 同名注入点
+  // state 记忆读取依赖(见 CopilotOptions 同名注入点)
   readStateFn: typeof readStateSummary;
 }
 
@@ -756,18 +709,14 @@ interface RenderedLLMError {
 const ERROR_KIND_UNKNOWN = "unknown";
 
 /**
- * 消费 llm.ts 的结构化 LLM 错误(W1),渲染为本地化可操作文案。
- *
- * 上游形状(决策 7:Error + 附加属性,非子类):
- * `Object.assign(new Error(originalMsg), { kind, fields })`,
- * kind ∈ timeout|http|network|config,fields 携带 endpoint/timeoutMs/status/body/err。
- * 本函数用类型守卫读 kind/fields——无 kind(意外异常)一律走兜底:
- * t("error.translate", 原始 message) 原样透传 + error_kind="unknown"。
- * timeout 文案占位 {1} 为秒:Math.round(timeoutMs/1000)(1000ms → "1" 而非 "0.001")。
+ * 消费 llm.ts 的结构化 LLM 错误,渲染为本地化可操作文案。上游形状为
+ * Error + 附加属性(kind ∈ timeout|http|network|config,fields 携带
+ * endpoint/timeoutMs/status/body/err);本函数用类型守卫读取,无 kind
+ * (意外异常)走兜底:t("error.translate" 原样透传 + error_kind="unknown")。
+ * timeout 文案占位 {1} 为秒:Math.round(timeoutMs/1000)(1000ms → "1")。
  */
 function renderLLMError(err: unknown): RenderedLLMError {
   const originalMsg = err instanceof Error ? err.message : String(err);
-  // 类型守卫:kind 必须是字符串、fields 必须是对象才认定为结构化错误
   const e = err as { kind?: unknown; fields?: unknown } | null;
   const kind = typeof e?.kind === "string" ? e.kind : "";
   const fields = (e?.fields && typeof e.fields === "object"
@@ -799,7 +748,6 @@ function renderLLMError(err: unknown): RenderedLLMError {
       // 固定文案(提示设 key),无占位符
       return { msg: t("error.llm.config"), kind, fields };
     default:
-      // 无 kind / 未知 kind:意外异常兜底,原始 message 经 error.translate("{0}") 原样透传
       return {
         msg: t("error.translate", originalMsg),
         kind: ERROR_KIND_UNKNOWN,
@@ -809,9 +757,8 @@ function renderLLMError(err: unknown): RenderedLLMError {
 }
 
 /**
- * 从渲染结果构造 copilot_error 审计 args:核心三键恒定,
- * fields 明细条件展开(无值即无键)——保持 args 为可 JSON 序列化的普通对象,
- * 不在审计链里留 null/undefined 噪音。
+ * 构造 copilot_error 审计 args:核心三键恒定,fields 明细条件展开(无值即
+ * 无键)——保持 args 为可 JSON 序列化普通对象,不留 null/undefined 噪音。
  */
 function buildErrorAuditArgs(
   query: string,
@@ -832,16 +779,14 @@ function buildErrorAuditArgs(
 }
 
 /**
- * 事务通道轮次(todo 27):begin → propose(service.set 快照步骤,无副作用)
- * → preview(status 日志全文 + 计划前→计划后 diff 展示)→ y/n → apply(真实副作用)。
- * 仅 safe 分级(L0)的事务意图可达本函数;caution/danger 事务在 runQueryTurn
- * 的展示分流处提前拦截,永不进入(★ L1/L2 事务绝不 apply ★)。
- * begin/propose/apply 消费 T26 execTx* 的结构化返回(永不 throw),失败经
- * t("tx.error.run") 渲染为可操作文案并落 copilot_error 审计,绝不吐栈。
- * "n" 放弃提议:日志留在 proposed 态(无副作用,无需回滚),审计
- * copilot_tx_reject 携带 reason "user denied tx"(audit token,plan 字面量)。
- * v1 事务不进 [e]dit / [n] 修订循环——修订通道属 shell 提议,事务的反馈
- * 路径是重新发起一次查询。
+ * 事务通道轮次:begin → propose(快照无副作用)→ preview(计划前→计划后 diff)
+ * → y/n → apply(真实副作用)。仅 safe 分级(L0)事务意图可达本函数;
+ * caution/danger 事务在 runQueryTurn 展示分流处提前拦截(★ L1/L2 事务绝不
+ * apply ★)。begin/propose/apply 消费 exec.ts execTx* 结构化返回(永不
+ * throw),失败经 t("tx.error.run") 渲染并落 copilot_error 审计,绝不吐栈。
+ * "n" 放弃:日志留 proposed 态(无副作用无需回滚),审计 copilot_tx_reject 携带
+ * reason "user denied tx"(audit token 字面量)。v1 事务不进 [e]dit/[n] 修订
+ * 循环——修订通道属 shell 提议,事务反馈路径是重新发起一次查询。
  */
 async function runTxTurn(
   ctx: TurnContext,
@@ -862,8 +807,6 @@ async function runTxTurn(
   // 与 shell 通道同门:-y / 非 TTY 视为已授权(auto),TTY 默认 y/n
   const requireConfirmation = isTerminal && !yes;
 
-  // 步骤 1:显式 begin。execTxPropose 不自动 begin(todo 15:CLI propose 走
-  // mustLoad,空日志即 tx_not_found),事务通道必须先行开账。
   const begun = await txBeginFn();
   if (!begun.ok) {
     await io.writeStderr(t("tx.error.run", "begin", begun.error) + "\n");
@@ -876,10 +819,8 @@ async function runTxTurn(
   }
   const txId = begun.txId;
 
-  // 步骤 2:propose —— 按域路由适配器（daedalus-pkg-kind todo 17）:
-  // target 形如 "package <name>" 走 package.set 适配器（args 只收裸包名）,
-  // 其余维持 service.set 既有路由（args 收裸单元名,零变化）。
-  // 两类 propose 均仅快照 Before/AfterState,无副作用。
+  // propose 按域路由:target 形如 "package <name>" 走 package.set(args 只收
+  // 裸包名),其余 service.set;两类均仅快照 Before/AfterState,无副作用。
   const pkgName = packageTargetName(txIntent.target);
   const txAdapter = pkgName !== null ? TX_ADAPTER_PACKAGE_SET : TX_ADAPTER_SERVICE_SET;
   const txTargetName = pkgName ?? txIntent.target;
@@ -960,7 +901,6 @@ async function runTxTurn(
     }
   }
 
-  // 步骤 5:apply —— 依序执行全部步骤(真实副作用)。
   const applied: TxApplyOutcome = await txApplyFn(txId);
   if (!applied.ok) {
     await io.writeStderr(t("tx.error.run", "apply", applied.error) + "\n");
@@ -987,9 +927,7 @@ async function runTxTurn(
   return 0;
 }
 
-/**
- * 执行单次查询轮次：转换 -> 解析并验证 -> 可选 verbose/dryRun -> 可选 interactive 确认 -> 执行。
- */
+/** 单次查询轮次:转换 → 解析验证 → verbose/dryRun → interactive 确认 → 执行。 */
 async function runQueryTurn(ctx: TurnContext): Promise<number> {
   const {
     query,
@@ -1008,18 +946,12 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     readStateFn,
   } = ctx;
 
-  // 步骤 0(todo 28):翻译前先查 state 记忆缓存。readStateSummary 永不 throw,
-  // 错误分类呈现:PermissionDenied 等真实 I/O 错逐路径打 stderr(t() 渲染,
-  // 开发者可见)后继续;NotFound 静默(v1 新镜像/demo 正常态)。两者都不写
-  // 审计——state 是派生缓存不是证据。entries 为空时 stateBlock 恒空串,
-  // 绝不把兜底文案注入 prompt(空态不污染)。
   const stateSummary = await readStateFn();
   for (const deniedPath of stateSummary.errors) {
     await io.writeStderr(t("state.summary.error", deniedPath) + "\n");
   }
   const stateBlock = stateSummary.entries.length > 0 ? stateSummary.text : "";
 
-  // 解析配置以获取提供商标识和设置
   let config: Config;
   try {
     config = readConfigFn(configOverrides);
@@ -1030,9 +962,8 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 1;
   }
 
-  // 步骤 1：将查询转换为 LLM 提议。stateBlock 作为 system prompt 追加段
-  // (KNOWN STATE 块)传入,让 LLM 基于"当前服务状态"生成提议;空块传
-  // undefined,提示词与 todo 28 之前逐字节一致。
+  // 步骤 1:翻译。stateBlock 作 system prompt 追加段(KNOWN STATE),空块传
+  // undefined,提示词与注入前逐字节一致。
   let rawLlmOutput: string;
   try {
     rawLlmOutput = await translateFn(query, configOverrides, stateBlock || undefined);
@@ -1049,7 +980,6 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 1;
   }
 
-  // 步骤 2：解析并预验证提议
   let proposal: CommandProposal;
   try {
     proposal = parseProposal(rawLlmOutput);
@@ -1064,26 +994,20 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 1;
   }
 
-  // 步骤 2.3:事务意图探测(todo 27)。命中保留动词(tx.propose/tx.apply/
-  // tx.rollback)→ 分类改走 classifyTxProposal(todo 24),shell 分类器与
-  // L0_WHITELIST 绝不参与事务定级(竞态条款:两通道互不抢占)。
+  // 步骤 2.3:事务意图探测,命中保留动词改走 classifyTxProposal(shell 分类器不参与,竞态条款)
   const txIntent = detectTxIntent(proposal);
 
-  // 步骤 2.4：本地静态风险分级（决策 2：LLM 不参与风险自标注）。
-  // shell 路径:L0 = safe 且命中 15 命令白名单 → 唯一可能进入沙箱执行的分级;
-  // safe-outside / caution / danger 一律走展示路径,永不执行。
-  // tx 路径:分级来自 classifyTxProposal(intent × desired_state 静态表);
-  // tx_propose / tx_apply(started|stopped)= safe → 事务通道;
-  // 其余(tx_apply caution/danger、tx_rollback caution)→ 展示路径,绝不 apply。
+  // 步骤 2.4:本地静态风险分级(LLM 不参与风险自标注)。shell:L0 = safe 且
+  // 白名单内 → 唯一可能沙箱执行的分级,其余一律展示;tx:静态表定级,
+  // tx_propose/tx_apply(started|stopped)= safe → 事务通道,其余绝不 apply。
   let risk: RiskAssessment;
   try {
     risk = txIntent
       ? classifyTxProposal(txIntent.intent, txIntent.target, txIntent.desiredState)
       : classifyProposal(proposal);
   } catch (err: unknown) {
-    // classifyProposal / classifyTxProposal 的入参防御分支:
-    // 空 target("classifyTxProposal: target is empty")与未知 intent 在此
-    // fail-closed 拒绝——事务连 begin 都不发起,零 CLI spawn、零副作用。
+    // 入参防御:空 target 与未知 intent 在此 fail-closed 拒绝——事务连
+    // begin 都不发起,零 CLI spawn、零副作用。
     const msg = err instanceof Error ? err.message : String(err);
     await io.writeStderr(t("error.policy_reject", msg) + "\n");
     await recordAuditFn(
@@ -1094,7 +1018,7 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 126;
   }
 
-  // T24 归一契约:shell 路径不携带 tx_kind,缺省即 "shell"(勿写字面比较)。
+  // 归一契约:shell 路径不携带 tx_kind,缺省即 "shell"(勿写字面比较)。
   const txKind = risk.tx_kind ?? "shell";
   // 事务执行通道准入:必须显式 tx_kind 且定级 safe;caution/danger 事务走展示。
   const isTxChannel = txKind !== "shell" && risk.level === "safe";
@@ -1103,23 +1027,19 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     ? `${proposal.command} ${proposal.args.join(" ")}`
     : proposal.command;
 
-  // 展示路径:caution / danger / safe(白名单外)/ caution-danger 事务。
-  // 架构上不可执行:daedalus-shell 拒白名单外命令,这里也不给 y 选项——模式分离的物理保障。
-  // 事务提议只按 classifyTxProposal 定级分流:safe 事务绕开本块进事务通道,
-  // caution/danger 事务(tx_apply 重启/启停使能、tx_rollback)在此仅展示,
-  // 永不进执行通道(L1/L2 绝不 apply)。
-  // (danger 的 reasonKey 必非空;safe-outside / caution 亦带 i18n reasonKey)
+  // 展示路径:caution / danger / safe(白名单外)/ caution-danger 事务。架构上
+  // 不可执行——daedalus-shell 拒白名单外命令,这里也不给 y 选项(模式分离的
+  // 物理保障)。safe 事务绕开本块进事务通道,其余事务仅展示(★ L1/L2 绝不
+  // apply ★)。(danger 的 reasonKey 必非空;safe-outside / caution 亦带 i18n key)
   if (!isTxChannel && (risk.level !== "safe" || !L0_WHITELIST.has(proposal.command))) {
     if (risk.level === "safe") {
-      // 白名单外 safe:✓ 标签 + 手动执行提示(pivot 核心场景,如 git --version)
+      // 白名单外 safe:✓ 标签 + 手动执行提示(如 git --version)
       await io.writeStdout(t("risk.banner.safe") + "\n");
     } else if (risk.level === "caution") {
-      // caution:⚠ 标签,改系统状态但通常可回滚
       await io.writeStdout(t("risk.banner.caution") + "\n");
     } else {
-      // danger:🚨 标签 + 独立原因行。原因行仅在 reasonKey 非空且非
-      // outside_sandbox / caution_command 时渲染(pattern key 才有具体后果文案;
-      // caution_command 的解释已在 banner 里,分类器也不会对 danger 产出这两个 key,防御性保留)。
+      // danger:🚨 标签 + 原因行仅在 pattern key(reasonKey 非空且非
+      // outside_sandbox/caution_command)时渲染,防御性保留。
       await io.writeStdout(t("risk.banner.danger") + "\n");
       if (
         risk.reasonKey &&
@@ -1135,7 +1055,7 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     }
     await io.writeStdout(t("risk.manual_hint") + "\n");
     // 展示路径落 copilot_reject/denied:证据边界完整——哪怕仅展示也记录
-    // (F3 验收:dry-run 下同样落此条目);reason 字段存原始 i18n key。
+    // (dry-run 下同样落此条目);reason 字段存原始 i18n key。
     // 事务提议附加 tx 判别三元组(intent/target/desired_state),链上可检索。
     await recordAuditFn(
       "copilot_reject",
@@ -1157,11 +1077,9 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 0;
   }
 
-  // 步骤 2.5：verbose 模式先打印翻译结果(在任何可能触发 I/O 的动作之前)。
-  // recordAudit 内部会走 audit.ts:resolveAuditPath,主系统目录不可写时
-  // 会 fallback 到 $HOME/.local/share/daedalus 并 Deno.mkdirSync;若
-  // 路径不在 allow list 会弹 deno 权限窗。把 verbose 挪到这里,用户在
-  // 看到翻译结果后才决定要不要 Ctrl-C 取消,无须先对权限盲授权。
+  // 步骤 2.5:verbose 先打印翻译结果(在任何可能触发 I/O 的动作之前)。
+  // recordAudit 可能 resolveAuditPath 后 fallback $HOME 并弹 deno 权限窗——
+  // 用户先看翻译结果再决定 Ctrl-C,无须对权限盲授权。
   // dryRun 路径有自己的 [dry-run] 预览,这里跳过避免双打印。
   if (verbose && !dryRun) {
     await io.writeStdout(t("verbose.preview", proposedStr) + "\n");
@@ -1170,9 +1088,8 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     }
   }
 
-  // 步骤 2.7：审计翻译事件。挪到 verbose 之后,确保用户在看到任何
-  // 可能弹窗之前先看到翻译结果。risk_level 字段为 QQ pivot 新增
-  // (决策 11);审计哈希链对 args 序列化整体摘要,新增 key 天然兼容。
+  // 步骤 2.7:审计翻译事件。挪到 verbose 之后,确保用户在看到任何可能弹窗
+  // 之前先看到翻译结果。审计哈希链对 args 序列化整体摘要,新增 key 天然兼容。
   await recordAuditFn(
     "copilot_translate",
     {
@@ -1184,7 +1101,6 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     "success",
   );
 
-  // 步骤 3：dry-run 模式 - 仅显示命令，不执行
   if (dryRun) {
     await io.writeStdout(t("dryrun.would_execute", proposedStr) + "\n");
     if (verbose && proposal.explanation) {
@@ -1205,18 +1121,14 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return 0;
   }
 
-  // 步骤 4：决定是否需要交互确认
-  // TTY 模式(REPL / one-shot in 终端):默认 y/n 确认,除非 -y 跳过。
-  // 非 TTY 模式(管道/脚本):无 stdin 可读;仅沙箱白名单内只读诊断运行,其余只展示,与 -i 无关。
-  // -i 仍接受为冗余 alias(语义等价于"不传 -y",即"我要 y/n");-y 是
-  // 唯一跳过 y/n 的方式,给 CI / 管道用。-i + 非 TTY 已在 runCopilot
-  // 入口处报错拦截,不会到达这里。
+  // 步骤 4:确认策略。TTY 默认 y/n,-y 跳过;非 TTY(管道/脚本)无 stdin 可读,
+  // 仅沙箱白名单只读诊断运行,其余展示,与 -i 无关。-i 是冗余 alias(= 不传
+  // -y),-y 是唯一跳过 y/n 的方式(给 CI/管道);-i + 非 TTY 已在 runCopilot
+  // 入口报错拦截,不会到达这里。
   const requireConfirmation = isTerminal && !yes;
 
-  // 步骤 4.5:事务通道分流(todo 27)。safe 事务(tx_propose /
-  // tx_apply started|stopped)改走 execTxPropose/Preview/Apply
-  // (begin→propose→preview→y/n→apply),不再经 execAllowlisted;
-  // caution/danger 事务已在上方展示分流处返回,apply 函数对它们不可达。
+  // 步骤 4.5:safe 事务(tx_propose / tx_apply started|stopped)分流到事务通道
+  // (begin→propose→preview→y/n→apply);caution/danger 已在展示分流处返回。
   if (isTxChannel && txIntent) {
     return await runTxTurn(ctx, proposal, txIntent);
   }
@@ -1228,9 +1140,8 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
       {
         command: proposal.command,
         args: proposal.args,
-        // 非 requireConfirmation 路径(TTY -y 跳过,或非 TTY 无 stdin)
-        // 都属"系统自动跑,用户未在 y/n 循环中确认";requireConfirmation
-        // 为 true 走 y/n 循环,"y" 路径在那里写 auto: false。
+        // 非 requireConfirmation 路径都是系统自动跑、用户未在 y/n 中确认;
+        // requireConfirmation 的 "y" 路径在 y/n 循环里写 auto: false。
         auto: !requireConfirmation,
         // 能走到这里必为 L0(safe + 白名单内);risk_level 供审计链检索
         risk_level: "safe",
@@ -1247,10 +1158,8 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     return execResult.returncode;
   }
 
-  // 走到这里说明 requireConfirmation === true（隐含 isTerminal === true）
-  // 设置多轮修订状态。system 消息与步骤 1 的 translate 保持同构:
-  // 基础提示词 + (非空时)KNOWN STATE 追加段,修订轮 LLM 看到的上下文
-  // 与首轮翻译一致(todo 28 注入对称性)。
+  // 设置多轮修订状态:基础提示词 + (非空时)KNOWN STATE 追加段,修订轮 LLM
+  // 上下文与首轮 translate 一致(注入对称性)。
   const history: Array<{
     role: "system" | "user" | "assistant";
     content: string;
@@ -1266,7 +1175,6 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
   ];
   let revisionRound = 0;
 
-  // 步骤 4 与 5：交互式确认与反馈循环
   while (true) {
     const proposedStr =
       proposal.args.length > 0
@@ -1290,7 +1198,6 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
 
     const choice = choiceRaw.trim().toLowerCase();
 
-    // 选项：[y]es -> 确认并执行
     if (choice === "y" || choice === "yes") {
       await recordAuditFn(
         "copilot_confirm",
@@ -1298,8 +1205,7 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
           command: proposal.command,
           args: proposal.args,
           auto: false,
-          // L0 沙箱执行前的用户显式确认;risk_level 恒为 safe
-          // (非 L0 提议早在本轮之前就被展示路径拦截,不会进入 y/n 循环)
+          // L0 沙箱执行前的用户显式确认;risk_level 恒为 safe(非 L0 已被展示路径拦截)
           risk_level: "safe",
         },
         "success",
@@ -1315,7 +1221,6 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
       return execResult.returncode;
     }
 
-    // 选项：[e]dit -> 用户直接编辑并进行本地重新验证（不调用 LLM）
     if (choice === "e" || choice === "edit") {
       const editLine = await io.readLine(t("confirm.edit_prompt"));
       if (editLine === null) {
@@ -1365,7 +1270,6 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
       continue;
     }
 
-    // 选项：[n]o -> 反馈轮次（最多 3 次修订）
     if (choice === "n" || choice === "no") {
       revisionRound++;
       if (revisionRound > 3) {
@@ -1444,7 +1348,6 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
       continue;
     }
 
-    // 选项：[q]uit -> 取消并以状态码 0 退出
     if (choice === "q" || choice === "quit") {
       await recordAuditFn("copilot_cancel", { query, proposal }, "denied");
       return 0;
@@ -1454,9 +1357,6 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
   }
 }
 
-/**
- * 主 Copilot 运行器入口点。
- */
 export async function runCopilot(options?: CopilotOptions): Promise<number> {
   // i18n 初始化必须最先执行：之后所有 t() 调用才拿到本地化文案。
   // 注意不要在初始化前调用 t()，也不要把 parseArgs 提到它前面。
@@ -1471,7 +1371,6 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
 
   const parsed = parseArgs(rawArgs);
 
-  // 合并直接传入的选项覆盖
   const yes = options?.yes ?? parsed.yes;
   const verbose = options?.verbose ?? parsed.verbose;
   const interactive = options?.interactive ?? parsed.interactive;
@@ -1493,13 +1392,10 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
   const execFn = options?.execFn ?? execAllowlisted;
   const recordAuditFn = options?.recordAuditFn ?? recordAudit;
   const readConfigFn = options?.readConfigFn ?? readConfig;
-  // 事务通道依赖(todo 27):propose/preview/apply 直承 T26 execTx* 实现;
-  // begin 由本文件 defaultTxBegin spawn `daedalus-tx begin`(exec.ts 无 begin)。
   const txBeginFn = options?.txBeginFn ?? defaultTxBegin;
   const txProposeFn = options?.txProposeFn ?? execTxPropose;
   const txPreviewFn = options?.txPreviewFn ?? execTxPreview;
   const txApplyFn = options?.txApplyFn ?? execTxApply;
-  // state 记忆读取(todo 28):默认直读 state.jsonl 缓存,测试注入假摘要。
   const readStateFn = options?.readStateFn ?? readStateSummary;
 
   if (help) {
@@ -1514,7 +1410,6 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
 
   let query = (options?.query ?? parsed.query).trim();
 
-  // 非 TTY（管道/脚本）模式:仅白名单只读诊断运行,其余展示
   if (!io.isTerminal) {
     // 唯一被拒绝的组合：显式要求交互确认但 stdin 不是终端
     if (interactive) {
@@ -1552,7 +1447,6 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
     });
   }
 
-  // 单次查询模式（CLI 提供了查询参数，终端环境）
   if (query) {
     return await runQueryTurn({
       query,
@@ -1576,7 +1470,6 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
     });
   }
 
-  // 交互式 REPL 模式（CLI 未提供查询参数且标准输入为终端）
   while (true) {
     const line = await io.readLine(t("repl.prompt"));
     if (line === null) {
@@ -1592,8 +1485,7 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
       continue;
     }
 
-    // 运行独立的查询轮次，并使用全新的修订计数器
-    // CLI 级别的 verbose/interactive/dryRun 标志对每条 REPL 查询生效
+    // CLI 级别的 verbose/interactive/dryRun 标志对每条 REPL 查询生效。
     await runQueryTurn({
       query: trimmed,
       yes: false,
@@ -1617,7 +1509,6 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
   }
 }
 
-// 入口点执行
 if (import.meta.main) {
   const code = await runCopilot();
   if (typeof (globalThis as any).Deno?.exit === "function") {

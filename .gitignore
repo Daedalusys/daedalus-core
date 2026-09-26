@@ -1,4 +1,4 @@
-# daedalus/core 模块级忽略项(plan todo 15:blueprint 嵌入数据)。
+# daedalus/core 模块级忽略项(blueprint 嵌入数据)。
 #
 # cmd/daedalus-blueprint/blueprints/ 是构建期复制产物(just blueprint-embed 用
 # rsync 从 daedalus/plugin/blueprint/blueprints/ 复制而来),供 //go:embed
@@ -10,6 +10,9 @@ daedalus-blueprint
 # go.work 本地 dev 桥(3 仓平级 clone 后生成;不入库;模板 go.work.example 入库)
 go.work
 go.work.sum
+
+# 构建产物(just go-build / just plugin-pack 落位的二进制与插件 zip,不入库)
+bin/
 
 # OhMyOpenCode 编排状态(不入库)
 .omo/

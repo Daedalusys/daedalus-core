@@ -2,11 +2,11 @@
 
 set -xeuo pipefail
 
-# 对象模型能力服务器收尾步骤（aios 计划 todo 11，镜像 70-daedalus-mcp-servers.sh 的结构）。
+# 对象模型能力服务器收尾步骤（镜像 70-daedalus-mcp-servers.sh 的结构）。
 #
 # 职责边界（与 70 完全同型，勿在此发明新机制）：
 #   - 安装/打包落位的唯一实现是 `just plugin-pack`（能力循环把
-#     daedalus-service 打进 plugins/daedalus.service/bin/，并按 task-21 形态
+#     daedalus-service 打进 plugins/daedalus.service/bin/，并同步一份
 #     同步一份到 /usr/local/bin/；本脚本不做任何 cp/install——70 对
 #     host/audit/shell 与 4 能力同样只 chmod+提示，复制职责从不在编号脚本里）；
 #   - 本脚本只做两件事：① 修正新落位的权限位（0755），② 非致命的存在性提示。

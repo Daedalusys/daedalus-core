@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fetch-plugins.sh: 跨仓 release 流水线(plan todo 15)的插件拉取腿。
+# fetch-plugins.sh: 跨仓 release 流水线的插件拉取腿。
 #
 # 从 daedalus-plugins 仓的 GitHub release 拉 6 个能力插件 zip
 # (daedalus.{fs,shell,pkg,sysinfo,service,blueprint}.plugin.zip),经

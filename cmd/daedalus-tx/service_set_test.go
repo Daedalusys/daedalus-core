@@ -1,6 +1,6 @@
 package main
 
-// service_set_test.go —— service.set 适配器正向行为测试(todo 22)。
+// service_set_test.go —— service.set 适配器正向行为测试。
 //
 // systemctl 一律经包级注入缝 systemctlUserBinary 指向 t.TempDir() 下的 shell
 // 夹具(镜像 cmd/daedalus-service 的 fakeSystemctl 模式): 每次调用把 "$*" 追加
@@ -91,8 +91,6 @@ func stepFor(t *testing.T, ctx context.Context, args string) tx.Step {
 	return tx.Step{Adapter: "service.set", Args: json.RawMessage(args), BeforeState: raw}
 }
 
-// ───────────────────────── Propose: 快照 + argv ─────────────────────────
-
 func TestServiceSet_Propose_SnapshotAndArgv(t *testing.T) {
 	dir := t.TempDir()
 	content := "[Unit]\nDescription=demo\n[Service]\nType=oneshot\nExecStart=/bin/true\n"
@@ -115,7 +113,7 @@ func TestServiceSet_Propose_SnapshotAndArgv(t *testing.T) {
 	if after.Unit != "demo.service" || after.DesiredState != "started" || after.Verb != "start" {
 		t.Errorf("after_state 不符: %+v", after)
 	}
-	// argv 逐字钉死: 仅一次 show, 形态 = systemctl --user show <unit>.service --property=ActiveState。
+	// argv 逐字锁定: 仅一次 show, 形态 = systemctl --user show <unit>.service --property=ActiveState。
 	got := captureCalls(t, capture)
 	want := []string{"--user show demo.service --property=ActiveState"}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -158,8 +156,6 @@ func TestServiceSet_Propose_EmptyFileIsNotAbsent(t *testing.T) {
 	}
 }
 
-// ───────────────────────── Apply: 动词映射(d 条款)─────────────────────────
-
 func TestServiceSet_Apply_VerbMap(t *testing.T) {
 	cases := []struct{ desired, verb string }{
 		{"started", "start"},
@@ -191,7 +187,7 @@ func TestServiceSet_Apply_VerbMap(t *testing.T) {
 
 func TestServiceSet_Apply_UnknownDesiredFails(t *testing.T) {
 	// propose 接受任意 desired_state(除 reload), 未知动词在 apply 拒绝
-	// (plan todo 22 failure QA: apply exit 1 + 拒绝原因落 OpResult)。
+	// (apply exit 1 + 拒绝原因落 OpResult)。
 	dir := t.TempDir()
 	capture := fakeSystemctlUser(t, "ActiveState=inactive", 0)
 	ctx := unitDirCtx(dir)

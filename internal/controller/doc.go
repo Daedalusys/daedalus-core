@@ -14,15 +14,17 @@
 // 模型里的能力声明,二者互不引用。"transaction" 同理:KindTransaction
 // 是资源种类枚举位,tx.Status 是事务生命周期状态,分属两轴。
 //
-// 惰性成立的决策记录(本包现在就能落地的理由):宿主 daedalus-host 不新增
+// 本包现在就能落地的理由:宿主 daedalus-host 不新增
 // 任何 Type 分支——type=controller 的可接受性完全复用宿主既有的
 // type-agnostic 设计:start.go:99 的 buildStartTokens 只按 manifest 的
-// Runtime 分派(deno/native),Type 字段从不参与 argv 构造;且按决策 16,
+// Runtime 分派(deno/native),Type 字段从不参与 argv 构造;且宿主零 spawn,
 // 宿主零 spawn,绝不成为任何 MCP 服务器的父进程。因此预留 controller
 // 类型不需要改动宿主一行代码。
 //
 // 文件布局:
-//   - types.go:契约类型与动词常量(v2 消费者的线上契约,改动即破坏);
+//   - types.go:契约类型与动词常量(v2 消费者的线上契约,改动即破坏);其中
+//     Object/Metadata/Status/Condition 是 SDK objectmodel 信封的别名——信封
+//     形状不能留在 internal/(插件仓 import 不到),两处并存即第二事实源;
 //   - 对应 VISION.md 的 controller runtime 章节(v2 蓝图,本包是其 v1.5
 //     类型锚点)。
 package controller

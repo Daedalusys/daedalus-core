@@ -1,11 +1,11 @@
 package main
 
-// adapter.go —— 事务适配器注册表(todo 15 落框架, todo 22 注册首个生产适配器)。
+// adapter.go —— 事务适配器注册表。
 //
 // 适配器是"怎么改/怎么逆"的领域实现; tx 层(internal/tx)只负责状态机与日志,
-// 不理解任何适配器语义(见 internal/tx 包注释)。service.set 适配器在 todo 22
-// 落地并在本文件的 init 里 RegisterAdapter —— 生产注册表现含 service.set;
-// 测试用的 noop/失败适配器只在 _test.go 里 RegisterAdapter, 绝不进生产二进制。
+// 不理解任何适配器语义(见 internal/tx 包注释)。生产注册表现含 service.set 与
+// package.set; 测试用的 noop/failapply/nobefore 只在 _test.go 里 RegisterAdapter,
+// 绝不进生产二进制。
 
 import (
 	"context"
@@ -27,18 +27,17 @@ type Adapter interface {
 	Rollback(ctx context.Context, step tx.Step) tx.OpResult
 }
 
-// registry 是适配器名 → 实现的映射。生产态由 init 注册 service.set(todo 22);
-// 测试用的 noop/failapply/nobefore 只在 _test.go 里 RegisterAdapter, 不进生产语义。
+// registry 是适配器名 → 实现的映射。
 var registry = map[string]Adapter{}
 
 func init() {
-	// service.set —— 用户域 systemd 单元生命周期适配器(todo 22, 见 service_set.go)。
+	// service.set —— 用户域 systemd 单元生命周期适配器(见 service_set.go)。
 	RegisterAdapter("service.set", serviceSetAdapter{})
-	// package.set —— 包生命周期适配器,Propose/Apply/Rollback 三段已由 plan daedalus-pkg-kind todo 8/9/10 落地(见 package_set.go),本行完成注册(todo 11)。
+	// package.set —— 包生命周期适配器(见 package_set.go)。
 	RegisterAdapter("package.set", packageSetAdapter{})
 }
 
-// RegisterAdapter 注册一个适配器(重复注册覆盖)。仅供 todo 22 与测试调用。
+// RegisterAdapter 注册一个适配器(重复注册覆盖)。
 func RegisterAdapter(name string, a Adapter) { registry[name] = a }
 
 // lookupAdapter 按名取适配器; ok=false 表示未注册(propose 据此 exit 1)。

@@ -1,6 +1,6 @@
 package main
 
-// service_set_rollback_test.go —— service.set 回滚面测试(todo 22 (e)(f) 条款):
+// service_set_rollback_test.go —— service.set 回滚面测试:
 // 恢复性动词推导、漂移恢复 + daemon-reload-before-verb 顺序、无漂移零写入、
 // restoreUnitFile 恢复内核直测。夹具机制见 service_set_test.go 头注释。
 
@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 )
-
-// ───────────────────────── Rollback: 逆动词 + 文件恢复(e/f 条款)─────────────────────────
 
 // TestServiceSet_Rollback_InverseVerbFromPriorState 钉"恢复到事务前的 ActiveState":
 // before=active → start; before=inactive → stop; 其余状态 → 不发动词(尽力恢复, 记录说明)。

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# i18n 键集交叉校验(plan aios-object-model-alignment todo 30 验收项):
+# i18n 键集交叉校验:
 #   (i)  en_US 与 zh_CN 键集必须完全一致(jq keys 排序 diff 为空);
 #   (ii) main.ts / policy.ts 里每一个 t("<key>") 字面量,双 locale 文件都必须存在该键。
 # 说明:just i18n-sync 只校验 manifest 声明 ↔ locale 实物与 Go 侧 t() 键,

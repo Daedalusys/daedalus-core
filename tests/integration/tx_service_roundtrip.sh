@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # =============================================================================
-# tx_service_roundtrip.sh —— daedalus-tx 端到端集成测试(AIOS 对象模型计划 todo 23)
+# tx_service_roundtrip.sh —— daedalus-tx 端到端集成测试
 #
-# 全链路只走 CLI 表面(计划钉死):
+# 全链路只走 CLI 表面:
 #   daedalus-tx begin
 #     → propose <id> service.set '{"name":"daedalus-itest","desired_state":"started"}' --unit-dir ~/.config/systemd/user
 #     → apply <id> → status <id> → rollback <id> → status <id>
 #
-# 断言(计划 todo 23 (a)-(d), 逐条命名):
+# 断言(逐条命名):
 #   (a) apply 后 status 报 applied 且步骤 OpResult.returncode == 0
 #   (b) rollback 后 status 报 rolled_back
 #   (c) daedalus-audit verify 对测试专属日志退出码 0(双链完好)
-#   (d) 测试日志里恰有 3 条同 tx_id 条目(begin/apply/rollback, 盖章规则见 todo 15;
+#   (d) 测试日志里恰有 3 条同 tx_id 条目(begin/apply/rollback, 按盖章规则;
 #       propose/status 为空 TxID 外围条目)且事务子链逐条串接
 #   外加 ActiveState 实感断言: apply 前 inactive → apply 后 active → rollback 后 inactive
 #   (夹具带 RemainAfterExit=yes, 否则 oneshot 跑完即回落 inactive, active 无从断言)。
@@ -54,7 +54,7 @@ ok()   { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # ──── 强制 teardown(EXIT trap; 失败路径同样经过) ────
-# 计划钉死: stop(容错) → 删夹具 → daemon-reload → 清临时目录;
+# 固定顺序: stop(容错) → 删夹具 → daemon-reload → 清临时目录;
 # 快乐路径(rc=0)下 teardown 自身失败必须把退出码翻成非零("脚本仅在 teardown
 # 成功后才退 0"); 原本已非零则保留原始失败码不被覆盖。
 teardown() {
@@ -130,7 +130,7 @@ run_roundtrip() {
     [[ "$TXID" =~ ^[a-f0-9]{16}$ ]] || fail "begin 未产出合法 tx_id: $out"
     ok "begin → tx_id=$TXID"
 
-    # propose(参数逐字取计划钉死的两键 JSON; --unit-dir = 集成测试逃生舱)
+    # propose(参数逐字取约定的两键 JSON; --unit-dir = 集成测试逃生舱)
     out=$("$TX_BIN" propose "$TXID" service.set \
         '{"name":"daedalus-itest","desired_state":"started"}' \
         --unit-dir "$USER_UNIT_DIR"); rc=$?
@@ -201,7 +201,7 @@ assert_chain_happy() {
 }
 
 # ──── 失败夹具模式: 篡改一条 in-tx 条目的 args 值 → verify 必须拒 ────
-# 篡改落点对计划钉死: 只动 args 值(适配器名末位加一个字符), 顶层 tx_id/
+# 篡改落点约定: 只动 args 值(适配器名末位加一个字符), 顶层 tx_id/
 # entry_hash/prev_hash 一概原样 —— 重算哈希必与记录哈希失配, verify 给出
 # 具名断链诊断(全局链"哈希不符"/"链断裂"文案族)。篡改在**日志副本**上做,
 # 原始临时日志保持自洽, 清理仍归 trap。

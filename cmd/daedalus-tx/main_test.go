@@ -116,8 +116,6 @@ func parseStatus(t *testing.T, out string) statusDoc {
 	return d
 }
 
-// ───────────────────────── 盖章规则 + 双链端到端 ─────────────────────────
-
 func TestTx_Roundtrip_StampingRuleAndChain(t *testing.T) {
 	logPath, rc := harness(t)
 	id := doBegin(t, rc)
@@ -190,8 +188,6 @@ func TestTx_Roundtrip_StampingRuleAndChain(t *testing.T) {
 	mustVerify(t, logPath)
 }
 
-// ───────────────────────── 事务链创世播种端到端 ─────────────────────────
-
 func TestTx_BeginSeedsGenesisFromAudit(t *testing.T) {
 	logPath, rc := harness(t)
 	// 前置一条真实非 tx 记录(模拟 shell 调用), 事务 begin 应越过它挂创世。
@@ -224,8 +220,6 @@ func auditLineField(t *testing.T, line, key string) string {
 	s, _ := m[key].(string)
 	return s
 }
-
-// ───────────────────────── 失败步 → MarkFailed + 部分回滚 ─────────────────────────
 
 func TestTx_FailedApplyMarksFailedAndPartialRollback(t *testing.T) {
 	logPath, rc := harness(t)
