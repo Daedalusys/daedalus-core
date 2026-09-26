@@ -79,7 +79,7 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 |--------------------|------|----------|------|
 | `daedalus` CLI | wrapper script | `files/system/usr/local/bin/daedalus` | 询问宿主构造启动命令 (不自己声明 Deno 权限), `$HOME` 占位展开后 exec |
 | `daedalus-host` | Go binary | `cmd/daedalus-host/` (镜像态 `usr/local/bin/daedalus-host`) | 插件 list/inspect/verify/run-plugin/render-unit;**非父进程,零 spawn**;`paths.go` / `paths_demo.go` build-tag 互斥(dev 路径重写仅 demo 编译期常驻) |
-| `daedalus-audit` | Go binary | `cmd/daedalus-audit/` (镜像态 `usr/local/bin/`) | 哈希链审计 CLI;所有审计写入唯一入口 |
+| `daedalus-audit` | Go binary | `cmd/daedalus-audit/` (镜像态 `usr/local/bin/`) | 哈希链审计 CLI;非 Go 写入方(copilot/Deno/人工)的桥接入口,内部落 `audit.LogAudit` |
 | `daedalus-tx` | Go binary | `cmd/daedalus-tx/` | 事务 CLI;`begin`→`propose`→`apply`→`rollback`;service/package 适配器;user-scope-only (service) / root-only (package) euid 守门 |
 | `daedalus-smoke` | Go binary | `cmd/daedalus-smoke/` | 镜像内端到端 smoke;v3 构建机补跑 |
 | `daedalus-plugin-pack` | Go binary | `cmd/daedalus-plugin-pack/` | zip 打包器;checksums 注入 + manifest 规范化自摘要 + zip-slip 防线 |
@@ -249,7 +249,7 @@ Only the copilot plugin runs on Deno; its permission flags are manifest entrypoi
 
 ## 5. Tamper-Evident Audit Logging
 
-Every MCP tool invocation, Copilot translation, security rejection, confirmation, user edit, and host operation is logged to `/var/log/daedalus/audit.jsonl` (with unprivileged fallback to `$HOME/.local/share/daedalus/audit.jsonl`) using a cryptographic hash chain. Implementation: `../daedalus-sdk/audit/` (Go), exposed as the `daedalus-audit` CLI (`--identity/--tool/--args/--outcome/--log-path`, `verify` subcommand). All writers (servers, host, copilot `audit.ts` via `DAEDALUS_AUDIT_BIN`) go through this CLI — direct file writes are forbidden.
+Every MCP tool invocation, Copilot translation, security rejection, confirmation, user edit, and host operation is logged to `/var/log/daedalus/audit.jsonl` (with unprivileged fallback to `$HOME/.local/share/daedalus/audit.jsonl`) using a cryptographic hash chain. Implementation: `../daedalus-sdk/audit/` (Go). **唯一合规写入口 = `audit.LogAudit`**(哈希链/flock/序列化的单一实现):Go 侧写入方(能力服务器、host、tx)一律进程内调用它;`daedalus-audit` CLI (`--identity/--tool/--args/--outcome/--log-path`, `verify` 子命令)是非 Go 写入方(copilot `audit.ts` via `DAEDALUS_AUDIT_BIN`、人工)的桥,内部同样落 `LogAudit`。绕过 `audit` 包手写 JSON 直写 audit.jsonl 一律禁止。
 
 ### Hash Chaining Specification
 - `timestamp`, `identity`, `tool`, `args`, `policy_version`, `outcome`, `prev_hash`, `entry_hash`.
@@ -318,7 +318,7 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
 - **NEVER** accept relative paths, null bytes, or paths resolving outside allowlist.
 - **NEVER** hardcode secrets in the image — credentials flow via `LoadCredential` or user-scoped config.
 - **NEVER** directly execute arbitrary shell commands inside Copilot (`daedalus`) — always route through the sandboxed `daedalus-shell` MCP bridge.
-- **NEVER** modify/insert/delete audit log lines or break the hash chain; NEVER write the audit file directly — always via the `daedalus-audit` CLI.
+- **NEVER** modify/insert/delete audit log lines or break the hash chain; NEVER bypass the SDK `audit` package to append to the audit file — Go 侧进程内调 `audit.LogAudit`,非 Go 写入方经 `daedalus-audit` CLI 桥接。
 - **NEVER** let `daedalus-host` spawn or become the parent process of any MCP server (决策 16): the host only installs/discovers/verifies and *prints* the launch command; systemd executes it. Never add exec/spawn to `run-plugin`/`render-unit`.
 - **NEVER** introduce a second policy source of truth: whitelist changes go through `shared/policy.toml` (runtime) with `policy.Default()` and the `shellpolicy`/`pathguard` constants updated in lockstep (drift tests fail otherwise); units must not carry a drifted `Environment=ALLOW_COMMANDS=`.
 - **NEVER** leak source into the image rootfs: 本仓 `cmd/` `internal/` `plugin/` 源码与任何 `*.test.ts`/`*.py`/`__pycache__`/`vendor` must never be rsync/COPY'd into `/opt` — only build products(`plugins/` 安装态, `usr/local/bin` binaries, `shared/policy.toml`) land there(`just verify-image` asserts this)。
