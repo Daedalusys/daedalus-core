@@ -41,6 +41,10 @@ func TestServiceSet_Propose_RejectsBadNames(t *testing.T) {
 		{"*glob", "glob 星号"},
 		{"a/b", "路径分隔符"},
 		{`a\b`, "反斜杠"},
+		// 前导 `-`:systemctl 会把 `-xxx` 解析成选项旗标(argv 注入)。
+		// 首字符类已排除 `-`,拒绝发生在拼 argv 之前。
+		{"-foo", "前导中划线"},
+		{"--user", "前导双中划线(伪装旗标)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.why, func(t *testing.T) {
