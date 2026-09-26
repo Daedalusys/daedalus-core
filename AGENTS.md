@@ -60,7 +60,7 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 | core runtime 二进制 | `cmd/daedalus-{host,audit,tx,smoke,plugin-pack}/` | 宿主 / 审计 / 事务 / smoke / 打包器 |
 | 契约包(仅 host/tx 共享) | `internal/{controller,tx}/` | 决策 25 契约缝锁定;其余安全包已迁 SDK |
 | 插件格式 / 宿主 | `cmd/daedalus-{host,plugin-pack}/` + `../daedalus-sdk/plugin/` + `../daedalus-plugins/<cap>/daedalus.plugin.json` | manifest schema + zip 打包 + sha256 + zip-slip 防护;宿主仅安装/发现/校验(非父进程) |
-| 安全白名单 / 策略 | `files/system/opt/daedalus/shared/policy.toml` + `../daedalus-sdk/policy/` | 单一事实源,Go 运行时读取;ALLOW_COMMANDS env 整体 REPLACE;损坏 fail-closed 拒启 |
+| 安全白名单 / 策略 | `files/system/opt/daedalus/shared/policy.toml` + `../daedalus-sdk/policy/` | 单一事实源,Go 运行时读取;ALLOW_COMMANDS env 整体 REPLACE;损坏或缺失均 fail-closed 拒启(回退 Default 需 development opt-in) |
 | Copilot 侧冻结副本 | `plugin/copilot/policy.ts` | 与 `../daedalus-sdk/shellpolicy` 同步义务;契约由 `tests/deno/shellpolicy_contract.test.ts` 钉 |
 | Audit hash chain | `../daedalus-sdk/audit/` + `cmd/daedalus-audit/` | genesis `0`*64, syscall.Flock, sha256 链, Python 金样字节级兼容 (`../daedalus-sdk/audit/testdata/golden.jsonl`) |
 | 事务通道(service/package) | `cmd/daedalus-tx/` + `internal/tx/` | begin→propose→apply→rollback;service/package 适配器;euid 守门;sidecar 落盘必捕获 |
@@ -240,7 +240,7 @@ All Daedalus service profiles (`/usr/lib/systemd/system/daedalus-*.service`) enf
 Only the copilot plugin runs on Deno; its permission flags are manifest entrypoint constants (read `/opt/daedalus/plugins/daedalus.copilot`, audit/shell/deno binaries under `/usr/local/bin`, `$HOME` config/state paths), constructed and printed by the host, exec'd by the wrapper.
 
 ### Policy Single Source of Truth
-`/opt/daedalus/shared/policy.toml` is the enforced runtime policy. Go servers load it at startup via `../daedalus-sdk/policy`: missing → built-in `Default()` fallback (identical to constants, drift-tested); corrupted → fail-closed refusal to start. `76-daedalus-plugin-gen.sh` performs a build-time `DAEDALUS_POLICY_PATH` handshake check against the installed binaries and rejects unit/manifest drift.
+`/opt/daedalus/shared/policy.toml` is the enforced runtime policy. Go servers load it at startup via `../daedalus-sdk/policy`: missing → fail-closed refusal to start (生产默认;回退 built-in `Default()` 需 `DAEDALUS_POLICY_MODE=development` 显式 opt-in,回退值与 constants 逐项一致、drift-tested); corrupted → fail-closed refusal to start. `76-daedalus-plugin-gen.sh` performs a build-time `DAEDALUS_POLICY_PATH` handshake check against the installed binaries and rejects unit/manifest drift.
 
 ---
 
