@@ -1,10 +1,10 @@
 /**
  * ★ 冻结副本声明 ★ 下方白名单常量与网关校验器（validateCommand/validateArg/validatePath/isPathLike）是
- * Go 侧 `daedalus-core/internal/shellpolicy` 的冻结副本，Copilot 进程内校验与 `daedalus-shell` 二进制零策略偏离。
- * **修改 Go 侧 internal/shellpolicy 时必须同步修改本文件。**
+ * Go 侧 `daedalus-sdk/shellpolicy` 的冻结副本，Copilot 进程内校验与 `daedalus-shell` 二进制零策略偏离。
+ * **修改 Go 侧 daedalus-sdk/shellpolicy 时必须同步修改本文件。**
  */
 
-// 显式允许的诊断/只读命令（与 internal/shellpolicy 默认白名单一致的冻结副本，15 项）
+// 显式允许的诊断/只读命令（与 daedalus-sdk/shellpolicy 默认白名单一致的冻结副本，15 项）
 export const DEFAULT_ALLOW_COMMANDS = new Set([
   "df",
   "ls",
@@ -29,7 +29,7 @@ export const ALLOW_COMMANDS: Set<string> = envCommands
   ? new Set(envCommands.split(",").map((c) => c.trim()).filter((c) => c.length > 0))
   : DEFAULT_ALLOW_COMMANDS;
 
-// 路径类参数允许的路径前缀（与 internal/shellpolicy 一致的冻结副本，9 项）
+// 路径类参数允许的路径前缀（与 daedalus-sdk/shellpolicy 一致的冻结副本，9 项）
 export const ALLOWED_PATH_PREFIXES = [
   "/home",
   "/var/log",
@@ -42,7 +42,7 @@ export const ALLOWED_PATH_PREFIXES = [
   "/etc/almalinux-release",
 ];
 
-// 显式禁止的敏感路径（与 internal/shellpolicy 一致的冻结副本，5 项）
+// 显式禁止的敏感路径（与 daedalus-sdk/shellpolicy 一致的冻结副本，5 项）
 export const BLOCKED_PATHS = [
   "/etc/shadow",
   "/etc/gshadow",
@@ -153,7 +153,7 @@ export const L2_DANGER_PATTERNS: ReadonlyArray<{ re: RegExp; reasonKey: string }
   },
 ];
 
-/** （internal/shellpolicy 冻结副本） */
+/** （daedalus-sdk/shellpolicy 冻结副本） */
 export function isPathLike(arg: string): boolean {
   if (arg.includes("\0")) {
     return true;
@@ -170,7 +170,7 @@ export function isPathLike(arg: string): boolean {
   return false;
 }
 
-/** 针对不存在路径的基础路径规范化工具。（internal/shellpolicy 冻结副本） */
+/** 针对不存在路径的基础路径规范化工具。（daedalus-sdk/shellpolicy 冻结副本） */
 function normalizePath(path: string): string {
   const parts = path.split("/").filter((p) => p.length > 0 && p !== ".");
   const stack: string[] = [];
@@ -184,7 +184,7 @@ function normalizePath(path: string): string {
   return "/" + stack.join("/");
 }
 
-/** 规范化并验证路径参数:不触及受阻路径且保持在允许的目录范围内。（internal/shellpolicy 冻结副本） */
+/** 规范化并验证路径参数:不触及受阻路径且保持在允许的目录范围内。（daedalus-sdk/shellpolicy 冻结副本） */
 export function validatePath(pathStr: string): string {
   if (typeof pathStr !== "string" || pathStr.length === 0) {
     throw new Error("Path must be a non-empty string.");
@@ -229,7 +229,7 @@ export function validatePath(pathStr: string): string {
   return resolved;
 }
 
-/** 验证单个参数无空字节和嵌入路径。（internal/shellpolicy 冻结副本） */
+/** 验证单个参数无空字节和嵌入路径。（daedalus-sdk/shellpolicy 冻结副本） */
 export function validateArg(arg: string): void {
   if (typeof arg !== "string") {
     throw new Error(`Argument must be a string, got ${typeof arg}`);
@@ -249,7 +249,7 @@ export function validateArg(arg: string): void {
   }
 }
 
-/** 白名单验证命令名称 + 路径遍历检查。（internal/shellpolicy 冻结副本） */
+/** 白名单验证命令名称 + 路径遍历检查。（daedalus-sdk/shellpolicy 冻结副本） */
 export function validateCommand(command: string): string {
   if (!command || typeof command !== "string") {
     throw new Error("Command must be a non-empty string.");
