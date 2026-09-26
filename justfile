@@ -15,6 +15,22 @@ import "justfile.local"
 # .env.example;未提供 .env 时不报错(loaded 静默忽略)。
 set dotenv-load
 
+# go PATH 多源兜底片段,供各 Go recipe 经 {{go_path_fallback}} 插值复用:
+# SSH 远端非交互 shell 不 source rc,asdf/mise 用户装的 go 常不在 PATH。
+# 先试 PATH,找不到按 asdf shims → $HOME/.local/bin → 系统 go 兜底,
+# 把命中的目录 prepend 进 PATH。覆盖本地交互 shell、Actions apt go、SSH 裸 go。
+go_path_fallback := '''
+    if ! command -v go >/dev/null 2>&1; then
+        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+            if [ -x "$c" ]; then
+                export PATH="$(dirname "$c"):$PATH"
+                break
+            fi
+        done
+    fi
+    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+'''
+
 # Default recipe: list available recipes
 default:
     @just --list
@@ -99,19 +115,8 @@ verify-dev-layout:
 plugin-pack: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
-    # 与 go-build / go-test 同款 fallback:SSH 远端非交互 shell 不 source rc,asdf
-    # 用户的 go 不在 PATH,recipe 自带多源兜底(asdf → .local → 系统 go)。这里
-    # 必须自带,因为 plugin-pack 是独立 recipe 不依赖 go-build 已跑过(可能 go-build
-    # 用 apt 装 go 跳过了 fallback,而本机是 asdf 装的)。
-    if ! command -v go >/dev/null 2>&1; then
-        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
-            if [ -x "$c" ]; then
-                export PATH="$(dirname "$c"):$PATH"
-                break
-            fi
-        done
-    fi
-    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    # plugin-pack 是独立 recipe,不依赖 go-build 已跑过,故自带 PATH 兜底。
+    {{go_path_fallback}}
     # 流程(构建期内建,无运行时安装;安装态必经 Pack 注入 checksums):
     #   1) 本仓构建 5 个 core runtime 静态二进制(host/audit/tx/smoke/plugin-pack);
     #   2) 能力二进制在兄弟仓 daedalus-plugins/<cap> 模块内就地构建(唯一事实源),
@@ -232,17 +237,7 @@ plugin-pack: blueprint-embed
 dev-install prefix='': blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
-    # 与 go-build / go-test / plugin-pack 同款 fallback:SSH 远端非交互 shell 不 source rc,
-    # asdf 用户的 go 不在 PATH,recipe 自带多源兜底。
-    if ! command -v go >/dev/null 2>&1; then
-        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
-            if [ -x "$c" ]; then
-                export PATH="$(dirname "$c"):$PATH"
-                break
-            fi
-        done
-    fi
-    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    {{go_path_fallback}}
     # 本机 just(1.58)不把位置参数透传为 $1,经 {{prefix}} 插值取参;兼容 --prefix=X 旗标形式
     prefix="{{prefix}}"
     case "${prefix}" in
@@ -340,24 +335,14 @@ blueprint-embed:
 
 # 构建全部 Go 静态二进制到 daedalus-core/bin/:CGO_ENABLED=0 纯静态、
 # GOTOOLCHAIN=local 禁用工具链自动下载、-trimpath 可复现路径。
-# 用 shebang 跑(而非一行 cd && go build ...):SSH 远端非交互 shell 不 source rc,
-# asdf/mise 用户装的 go 不在 PATH。先 `command -v go` 试 PATH,找不到时按常见位置
-# fallback(asdf shims / $HOME/.local/bin / /usr/local/go/bin),把找到的 go 所在
-# 目录 prepend 到 PATH —— 覆盖本地交互 shell、 Actions apt go、SSH asdf、SSH 裸 go。
+# 用 shebang 跑(而非一行 cd && go build ...):recipe 体经 {{go_path_fallback}}
+# 自找 go,不依赖调用方 shell 的 rc 已 source。
 go-build: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(cd .. && pwd)"
     cd "$root/daedalus-core"
-    if ! command -v go >/dev/null 2>&1; then
-        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
-            if [ -x "$c" ]; then
-                export PATH="$(dirname "$c"):$PATH"
-                break
-            fi
-        done
-    fi
-    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    {{go_path_fallback}}
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o bin/ ./cmd/...
 
 # Go 全量单元测试(纯模块级,不依赖镜像;just test 的 Go 腿即此命令)
@@ -368,15 +353,7 @@ go-test: blueprint-embed
     set -euo pipefail
     root="$(cd .. && pwd)"
     cd "$root/daedalus-core"
-    if ! command -v go >/dev/null 2>&1; then
-        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
-            if [ -x "$c" ]; then
-                export PATH="$(dirname "$c"):$PATH"
-                break
-            fi
-        done
-    fi
-    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    {{go_path_fallback}}
     go test ./...
 
 # 显式下载 Go 模块依赖到 GOMODCACHE(vendor/ 不入库,首次构建需联网;`go build` 也会
@@ -387,15 +364,7 @@ deps:
     set -euo pipefail
     root="$(cd .. && pwd)"
     cd "$root/daedalus-core"
-    if ! command -v go >/dev/null 2>&1; then
-        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
-            if [ -x "$c" ]; then
-                export PATH="$(dirname "$c"):$PATH"
-                break
-            fi
-        done
-    fi
-    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    {{go_path_fallback}}
     go mod download
 
 # Run test suite(Go 腿 + Deno 腿 + i18n 键集门禁)
@@ -403,15 +372,7 @@ deps:
 test: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! command -v go >/dev/null 2>&1; then
-        for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
-            if [ -x "$c" ]; then
-                export PATH="$(dirname "$c"):$PATH"
-                break
-            fi
-        done
-    fi
-    command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback"; exit 1; }
+    {{go_path_fallback}}
     root="$(cd .. && pwd)"
     cd "$root/daedalus-core"
     go test ./...
