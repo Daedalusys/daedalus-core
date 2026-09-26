@@ -24,13 +24,15 @@ set -euo pipefail
 # 仓库根:脚本位于 scripts/ 子目录,需向上一级。
 # 用 $(cd ... && pwd) 解析真实路径(兼容 symlink 与 ./ 相对调用)。
 ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
-CORE_DIR="$ROOT/daedalus-core"
+# ROOT 即 daedalus-core 仓根;拆仓前脚本假设的 `$ROOT/daedalus-core` 嵌套布局
+# 已不存在,沿用会让本脚本在任何形态下都 cd 失败。
+CORE_DIR="$ROOT"
 # 源码态 = 插件定义层:清单与 5 个 .ts 同目录;测试位于仓库根 tests/deno/
-COPILOT_SRC="$ROOT/daedalus-core/plugin/copilot"
-MANIFEST_SRC="$ROOT/daedalus-core/plugin/copilot/daedalus.plugin.json"
+COPILOT_SRC="$CORE_DIR/plugin/copilot"
+MANIFEST_SRC="$CORE_DIR/plugin/copilot/daedalus.plugin.json"
 PLUGIN_ID="daedalus.copilot"
 # 安装态落镜像树(与能力插件同一约定)
-INSTALL_DIR="$ROOT/daedalus-core/files/system/opt/daedalus/plugins"
+INSTALL_DIR="$CORE_DIR/files/system/opt/daedalus/plugins"
 PLUGIN_DEST="$INSTALL_DIR/$PLUGIN_ID"
 ZIP_OUT=${ZIP_OUT:-"$CORE_DIR/bin/$PLUGIN_ID.plugin.zip"}
 
@@ -48,7 +50,7 @@ PACK_BIN="$CORE_DIR/bin/daedalus-plugin-pack"
 HOST_BIN="$CORE_DIR/bin/daedalus-host"
 
 echo "==> 2/5 组装插件源目录 $STAGE_DIR"
-# 源码复制:.ts 全收(源码态已无测试);.test.ts 排除分支保留为防御(测试不进镜像,见计划门禁 #4)
+# 源码复制:.ts 全收(源码态已无测试);.test.ts 排除分支保留为防御(测试不进镜像)
 for src in "$COPILOT_SRC"/*.ts; do
     case $(basename -- "$src") in
         *.test.ts) continue ;;

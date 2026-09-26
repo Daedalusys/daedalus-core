@@ -3,7 +3,9 @@
   "name": "Daedalus Copilot",
   "version": "1.0.0",
   "type": "copilot",
-  "runtime": "deno",
+  "runtime": {
+    "name": "deno"
+  },
   "executable": "main.ts",
   "entrypoint": [
     "--allow-env",
@@ -45,14 +47,17 @@
     "zh_CN"
   ],
   "checksums": {
-    "audit.ts": "sha256:81f2a87c4555204568410d7561f22e7efe7d2435b2eda63a79160956e1b9f8ff",
-    "daedalus.plugin.json": "sha256:d8099f41508b88d911e7bb0c4a6be6eccbc872f6c03ba1e09ec9d8dbe6c57152",
-    "exec.ts": "sha256:f2b7cd7109ee475ac44d62e1b82e6940188679ccf6f8ffd86444ed0846833d8f",
-    "i18n.ts": "sha256:f4733b30d083dc2629afb0a615843eae0f745388a36d6b86f67065dd17c04862",
-    "i18n/en_US.json": "sha256:a45af61604d5c6357c7c1a34c30336ca4a3dfd90181190eb5df57c81be215efd",
-    "i18n/zh_CN.json": "sha256:c2e32ae3087d9a1048a835ceaf085510294e86d801faf34a8b6c073a996e9c7b",
-    "llm.ts": "sha256:88ae8f177ed0d26d673db808dad3d5c16372a4004090d87e68798c50b45a3ab0",
-    "main.ts": "sha256:eee14f5dda73678739ff32f5b34a71ba1a4eb2fd3af8ee484ab62d6f387b99ab",
-    "policy.ts": "sha256:3924bd9c078dd157a60fab660d514fb664a888c0cf70f0a25038566c7f5a36ae"
-  }
+    "audit.ts": "sha256:16e079af37489302bb6ba4dc044e9e5482fb2c6cbd8f7f85d562dd776e7a67b2",
+    "daedalus.plugin.json": "sha256:fc7f658593c0e69811d38827e20ed76c8893f0c7acbfde0dfeaab9d054fa5039",
+    "exec.ts": "sha256:a489bb7b7897666429b5d66f017c2a51c5188bbd0035692d0889a6022e264750",
+    "i18n.ts": "sha256:a8699aeeb8483d44770b7fded1425f3ff061e94db6eeff6107fa316da28e1dc3",
+    "i18n/en_US.json": "sha256:3aba1f9934c01b6e1a9025db01c3d052be8ce65b465e3bf4333246ddd9e1146e",
+    "i18n/zh_CN.json": "sha256:6b8c2af8b208cd8304e25743d5d888ad4ac4ce8209cb09700e15a26d92e9ccbb",
+    "llm.ts": "sha256:b42831ff4cff2483920572056437f9753a2b682a363fccd8f466b3280031bc84",
+    "main.ts": "sha256:7c8fb2073d449cde124096500de08c2549931289d04b9497dbd37e3473b1d2b5",
+    "policy.ts": "sha256:9f4e985e65683757e781f48fadb07d39b6ce8af067b6f12431e440c00222d930"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
 }
