@@ -131,7 +131,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | metadata.resourceVersion | 无(tx 单写者) | A | when-needed |
 | spec/status 分离 | 信封 `objectmodel.Object{api_version,kind,metadata,spec,status}`,Resource 与 ServiceState 双投影 | A | v1 已交付 |
 | Conditions | `objectmodel.Condition` 三态 + `UpsertCondition`;`service.query` 产出 `Ready` | A | v1 已交付 |
-| controller / reconcile | 无(tx 用户显式调用) | B | 契约缝 ReconcileFunc → P4 |
+| controller / reconcile | 无 controller 循环(tx 用户显式调用);期望投影已裁决+落码 `internal/desiredview`(裁决文 `docs/desired-state-projection.md`,sdk#4) | B | 契约缝 ReconcileFunc → P4 |
 | list-watch / informer | 无(state.jsonl 最新值) | B | P4 |
 | workqueue / backoff | 无 | B | P4 |
 | admission webhook | 静态:policy.toml 启动加载、fail-closed | B | AdmissionFunc 契约缝 → P4 |

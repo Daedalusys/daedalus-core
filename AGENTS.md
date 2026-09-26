@@ -64,6 +64,7 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 | Copilot 侧冻结副本 | `plugin/copilot/policy.ts` | 与 `../daedalus-sdk/shellpolicy` 同步义务;契约由 `tests/deno/shellpolicy_contract.test.ts` 钉 |
 | Audit hash chain | `../daedalus-sdk/audit/` + `cmd/daedalus-audit/` | genesis `0`*64, syscall.Flock, sha256 链, Python 金样字节级兼容 (`../daedalus-sdk/audit/testdata/golden.jsonl`) |
 | 事务通道(service/package) | `cmd/daedalus-tx/` + `internal/tx/` | begin→propose→apply→rollback;service/package 适配器;euid 守门;sidecar 落盘必捕获 |
+| 期望视图投影(sdk#4) | `internal/desiredview/` + `docs/desired-state-projection.md` | journal→Current Desired View 纯函数全量 replay;applied 唯一提交点;封闭映射 fail-closed;`[ownership]` 归 P4 落 policy |
 | Add systemd sandbox rule | `files/system/usr/lib/systemd/system/daedalus-*.service.d/*.conf` | landlock.conf = seccomp/network;credentials.conf = LoadCredential |
 | Reorder / add image build step | `files/scripts/NN-name.sh` | 60-ai-middleware, 65-ai-safety, 70-daedalus-mcp-servers, 75-daedalus-copilot, 76-daedalus-plugin-gen |
 | Add a new plugin/server | `../daedalus-plugins/<id>/` (manifest + bin) → `just plugin-pack` → `76-daedalus-plugin-gen.sh` 渲染 systemd ExecStart | 宿主 `run-plugin`/`render-unit` 消费 manifest; sync via `just sync` |
@@ -82,7 +83,8 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 | `daedalus-smoke` | Go binary | `cmd/daedalus-smoke/` | 镜像内端到端 smoke;v3 构建机补跑 |
 | `daedalus-plugin-pack` | Go binary | `cmd/daedalus-plugin-pack/` | zip 打包器;checksums 注入 + manifest 规范化自摘要 + zip-slip 防线 |
 | `controller` | Go pkg | `internal/controller/` | 决策 25 契约缝锁定包;host/tx 共享 |
-| `tx` | Go pkg | `internal/tx/` | 事务通道共享包;`tx.Step` 六键线上契约;D-1 裁决 ctx 侧路透传 |
+| `tx` | Go pkg | `internal/tx/` | 事务通道共享包;`tx.Step` 六键线上契约;D-1 裁决 ctx 侧路透传;`tx.List()` 回放序(created_at↑,id↑) |
+| `desiredview` | Go pkg | `internal/desiredview/` | 期望视图投影(纯函数 replay,零副作用);`Entry.source_tx` 为 P4 generation 前置 |
 | `plugin` | Go pkg | `../daedalus-sdk/plugin/` | manifest schema 校验 + Pack/Extract/Verify/VerifyDir |
 | `policy` | Go pkg | `../daedalus-sdk/policy/` | policy.toml 严格加载 (ErrNotFound 哨兵 / LoadOrDefault / ALLOW_COMMANDS REPLACE) |
 | `shellpolicy` | Go pkg | `../daedalus-sdk/shellpolicy/` | 15 命令 / 4 bin 目录 / 路径规则权威实现 (CLEAN_ENV, 30s, rc 126/124) |
