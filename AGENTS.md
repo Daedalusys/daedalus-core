@@ -56,6 +56,7 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 |------|----------|-------|
 | Go MCP 能力服务器实现 | `../daedalus-plugins/{fs,shell,pkg,sysinfo,service,blueprint,dupe}/cmd/` | go-sdk stdio 服务器;唯一实现 (Python/Deno 双实现已删除) |
 | 主机运行时共享 SDK 包 | `../daedalus-sdk/{pathguard,shellpolicy,pkgquery,sysinfo,policy,audit,plugin,objectmodel,i18n,blueprint,version,state,dirs}/` | 公开 contract 仓;威胁面见 `../daedalus-sdk/AGENTS.md` |
+| Provider/Slot 契约(sdk#2) | `../daedalus-sdk/{slot,secretprovider,memoryprovider}/` + `../daedalus-sdk/docs/provider-slot.md` | 契约缝·零运行时;实现与接线归装配构造期;swappability L0–L3;blueprint `secret://` resolver 是第一个未来消费者 |
 | Modify Daedalus Copilot CLI | `plugin/copilot/` (源码) + `files/system/opt/daedalus/plugins/daedalus.copilot/` (镜像安装态) | policy, audit, llm, exec, main orchestration;安装态是构建产物勿手改 |
 | core runtime 二进制 | `cmd/daedalus-{host,audit,tx,smoke,plugin-pack}/` | 宿主 / 审计 / 事务 / smoke / 打包器 |
 | 契约包(仅 host/tx 共享) | `internal/{controller,tx}/` | 决策 25 契约缝锁定;其余安全包已迁 SDK |

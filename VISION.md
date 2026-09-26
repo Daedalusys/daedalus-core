@@ -285,7 +285,7 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus 每笔事务自带 
 
 - 不内置 LLM 模型或推理引擎(技术栈只有云端适配器 + 本地风险分类器)。
 - 不做多 agent 编排(copilot 身份钉死为命令顾问)。
-- 不做运行时联网插件安装(构建期内建,镜像即完整清单)。
+- 不做运行时联网插件安装(构建期内建,镜像即完整清单;特权/User 分层见下节,分层不是推翻)。
 - 不做插件开发脚手架(属另一个仓)。
 - 不直接改 `base_image/` vendor 树(改 `files/`、`plugin/` 与兄弟仓,经 `just sync`)。
 - 宿主绝不 spawn、绝不做 MCP 父进程(决策 16)。
@@ -294,6 +294,22 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus 每笔事务自带 
 - 不恢复 Python/Deno 能力服务器(七件能力与审计只有 Go 实现)。
 - 不手改镜像内插件安装态(一律 `just plugin-pack` 重生成)。
 - 不让资源模型吞掉长尾(诊断 shell、临时脚本、纯人读输出留 capability 通道)。
+
+### 双层 Extension 模型(daedalus-sdk#2 裁决:边界分层,不是推翻)
+
+化解 immutable OS(构建期内建)与插件生态(runtime 可装)的张力:
+
+| 层 | 形态 | 落点 |
+| --- | --- | --- |
+| System Extensions | image-built / signed / privileged / immutable,参与 system capability 与 controller | `/opt/daedalus/plugins` |
+| User Extensions | runtime installable / unprivileged / sandboxed / user-scoped,承载 MCP / Skill / Agent / UI | `~/.local/share/daedalus/plugins` |
+
+规则:**特权 provider(SecretProvider/MemoryProvider 实现)永远走 System
+Extension**,User Extension 不得申请特权 slot 接线;provider 接线发生在装配
+构造期,注册 ≠ 运行时安装——"镜像即完整清单"对特权面保持字面成立,非特权
+生态才谈 runtime install。远期 **Daedalus Control Center** 的 panel/route/
+schema/action 按 extension 注册(Blueprint #6 只是其中一 panel),不预埋实现。
+Contract 细节与 Core 直依赖改造清单见 `../daedalus-sdk/docs/provider-slot.md`。
 
 ### 开放问题
 
