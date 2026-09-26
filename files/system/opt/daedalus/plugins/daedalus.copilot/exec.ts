@@ -61,17 +61,31 @@ function pathExists(target: string): boolean {
   }
 }
 
+// 看门狗缺省 40s;env 覆写的合法值域 clamp 到 [1000, 300000]。
+const DEFAULT_WATCHDOG_TIMEOUT_MS = 40000;
+
 /**
  * 读取看门狗超时毫秒数：DAEDALUS_WATCHDOG_TIMEOUT_MS 环境变量覆写 → 缺省 40000。
  * execAllowlisted（MCP 桥）与 tx CLI 调用层（execTx*）共用同一旋钮，
  * 保证两条执行通道的超时语义逐字节一致（rc 124 / SIGKILL / 同款提示文案）。
+ *
+ * 值域处理与 llm.ts parseTimeoutMs 同一模式:未设/非数字/非正一律回退缺省,
+ * 合法值 clamp 到 [1000, 300000]。防的是 `setTimeout(NaN|0)` 立即触发——
+ * 那会让每条正常命令被误判超时、返回假的 rc 124,比无看门狗更危险;
+ * 超大值则让看门狗形同虚设(进程可永久挂起)。
  */
-function resolveWatchdogTimeoutMs(): number {
-  return Number(
-    (typeof (globalThis as any).Deno?.env?.get === "function"
-      ? (globalThis as any).Deno.env.get("DAEDALUS_WATCHDOG_TIMEOUT_MS")
-      : process.env.DAEDALUS_WATCHDOG_TIMEOUT_MS) ?? 40000,
-  );
+export function resolveWatchdogTimeoutMs(): number {
+  const raw = typeof (globalThis as any).Deno?.env?.get === "function"
+    ? (globalThis as any).Deno.env.get("DAEDALUS_WATCHDOG_TIMEOUT_MS")
+    : process.env.DAEDALUS_WATCHDOG_TIMEOUT_MS;
+  if (raw === undefined || raw === "") {
+    return DEFAULT_WATCHDOG_TIMEOUT_MS;
+  }
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) {
+    return DEFAULT_WATCHDOG_TIMEOUT_MS;
+  }
+  return Math.min(300_000, Math.max(1_000, n));
 }
 
 /**
