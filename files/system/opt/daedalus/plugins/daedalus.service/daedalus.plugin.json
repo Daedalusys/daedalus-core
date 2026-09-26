@@ -20,7 +20,10 @@
   },
   "tools": [
     "service.query",
-    "service.list"
+    "service.list",
+    "systemd_failed",
+    "systemd_timer_next",
+    "systemd_dependencies"
   ],
   "resources": [
     {
@@ -30,8 +33,8 @@
     }
   ],
   "checksums": {
-    "bin/daedalus-service": "sha256:bb25f6f767505e3fcaa80485e5ca2c62f5ced5ea53a35a48b18b53ab14c61bd4",
-    "daedalus.plugin.json": "sha256:e5fb31e268f615dc8463e8e20cb44a8b53dc2e7c6c09cee950e32bbb0539842a"
+    "bin/daedalus-service": "sha256:4e92564564712304caaa870cb4bdf7d4b8e14f3062b8d77a615945436a5296a2",
+    "daedalus.plugin.json": "sha256:3ba5bb0c78bfcb41c82a35d3a314fbecf98ee226e66c6f4e5b3176e149f1f8d7"
   },
   "api_version": "0.1.0",
   "license": "Apache-2.0",
