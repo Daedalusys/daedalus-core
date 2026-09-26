@@ -9,6 +9,7 @@ use (
 	../daedalus-plugins/service
 	../daedalus-plugins/shell
 	../daedalus-plugins/sysinfo
+	../daedalus-plugins/trace
 	../daedalus-sdk
 )
 
