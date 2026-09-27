@@ -434,6 +434,9 @@ Deno.test("Copilot Exec - handles watchdog timeout triggering SIGKILL and return
     const result = await execAllowlisted("df", ["-h"]);
     expect(result.returncode).toBe(124);
     expect(result.stderr).toContain("Timeout: command execution exceeded");
+    // 文案里的秒数取**生效值**而非缺省 40s:覆写成 1000ms 却报 40s 会把操作员
+    // 引向"看门狗没生效"的误判。
+    expect(result.stderr).toContain("exceeded 1s");
     expect(result.error).toBe("copilot exec timeout");
 
     const spawned = mockSpawnedCommands[0];
@@ -460,8 +463,10 @@ Deno.test("TestResolveWatchdogTimeoutMs_Clamp - 非法值回退缺省、合法�
     Deno.env.delete("DAEDALUS_WATCHDOG_TIMEOUT_MS");
     expect(resolveWatchdogTimeoutMs()).toBe(40000);
 
-    // 非数字 / 0 / 负数 → 缺省(回退而非取钳位下限,与 llm.ts 语义一致)
-    for (const bad of ["abc", "0", "-5", "NaN"]) {
+    // 非数字 / 非十进制整数形状 / 0 / 负数 → 缺省(回退而非取钳位下限,与 llm.ts 语义一致)
+    // "1e5"/"30s"/"0x10" 是 parseInt 静默前缀解析的回归用例:旧实现会把它们读成
+    // 1/30/0,操作员写的覆写值被读成另一个数量级。
+    for (const bad of ["abc", "0", "-5", "NaN", "1e5", "30s", "0x10", "+45000", " 45000", "45_000"]) {
       Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", bad);
       expect(resolveWatchdogTimeoutMs()).toBe(40000);
     }

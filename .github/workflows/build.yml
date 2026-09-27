@@ -186,12 +186,19 @@ jobs:
       - name: copilot install-state drift gate
         # 入库的 copilot 安装态(files/system/opt/daedalus/plugins/daedalus.copilot/)
         # 是 `just copilot-plugin` 的构建产物:从 plugin/copilot/ 源码再生后
-        # git diff 必须为零,否则说明源码改动未同步再生,镜像会带过期 copilot 出厂。
+        # 工作树必须零变化,否则说明源码改动未同步再生,镜像会带过期 copilot 出厂。
+        # 判据用 status --porcelain -uall 而非 git diff --exit-code:源码新增 .ts
+        # 但忘了 commit 时,安装态会多出一个**未跟踪**文件,git diff 看不见它。
         shell: bash
         working-directory: daedalus-core
         run: |
           just copilot-plugin
-          git diff --exit-code files/system/opt/daedalus/plugins/daedalus.copilot/ || { echo "ERROR: copilot 安装态与源码漂移,请跑 just copilot-plugin 并提交再生成产物"; exit 1; }
+          drift="$(git status --porcelain -uall -- files/system/opt/daedalus/plugins/daedalus.copilot/)"
+          if [ -n "$drift" ]; then
+            echo "ERROR: copilot 安装态与源码漂移,请跑 just copilot-plugin 并提交再生成产物"
+            printf '%s\n' "$drift"
+            exit 1
+          fi
 
       - name: testdata drift gate (production policy.toml ↔ SDK testdata)
         # 生产 policy.toml 与 SDK 的 testdata 副本必须

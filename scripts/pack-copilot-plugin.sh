@@ -36,12 +36,34 @@ INSTALL_DIR="$CORE_DIR/files/system/opt/daedalus/plugins"
 PLUGIN_DEST="$INSTALL_DIR/$PLUGIN_ID"
 ZIP_OUT=${ZIP_OUT:-"$CORE_DIR/bin/$PLUGIN_ID.plugin.zip"}
 
-# 打包输入暂存目录(清单 + 源码副本 + i18n/ locale 翻译目录),退出即清理
+# 打包输入暂存目录(清单 + 源码副本 + i18n/ locale 翻译目录),退出即清理。
+# STAGE_DEST(安装态暂存目录)在步骤 4 才赋值,故 EXIT trap 写成函数、两个变量
+# 一并收尾——后设的 trap 会顶掉前一个,漏掉任一目录就是仓库/TMPDIR 里的残留。
 STAGE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/daedalus-plugin-stage.XXXXXX")
-trap 'find "$STAGE_DIR" -depth -delete' EXIT
+STAGE_DEST=""
+cleanup() {
+    find "$STAGE_DIR" -depth -delete
+    if [ -n "$STAGE_DEST" ]; then
+        find "$STAGE_DEST" -depth -delete 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
 
 # 静态链接 + 本机工具链约束与 core/Makefile 一致(GOTOOLCHAIN=local 禁偷偷下载)
 export CGO_ENABLED=0 GOTOOLCHAIN=local
+
+# go PATH 多源兜底(与 justfile 的 go_path_fallback 同逻辑):本脚本既可被
+# `just copilot-plugin` 调用,也被 CI 漂移门与本机直接执行调用,后者拿不到
+# just 的插值,非交互 shell(asdf/mise 装的 go 常不在 PATH)会在这一步 127。
+if ! command -v go >/dev/null 2>&1; then
+    for c in "$HOME/.asdf/shims/go" "$HOME/.local/bin/go" /usr/local/go/bin/go /usr/lib/go/bin/go; do
+        if [ -x "$c" ]; then
+            export PATH="$(dirname "$c"):$PATH"
+            break
+        fi
+    done
+fi
+command -v go >/dev/null || { echo "ERROR: go not found in PATH or any fallback" >&2; exit 1; }
 
 echo "==> 1/5 编译宿主侧工具(daedalus-plugin-pack / daedalus-host)"
 # 不用 make(本机无 make),直接跑等价 go build
@@ -73,10 +95,24 @@ find "$ZIP_OUT" -maxdepth 0 -delete 2>/dev/null || true
 "$PACK_BIN" -in "$STAGE_DIR" -out "$ZIP_OUT"
 
 echo "==> 4/5 校验 zip 并解压到安装态 $PLUGIN_DEST"
-# 解压器以 O_EXCL 独占新建落盘:目标必须为空目录,故先清空(本机权限面禁 rm,用 find -delete)
-mkdir -p "$PLUGIN_DEST"
-find "$PLUGIN_DEST" -mindepth 1 -delete
-"$PACK_BIN" -verify "$ZIP_OUT" --keep "$PLUGIN_DEST"
+# 解压器以 O_EXCL 独占新建落盘:目标必须是空目录(本机权限面禁 rm,清理用 find -delete)。
+# 先解到同一文件系统内的暂存空目录,verify + 解压全绿之后才改名换址:若先清空
+# 安装态再解压,校验失败就把上一次的好产物一并丢掉,仓库里留下一个空壳安装目录。
+mkdir -p "$INSTALL_DIR"
+STAGE_DEST=$(mktemp -d "$INSTALL_DIR/.${PLUGIN_ID}.install-stage.XXXXXX")
+OLD_DEST="${STAGE_DEST}.old"
+"$PACK_BIN" -verify "$ZIP_OUT" --keep "$STAGE_DEST"
+if [ -d "$PLUGIN_DEST" ]; then
+    mv "$PLUGIN_DEST" "$OLD_DEST"
+    if ! mv "$STAGE_DEST" "$PLUGIN_DEST"; then
+        mv "$OLD_DEST" "$PLUGIN_DEST" # 换址失败 → 旧产物原样退回,绝不留空壳
+        echo "ERROR: 安装态换址失败: $STAGE_DEST → $PLUGIN_DEST" >&2
+        exit 1
+    fi
+    find "$OLD_DEST" -depth -delete
+else
+    mv "$STAGE_DEST" "$PLUGIN_DEST"
+fi
 
 echo "==> 5/5 宿主视角复检(list / verify / run-plugin)"
 "$HOST_BIN" list -dir "$INSTALL_DIR"

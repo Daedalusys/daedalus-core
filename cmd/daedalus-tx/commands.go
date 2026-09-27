@@ -196,9 +196,9 @@ func cmdRollback(args []string, stdout, stderr io.Writer) int {
 // 真正施加过; 真实执行轨迹只存在于审计链(tx_apply 条目), 操作员据此走
 // status 回读 + rollback(只回滚可证前缀)或重新发起事务。
 //
-// 竞态说明:若施加进程其实仍存活(未崩溃), resolve 会让它的终态盖章
-// (applying→applied 或 →failed 中的 MarkApplied)撞上非法迁移而 exit 1 ——
-// fail-closed:宁可双进程互斥报错, 绝不让同一事务在未知进度上继续写。
+// 竞态说明:若施加进程其实仍存活(未崩溃),两个进程各持一份 Load 得到的内存快照,
+// 后写者会在持锁重读时撞上基线分歧(ErrConcurrentModify)而 exit 1 ——
+// fail-closed:宁可双进程互斥报错, 绝不让同一事务在未知进度上被后写者覆盖前写者。
 // 盖**空 TxID** 外围审计(resolve 无步语义, 与 propose/status 同类)。
 func cmdResolve(args []string, stdout, stderr io.Writer) int {
 	id, code, ok := wantIDArgs(args, stdout, stderr)

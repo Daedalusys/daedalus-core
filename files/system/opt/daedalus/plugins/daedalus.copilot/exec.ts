@@ -69,7 +69,7 @@ const DEFAULT_WATCHDOG_TIMEOUT_MS = 40000;
  * execAllowlisted（MCP 桥）与 tx CLI 调用层（execTx*）共用同一旋钮，
  * 保证两条执行通道的超时语义逐字节一致（rc 124 / SIGKILL / 同款提示文案）。
  *
- * 值域处理与 llm.ts parseTimeoutMs 同一模式:未设/非数字/非正一律回退缺省,
+ * 值域处理与 llm.ts parseTimeoutMs 同一模式:未设/非十进制整数/非正一律回退缺省,
  * 合法值 clamp 到 [1000, 300000]。防的是 `setTimeout(NaN|0)` 立即触发——
  * 那会让每条正常命令被误判超时、返回假的 rc 124,比无看门狗更危险;
  * 超大值则让看门狗形同虚设(进程可永久挂起)。
@@ -81,7 +81,13 @@ export function resolveWatchdogTimeoutMs(): number {
   if (raw === undefined || raw === "") {
     return DEFAULT_WATCHDOG_TIMEOUT_MS;
   }
-  const n = Number.parseInt(raw, 10);
+  // 严格十进制整数形状门。parseInt 会静默前缀解析:"1e5" → 1、"30s" → 30,
+  // 操作员写下的覆写值被读成另一回事(且撞上 clamp 下限,看门狗秒级触发),
+  // 形状不符就明确回退缺省,绝不猜意图。
+  if (!/^\d+$/.test(raw)) {
+    return DEFAULT_WATCHDOG_TIMEOUT_MS;
+  }
+  const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) {
     return DEFAULT_WATCHDOG_TIMEOUT_MS;
   }
@@ -253,7 +259,7 @@ export async function execAllowlisted(
       }
       resolve({
         stdout: "",
-        stderr: "Timeout: command execution exceeded 40s",
+        stderr: `Timeout: command execution exceeded ${timeoutMs / 1000}s`,
         returncode: 124,
         error: "copilot exec timeout",
       });
@@ -408,7 +414,7 @@ export async function execAllowlisted(
       if (isTimedOut) {
         return {
           stdout: "",
-          stderr: "Timeout: command execution exceeded 40s",
+          stderr: `Timeout: command execution exceeded ${timeoutMs / 1000}s`,
           returncode: 124,
           error: "copilot exec timeout",
         };
@@ -631,7 +637,7 @@ async function runTxCli(argv: string[]): Promise<TxRawRun> {
     if (raced.timedOut) {
       return {
         stdout: "",
-        stderr: "Timeout: command execution exceeded 40s",
+        stderr: `Timeout: command execution exceeded ${timeoutMs / 1000}s`,
         returncode: 124,
         kind: "timeout",
         error: "copilot exec timeout",

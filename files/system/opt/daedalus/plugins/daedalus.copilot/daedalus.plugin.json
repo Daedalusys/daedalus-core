@@ -49,11 +49,11 @@
   "checksums": {
     "audit.ts": "sha256:16e079af37489302bb6ba4dc044e9e5482fb2c6cbd8f7f85d562dd776e7a67b2",
     "daedalus.plugin.json": "sha256:fc7f658593c0e69811d38827e20ed76c8893f0c7acbfde0dfeaab9d054fa5039",
-    "exec.ts": "sha256:7c0b069ea8b4ff8abdcd63aadb4abff71b8bd2594daa4a534d6f5a5e760f3093",
+    "exec.ts": "sha256:d7cdd24731082a951412b47179fc253e870bbc14e9e4f78b163eebb986a606c2",
     "i18n.ts": "sha256:a8699aeeb8483d44770b7fded1425f3ff061e94db6eeff6107fa316da28e1dc3",
     "i18n/en_US.json": "sha256:3aba1f9934c01b6e1a9025db01c3d052be8ce65b465e3bf4333246ddd9e1146e",
     "i18n/zh_CN.json": "sha256:6b8c2af8b208cd8304e25743d5d888ad4ac4ce8209cb09700e15a26d92e9ccbb",
-    "llm.ts": "sha256:b42831ff4cff2483920572056437f9753a2b682a363fccd8f466b3280031bc84",
+    "llm.ts": "sha256:1f444cc3d06b74cfd5d10dba3297db5ce5883f9927a75cffc18d7e531d61b887",
     "main.ts": "sha256:2a1ed2a9db821b793788e0db3d137e5063790f3825e752f183aa06ab674d88ed",
     "policy.ts": "sha256:d726906475f3ed166d623aa38a97673a2798d23f7d167677fb9cee17c12300ec"
   },
