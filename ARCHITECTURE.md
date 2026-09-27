@@ -51,7 +51,7 @@ Daedalus 是一台 immutable、atomic、AI-native 的桌面操作系统底座,�
 | 二进制 | 职责 |
 | --- | --- |
 | `daedalus-host` | 插件宿主:`list` / `inspect` / `verify` / `run-plugin` / `render-unit`;只打印启动命令,绝不 spawn、绝不做 MCP 父进程(决策 16),执行者是 systemd |
-| `daedalus-audit` | 哈希链审计的唯一写入口(`--identity/--tool/--args/--outcome/--log-path` + `verify` 子命令) |
+| `daedalus-audit` | 哈希链审计 CLI(`--identity/--tool/--args/--outcome/--log-path` + `verify` 子命令);内部落 SDK `audit.LogAudit`,是给 copilot 这类跨进程写入方用的进程边界封装,不是唯一写入口 |
 | `daedalus-tx` | 事务通道 CLI:`begin`→`propose`→`apply`→`rollback`,service/package 适配器,带 euid 守门与回滚 sidecar |
 | `daedalus-smoke` | 镜像内端到端 smoke 断言,构建机补跑 |
 | `daedalus-plugin-pack` | 插件 zip 打包器:checksums 注入 + manifest 规范化自摘要 + zip-slip 九道防线 |
@@ -106,7 +106,7 @@ Copilot 自身从不直接执行 shell,执行模型如下:
 | --- | --- | --- |
 | Layer 1 | Image build-time | 可复现构建、基础镜像 digest 钉死、插件 sha256 校验与 manifest 自摘要、镜像签名(90 阶段)、`bootc container lint` |
 | Layer 2 | Runtime sandboxing | systemd `DynamicUser`、Landlock LSM 路径约束、seccomp 白名单(收 `@system-service`、拒 `@privileged`)、`LoadCredential` 凭证隔离、`policy.toml` fail-closed 策略网关、Deno 细粒度权限(仅 copilot) |
-| Layer 3 | Audit trail | `/var/log/daedalus/audit.jsonl` SHA-256 哈希链(genesis 为 `0`*64,`syscall.Flock` 串行追加),唯一写入口 `daedalus-audit`,`verify` 子命令可回放校验,金样向量钉字节兼容 |
+| Layer 3 | Audit trail | `/var/log/daedalus/audit.jsonl` SHA-256 哈希链(genesis 为 `0`*64,`syscall.Flock` 串行追加),唯一合规写入口是 SDK `audit.LogAudit`,`verify` 子命令可回放校验,金样向量钉字节兼容 |
 
 分层细节:
 
@@ -117,8 +117,9 @@ Copilot 自身从不直接执行 shell,执行模型如下:
   Landlock 做路径级访问约束,seccomp 收 `@system-service`、拒 `@privileged` / `@resources`,
   `LoadCredential=` 让密钥永不进镜像;能力读写边界由 policy 分级强制,而非依赖「进程只读」假设。
 - **Layer 3 · 证据**:genesis 为 `0`*64,`entry_hash = SHA256(timestamp+identity+tool+args_str+outcome+prev_hash)`,
-  `syscall.Flock` 串行追加,金样向量钉字节级兼容;所有写入方(能力服务器、宿主、copilot)
-  都走 `daedalus-audit` CLI,审计文件禁直写。
+  `syscall.Flock` 串行追加,金样向量钉字节级兼容;唯一合规写入口是 SDK `audit.LogAudit`
+  —— 能力服务器与宿主/事务在进程内直调它,copilot 经 `daedalus-audit` CLI 跨进程桥接;
+  审计文件禁直写。
 - **策略单点**:`files/system/opt/daedalus/shared/policy.toml` 是唯一事实源,缺失或损坏一律拒启;
   回退内置 `Default()` 需 `DAEDALUS_POLICY_MODE=development` 显式 opt-in,并有漂移测试守门。
 
@@ -140,8 +141,8 @@ Spec(资源声明) → Tx(事务五步) → Observe(state 缓存) → Audit(哈�
 3. **Observe(观测面)**:只读查询(`service.query` / `service.list` 等)写 `state.jsonl`
    追加式缓存,行形 `StateEntry{kind, name, observed_at, payload}`;派生缓存与证据层分离。
    `desiredview` 再从 journal replay 出当前期望视图,读观测与读证据因此解耦。
-4. **Audit(横切证据)**:事务每步经 `daedalus-audit` 盖 TxID + TxStep 二级链,
-   审计文件禁直写,单笔变更因此可解释、可回放、可回滚。
+4. **Audit(横切证据)**:事务每步经 SDK `audit.LogAudit` 在进程内盖 TxID + TxStep 二级链
+   (`cmd/daedalus-tx/stamp.go`),审计文件禁直写,单笔变更因此可解释、可回放、可回滚。
 
 双层回滚兜底:事务级 before/after 快照与逆序计划管「单次变更」,bootc 部署级原子回滚管「整个部署」,
 两个粒度各自可退(VISION.md §7④)。
@@ -167,6 +168,8 @@ Spec(资源声明) → Tx(事务五步) → Observe(state 缓存) → Audit(哈�
 - 编号脚本按 stage 白名单执行:`10-50` 上游基础、`64` dnf 镜像源、`60`/`63` 目录结构与状态、
   `65` AI 安全基础、`70`/`70a`/`75` MCP 服务与 copilot、`76` 插件生成与 systemd 渲染、
   `77-79` xrdp / 开发账号 / sddm、`90`/`91` 签名与 image info;漏列的脚本不会执行。
+  (`60` 之后的 Daedalus 脚本在本仓 `files/scripts/`;`10-50`/`64`/`77-79`/`90`/`91` 属
+  gitignored 的 `base_image/` vendor 树,不在本仓校对范围内。)
 - 阶段间状态靠共享 rootfs 传递;改脚本后需 `--no-cache` 重跑对应 stage
   (脚本经 bind mount 进容器,不进镜像层缓存 key)。
 - 收尾 `RUN bootc container lint` 校验镜像合规,产出 `localhost/daedalus-os:latest`。

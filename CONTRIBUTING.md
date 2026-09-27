@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- **Go** 1.22+ (推荐 1.23+)
+- **Go** 1.25+（`go.mod` 声明 `go 1.25.0` 且构建用 `GOTOOLCHAIN=local`，低版本无法构建）
 - **Deno** 1.x (仅 copilot 插件开发需要)
 - **Podman** / **Docker** (镜像构建)
 - **just** (命令运行器,类 make)
@@ -81,8 +81,8 @@ go test ./...
 go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 
-# 金样向量重放（audit 包）
-go test -run TestGolden ./audit/...
+# 金样向量重放（audit 包在 ../daedalus-sdk/，本仓无 ./audit/）
+cd ../daedalus-sdk && go test -run TestGolden ./audit/...
 ```
 
 ### Deno Tests（仅 copilot）
