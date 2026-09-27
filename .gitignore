@@ -14,5 +14,12 @@ go.work.sum
 # 构建产物(just go-build / just plugin-pack 落位的二进制与插件 zip,不入库)
 bin/
 
+# 镜像安装态二进制不入库(见 AGENTS「镜像安装态策略」)。插件侧 files/system/opt/
+# daedalus/plugins/*/bin/ 已被上方 `bin/` 覆盖;`bin/` 同样会连带忽略整个
+# files/system/usr/local/bin/ 目录,故先解禁目录,再按 `daedalus-*` 排除 plugin-pack
+# 现构产物 —— 手写的 `daedalus` CLI wrapper 无后缀、是源码,必须入库。
+!files/system/usr/local/bin/
+files/system/usr/local/bin/daedalus-*
+
 # OhMyOpenCode 编排状态(不入库)
 .omo/

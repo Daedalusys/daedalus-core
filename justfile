@@ -185,12 +185,10 @@ plugin-pack: blueprint-embed
         "./bin/daedalus-plugin-pack" -in "${stage}" -out "bin/${id}.plugin.zip"
         if [ "${cap}" = "dupe" ] || [ "${cap}" = "trace" ] || [ "${cap}" = "proc" ]; then
             # dupe/trace/proc 仅 TMPDIR 解包校验、不进 files/system,理由(zip 照常产出到 core bin/):
-            #   1) 三者的安装态从未入库(git ls-files 中 daedalus.dupe/、daedalus.trace/、
-            #      daedalus.proc/ 零条目),
-            #      往入库树写入是净新增未跟踪残留;
-            #      2) CI 镜像供料腿 fetch-plugins.sh 只解 6 个 zip、不含 dupe/trace/proc;
-            #   3) 校验语义不降级:zip 仍经 -verify --keep 解压到临时空目录,解压即完整校验、
-            #      fail-closed。正式入库(安装态 commit + release + fetch)时删掉此分支即可。
+            #   1) CI 镜像供料腿 fetch-plugins.sh 只解 6 个 zip、不含 dupe/trace/proc,
+            #      写进 files/system 也不进镜像,只是净新增本地残留(安装态整体不入库);
+            #   2) 校验语义不降级:zip 仍经 -verify --keep 解压到临时空目录,解压即完整校验、
+            #      fail-closed。供料腿纳入这三个 zip 时删掉此分支即可。
             vdir="${TMPDIR:-/tmp}/daedalus-plugin-pack-verify/${id}"
             mkdir -p "${vdir}"
             find "${vdir}" -mindepth 1 -delete 2>/dev/null || true
