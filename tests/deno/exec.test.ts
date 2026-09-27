@@ -343,8 +343,9 @@ Deno.test("Copilot Exec - supports configurable shell binary path via DAEDALUS_S
 
 // exec.ts resolveShellBinary() ④ 号开发态回退候选:与实现逐字 1:1 对齐
 // (顺序、字符串都不得漂移)。3 仓拆分后 core bin/daedalus-shell 死链与
-// 10 层向上回溯均已删除;唯一活候选 = plugin-pack 落位并随仓 checkout 的
-// 安装态,三种形态覆盖不同调用 cwd(仓库根 / 物理根软链 / 平级仓)。
+// 10 层向上回溯均已删除;唯一活候选 = plugin-pack 现构落位的安装态
+// (不入库,跑本套件前须先 just plugin-pack),三种形态覆盖不同调用 cwd
+// (仓库根 / 物理根软链 / 平级仓)。
 const SHELL_DEV_CANDIDATES = [
   "files/system/usr/local/bin/daedalus-shell",
   "daedalus-core/files/system/usr/local/bin/daedalus-shell",
@@ -367,9 +368,9 @@ Deno.test("Copilot Exec - default resolution finds the real Go daedalus-shell bi
   // 在开发态真实文件系统上能解析到一个可 stat 的 Go 二进制。
   // 三仓拆分(5353931)后 core `./cmd/...` 不再构建 shell(主源在
   // ../daedalus-plugins/shell),旧 daedalus-core/bin/ 候选与向上回溯链
-  // 已整体移除;仓内真实存在的 Go 二进制实物是入库安装态
-  // files/system/usr/local/bin/daedalus-shell(plugin-pack 产物,随仓
-  // checkout)。
+  // 已整体移除;仓内真实存在的 Go 二进制实物是安装态
+  // files/system/usr/local/bin/daedalus-shell —— just plugin-pack 现构产物,
+  // 不入库,故本断言要求先跑过 plugin-pack(CI 由 workflow 的现构步骤补上)。
   const origEnv = Deno.env.get("DAEDALUS_SHELL_BIN");
   try {
     Deno.env.delete("DAEDALUS_SHELL_BIN");
@@ -393,8 +394,8 @@ Deno.test("Copilot Exec - env-unset resolution order pins production-precedence 
   // 实际被 spawn 的二进制路径,断言其逐字符等于按实现同款顺序计算出的期望:
   //   生产路径存在 → 生产路径(② 字节冻结守护轨优先于一切开发态候选);
   //   否则 devCandidates 序首个存在者(④ —— 开发机/CI 上 /usr/local/bin 无
-  //     实物、安装态随仓 checkout,故本断言实际锁定"仓库根 cwd 下解析返回
-  //     files/system/usr/local/bin/daedalus-shell");
+  //     实物、安装态由 plugin-pack 现构落位,故本断言实际锁定"仓库根 cwd
+  //     下解析返回 files/system/usr/local/bin/daedalus-shell");
   //   全缺 → 回退生产路径(友好错误)。
   setup();
   const origEnv = Deno.env.get("DAEDALUS_SHELL_BIN");
