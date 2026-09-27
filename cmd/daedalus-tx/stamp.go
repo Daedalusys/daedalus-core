@@ -4,7 +4,7 @@ package main
 //
 // 盖章规则:
 //   - 只有 begin(step 0)/ apply(步 1..N 升序)/ rollback(步 N+1..)携带 Entry.TxID/TxStep;
-//   - propose 与 status 发出**空 TxID**条目(tx-id 仅存在于 args 对象里)。
+//   - propose、status 与 resolve 发出**空 TxID**条目(tx-id 仅存在于 args 对象里)。
 //   - identity=daedalus-tx, tool=daedalus_tx_<sub>; 尽力而为发射(写失败静默,
 //     绝不拖垮子命令本体), 镜像 daedalus-host/main.go 的 hostAudit。
 //
@@ -12,7 +12,7 @@ package main
 // 指向"本事务上一条 in-tx 记录"的 entry_hash。本 CLI 在 apply/rollback 开始时**扫描一次**
 // 审计日志尾部取该事务的最大 tx_step 与对应 entry_hash(prevHash), 之后进程内多步用
 // LogAudit 返回的 rec.EntryHash 本地串接(不重复扫描)。begin 的创世 tx_prev_hash 则交给
-// internal/audit 的 flock 内播种(LogAudit: TxID!=""&&TxPrevHash=="" → lastNonTxRecord)。
+// SDK audit 包的 flock 内播种(LogAudit: TxID!=""&&TxPrevHash=="" → lastNonTxRecord)。
 
 import (
 	"bufio"
@@ -23,18 +23,6 @@ import (
 
 	"github.com/Daedalusys/daedalus-sdk/audit"
 )
-
-// outcomeOf 把退出码映射为审计 outcome(success/error/denied), 与 host 一致。
-func outcomeOf(code int) string {
-	switch code {
-	case exitRuntime:
-		return "error"
-	case exitUsage:
-		return "denied"
-	default:
-		return "success"
-	}
-}
 
 // argsVal 把 map 序列化为审计 args 的 *audit.Value; 编码失败兜底原始字符串(不应发生)。
 func argsVal(m map[string]any) *audit.Value {
@@ -49,7 +37,7 @@ func argsVal(m map[string]any) *audit.Value {
 	return v
 }
 
-// stampPlain 发一条**空 TxID**的事务外围审计(propose/status): tx-id 只在 args 里。
+// stampPlain 发一条**空 TxID**的事务外围审计(propose/status/resolve): tx-id 只在 args 里。
 // best-effort: 任何写失败静默忽略(返回 "" 表示未落盘, 供调用方忽略即可)。
 func stampPlain(sub, id, outcome string) {
 	_, _ = audit.LogAudit(audit.Entry{ //nolint:errcheck // 尽力而为, 与 hostAudit 同纪律

@@ -3,7 +3,7 @@
 // files/system/opt/daedalus/shared/policy.toml 三点一致。
 // (替代已随 task 5 删除的 py↔deno parity 测试。)
 //
-// ⚠ 同步义务:任何人修改 Go 侧 internal/shellpolicy 或 policy.toml 的
+// ⚠ 同步义务:任何人修改 Go 侧 daedalus-sdk/shellpolicy 或 policy.toml 的
 // 白名单/前缀/黑名单集合时,必须同步修改 policy.ts 冻结副本,否则本文件必红。
 // 本测试通过直接解析 Go 源文件与 TOML 的字符串字面量做集合比对,
 // 不依赖 Go 工具链,保证 `deno test` 单独可跑。
@@ -50,7 +50,7 @@ function extractTomlArray(src: string, key: string): string[] {
 
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
-Deno.test("跨语言契约 - policy.ts 冻结 ALLOW_COMMANDS 恰为 15 项(与 internal/shellpolicy 默认一致)", () => {
+Deno.test("跨语言契约 - policy.ts 冻结 ALLOW_COMMANDS 恰为 15 项(与 daedalus-sdk/shellpolicy 默认一致)", () => {
   expect(DEFAULT_ALLOW_COMMANDS.size).toBe(15);
 });
 

@@ -78,5 +78,17 @@
   "help.example.run": "  daedalus check memory",
   "help.example.dry_run": "  daedalus --dry-run delete temp files",
   "help.example.interactive": "  daedalus -i remove old logs",
-  "help.example.repl": "  daedalus (starts interactive REPL mode)"
+  "help.example.repl": "  daedalus (starts interactive REPL mode)",
+  "blueprint.list.title": "Daedalus Blueprints",
+  "blueprint.list.empty": "No blueprints available.",
+  "blueprint.inspect.missing": "Blueprint \"{0}\" not found.",
+  "blueprint.render.ok": "Blueprint \"{0}\" rendered as plan {1} (target: {2}).",
+  "blueprint.render.schemaError": "Parameters failed blueprint \"{0}\" validation: {1}",
+  "blueprint.apply.ok": "Blueprint plan {0} applied to {1}.",
+  "blueprint.apply.error": "Blueprint plan {0} apply failed: {1}",
+  "blueprint.apply.confirm": "Apply blueprint plan {0}? [y]es / [n]o: ",
+  "blueprint.remove.ok": "Blueprint plan {0} removed.",
+  "blueprint.status.installed": "Blueprint plan {0} installed: {1}",
+  "blueprint.status.absent": "Blueprint plan {0} not installed.",
+  "blueprint.error.not_plan": "Plan {0} does not exist or has been consumed; re-render first."
 }

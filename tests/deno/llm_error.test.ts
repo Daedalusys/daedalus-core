@@ -75,8 +75,10 @@ Deno.test("parseTimeoutMs - 未设置环境变量时回退默认 30000", () => {
   expect(parseTimeoutMs()).toBe(30_000);
 });
 
-Deno.test("parseTimeoutMs - 非正数与非数字字符串一律回退默认 30000", () => {
-  for (const raw of ["0", "-100", "abc", "", "  "]) {
+Deno.test("parseTimeoutMs - 非正数与形状非法的字符串一律回退默认 30000", () => {
+  // 后半组是 parseInt 静默前缀解析的回归用例:"1e5" 会被读成 1、"30s" 读成 30,
+  // 落到 clamp 下限后每条请求 1s 就 abort——形状门必须把它们整体拒回默认。
+  for (const raw of ["0", "-100", "abc", "", "  ", "1e5", "30s", "0x10", "+5000", "5_000"]) {
     Deno.env.set("DAEDALUS_LLM_TIMEOUT_MS", raw);
     expect(parseTimeoutMs()).toBe(30_000);
   }

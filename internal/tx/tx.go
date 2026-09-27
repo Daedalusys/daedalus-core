@@ -1,4 +1,4 @@
-// 事务(tx)生命周期与日志(journal)原语 —— AIOS 对象模型 C3 核心。
+// 事务(tx)生命周期与日志(journal)原语。
 //
 // 职责边界(与后续消费者的分工):
 //   - 本包只做状态机 + 持久化 + 回滚计划生成;不执行任何适配器动作
@@ -9,12 +9,18 @@
 //     锁定的线上契约,改动即破坏下游解析。
 //
 // 持久化模型:每个事务一个 JSON 文件 `<root>/<tx-id>.json`,root 由
-// internal/dirs.TxRoot() 解析(env DAEDALUS_TX_DIR → /var/lib/daedalus/tx →
+// daedalus-sdk/dirs.TxRoot() 解析(env DAEDALUS_TX_DIR → /var/lib/daedalus/tx →
 // $HOME/.local/share/daedalus/tx),本包绝不复制任何路径字面量。
 // 整个 Transaction 序列化为一个 JSON 文档,在 flock(LOCK_EX) 下整体重写
 // (镜像 audit.go 的加锁纪律:O_RDWR|O_CREATE 打开 → LOCK_EX →
 // defer 注册晚于 Close → LIFO 退出时先 LOCK_UN 再 Close,保证链式写无竞态、
 // 文件内容永远是完整文档而不是撕裂的半截)。
+//
+// 比较并写回(CAS):持锁后先读盘、与内存基线(最近一次成功读/写的全文)逐字节
+// 比对,不一致即 ErrConcurrentModify 并**拒绝落盘**。 flock 只串行化写的一瞬间,
+// 不加 CAS 时两个进程各自 Load 到的旧快照会以后写者覆盖前者(read-modify-write
+// 丢写),状态机的非法迁移判定也只看自己内存态、形同虚设。基线缺失(内存构造后
+// 首次保存)同样拒绝——无法证明盘上文档未被第三方改过。
 //
 // 路径安全(三道防线按序生效):
 //  1. 形状门:tx-id 必须匹配 ^[a-f0-9]{16}$(crypto/rand 8 字节小写十六进制)。
@@ -32,6 +38,7 @@
 package tx
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -82,7 +89,7 @@ var legalTransitions = map[Status]map[Status]bool{
 }
 
 // 哨兵错误:CLI 用 errors.Is 区分退出码(非法 id → exit 2 用法错;
-// 未找到 → exit 1;非法迁移 → exit 1 状态冲突)。
+// 未找到 → exit 1;非法迁移/并发冲突/日志损坏 → exit 1,均为状态冲突)。
 var (
 	// ErrInvalidID 表示 tx-id 未通过 ^[a-f0-9]{16}$ 形状门(路径安全第 1 道防线)。
 	ErrInvalidID = errors.New("tx: 事务 ID 非法")
@@ -92,6 +99,12 @@ var (
 	ErrAlreadyExists = errors.New("tx: 事务日志已存在")
 	// ErrInvalidTransition 表示迁移不在状态迁移表内。
 	ErrInvalidTransition = errors.New("tx: 非法状态迁移")
+	// ErrConcurrentModify 表示盘上日志已被其他进程改写(持锁重读后逐字节比对失败),
+	// 本次写回被拒;调用方必须 Load 最新文档再决定,绝不能假定自己仍持有权威写入权。
+	ErrConcurrentModify = errors.New("tx: 事务日志已被并发修改")
+	// ErrJournalCorrupt 表示持锁重读时盘上文档为空或解析失败(撕裂/手改/被截断),
+	// fail-closed 拒绝覆盖。
+	ErrJournalCorrupt = errors.New("tx: 事务日志内容损坏")
 )
 
 // txIDPattern 锁定 tx-id 形状:crypto/rand 8 字节 → 16 位小写十六进制。
@@ -140,7 +153,10 @@ type Transaction struct {
 
 	// journalPath 是构造期即锁定的日志路径(已过三道路径安全门)。
 	journalPath string
-	// mu 串行化同进程内对同一 *Transaction 的并发 Append/Mark*(跨进程由 flock 兜底)。
+	// diskDoc 是 CAS 基线:最近一次成功读盘(Load)或成功写盘(create/save)得到的
+	// 日志全文逐字节。nil = 尚无基线,此时 save 拒绝写盘。只在持 t.mu 的路径上读写。
+	diskDoc []byte
+	// mu 串行化同进程内对同一 *Transaction 的并发 Append/Mark*(跨进程由 flock + diskDoc 兜底)。
 	mu sync.Mutex
 }
 
@@ -219,6 +235,8 @@ func Load(id string) (*Transaction, error) {
 		return nil, fmt.Errorf("tx: 日志 %s 含未知状态 %q", id, t.Status)
 	}
 	t.journalPath = path
+	// 读到的全文即 CAS 基线:此后任何写盘都以"盘上仍是这一份字节"为前提。
+	t.diskDoc = data
 	return &t, nil
 }
 
@@ -259,6 +277,8 @@ func (t *Transaction) MarkFailed() error     { return t.mark(StatusFailed) }
 
 // mark 是所有状态迁移的唯一入口(表驱动,表外即拒)。置为 applied 时顺带
 // 固化回滚计划(BuildRollbackPlan 纯函数,适配器逆向动作不属于本包)。
+// 迁移失败有两类:内存态非法迁移(ErrInvalidTransition)与写盘时的跨进程冲突
+// (ErrConcurrentModify / ErrJournalCorrupt)—— 两类都回退内存态,保证内存与日志不分叉。
 func (t *Transaction) mark(to Status) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -321,19 +341,27 @@ func journalPath(root, id string) (string, error) {
 	return path, nil
 }
 
-// create 以 O_EXCL 独占创建日志并写入初始态(幂等防线,见 beginWithID 注释);
-// save 整体重写日志。两者仅由持 t.mu 的调用路径使用(进程内一致性由互斥锁保证),
-// 跨进程串行交给文件 flock。
-func (t *Transaction) create() error { return t.persist(os.O_RDWR | os.O_CREATE | os.O_EXCL) }
-func (t *Transaction) save() error   { return t.persist(os.O_RDWR | os.O_CREATE) }
+// create 以 O_EXCL 独占创建日志并写入初始态(幂等防线,见 beginWithID 注释):
+// O_EXCL 命中已存在文件 → ErrAlreadyExists(Begin 绝不覆盖)。
+// save 以 CAS 重写日志:持锁后先重读盘上文档并与基线比对,分歧即拒。
+// 两者仅由持 t.mu 的调用路径使用(进程内一致性由互斥锁保证),
+// 跨进程串行交给文件 flock + 基线比对。
+func (t *Transaction) create() error { return t.persist(os.O_RDWR|os.O_CREATE|os.O_EXCL, false) }
+func (t *Transaction) save() error   { return t.persist(os.O_RDWR|os.O_CREATE, true) }
 
-// persist 以指定 flags 打开日志并在 LOCK_EX 下重写全文。加锁纪律镜像
-// audit.go 同款纪律:open → LOCK_EX → defer 注册晚于 Close → LIFO 退出时先
-// LOCK_UN 再 Close;锁加在文件自身 fd 上,跨进程互斥,保证文件内容永远是
-// 完整 JSON 文档(撕裂写不可能;O_EXCL 新建场景下截断空文件是恒等操作,
-// 截断只发生在持锁之后,读者绝看不到半截文档)。
-// O_EXCL 命中已存在文件 → ErrAlreadyExists(Begin 幂等防线,绝不覆盖)。
-func (t *Transaction) persist(flags int) error {
+// persist 以指定 flags 打开日志,在 LOCK_EX 下(可选)校验盘上文档、再重写全文。
+// 加锁纪律镜像 audit.go:open → LOCK_EX → defer 注册晚于 Close → LIFO 退出时先
+// LOCK_UN 再 Close;锁加在文件自身 fd 上,跨进程互斥,保证文件内容永远是完整
+// JSON 文档(撕裂写不可能;截断只发生在持锁之后,读者绝看不到半截文档)。
+//
+// cas=true 时的写门(全部在持锁之后、截断之前):
+//  1. 盘上文档必须非空、可解析、内容 id 与文件名 id 一致、状态在全集内,
+//     否则 ErrJournalCorrupt(绝不覆盖已被外部改坏的文件);
+//  2. 内存基线必须存在,否则 ErrConcurrentModify(无基线无法证明盘上文档权威);
+//  3. 盘上字节必须与基线逐字节相等,否则 ErrConcurrentModify(其他进程已改写)。
+//
+// 序列化放在截断之前:marshal 失败也只返回错误,不会留下被清空的日志。
+func (t *Transaction) persist(flags int, cas bool) error {
 	f, err := os.OpenFile(t.journalPath, flags, journalFileMode)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -347,23 +375,64 @@ func (t *Transaction) persist(flags int) error {
 	}
 	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 
+	if cas {
+		current, err := readLocked(f, t.ID)
+		if err != nil {
+			return err
+		}
+		if t.diskDoc == nil {
+			return fmt.Errorf("%w: 内存事务无基线,拒绝对盘上 %d 字节日志覆盖写", ErrConcurrentModify, len(current))
+		}
+		if !bytes.Equal(current, t.diskDoc) {
+			return fmt.Errorf("%w: 基线 %d 字节 ≠ 盘上 %d 字节,本次写回放弃(需 Load 最新日志)",
+				ErrConcurrentModify, len(t.diskDoc), len(current))
+		}
+	}
+	data, err := json.Marshal(t)
+	if err != nil {
+		return fmt.Errorf("tx: 序列化事务失败: %w", err)
+	}
+	data = append(data, '\n')
 	if err := f.Truncate(0); err != nil {
 		return fmt.Errorf("tx: 截断日志失败: %w", err)
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("tx: 定位日志失败: %w", err)
 	}
-	data, err := json.Marshal(t)
-	if err != nil {
-		return fmt.Errorf("tx: 序列化事务失败: %w", err)
-	}
-	if _, err := f.Write(append(data, '\n')); err != nil {
+	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("tx: 写入日志失败: %w", err)
 	}
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("tx: flush 日志失败: %w", err)
 	}
+	t.diskDoc = data
 	return nil
+}
+
+// readLocked 在**已持 LOCK_EX** 的 fd 上读出并校验日志全文,返回原始字节供
+// CAS 逐字节比对。空文档、非法 JSON、内容 id 掉包、未知状态一律 fail-closed。
+func readLocked(f *os.File, id string) ([]byte, error) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("tx: 定位日志失败: %w", err)
+	}
+	current, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fmt.Errorf("tx: 读取日志失败: %w", err)
+	}
+	if len(bytes.TrimSpace(current)) == 0 {
+		return nil, fmt.Errorf("%w: 日志 %s 为空(被外部截断),拒绝覆盖", ErrJournalCorrupt, id)
+	}
+	var probe Transaction
+	if err := json.Unmarshal(current, &probe); err != nil {
+		return nil, fmt.Errorf("%w: 日志 %s 解析失败: %v", ErrJournalCorrupt, id, err)
+	}
+	if probe.ID != id {
+		return nil, fmt.Errorf("%w: 日志内容 id %q 与文件名 id %q 不一致(疑似掉包)", ErrJournalCorrupt, probe.ID, id)
+	}
+	if !validStatus(probe.Status) {
+		return nil, fmt.Errorf("%w: 日志 %s 含未知状态 %q", ErrJournalCorrupt, id, probe.Status)
+	}
+	return current, nil
 }
 
 // validStatus 判定状态 token 是否在全集内(Load 的 fail-closed 内容门)。

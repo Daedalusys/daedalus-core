@@ -1,9 +1,9 @@
 package main
 
-// commands.go —— 五个子命令的编排。
+// commands.go —— 六个子命令的编排。
 //
 // 分工: 本文件只做"解析 → 调 internal/tx 与适配器 → 盖章 → 打印"的流程;
-// 生命周期/日志/回滚计划在 internal/tx, 审计播种在 internal/audit, 盖章链在 stamp.go。
+// 生命周期/日志/回滚计划在 internal/tx, 审计播种在 SDK audit 包, 盖章链在 stamp.go。
 // 一切副作用之前先过 id 形状门(wantIDArgs), 非法 id 绝不触碰日志路径。
 
 import (
@@ -22,7 +22,7 @@ func cmdBegin(stdout, stderr io.Writer) int {
 	if err != nil {
 		return failRuntime(stdout, stderr, fmt.Sprintf("创建事务失败: %v", err))
 	}
-	// begin 步 0: 传空 prevHash, 由 internal/audit 的 flock 内播种取最近非 tx 记录哈希。
+	// begin 步 0: 传空 prevHash, 由 SDK audit 包的 flock 内播种取最近非 tx 记录哈希。
 	stampTx("begin", t.ID, 0, "", "success", nil)
 	printJSON(stdout, beginDoc{TxID: t.ID})
 	return exitOK
@@ -159,8 +159,9 @@ func cmdRollback(args []string, stdout, stderr io.Writer) int {
 		return failRuntime(stdout, stderr, "nothing to rollback")
 	case tx.StatusRolledBack:
 		return failRuntime(stdout, stderr, "事务已回滚")
-	default: // applying: 半途, 拒绝并发回滚
-		return failRuntime(stdout, stderr, "事务正在应用中, 无法回滚")
+	default: // applying: 半途, 拒绝并发回滚(崩溃卡死场景先 resolve 判 failed 再回滚)
+		return failRuntime(stdout, stderr,
+			"事务正在应用中, 无法回滚(若施加进程已崩溃, 用 daedalus-tx resolve <tx-id> 判定为 failed)")
 	}
 
 	tail := scanTxTail(id)
@@ -183,6 +184,41 @@ func cmdRollback(args []string, stdout, stderr io.Writer) int {
 			return failRuntime(stdout, stderr, fmt.Sprintf("标记 rolled_back 失败: %v", err))
 		}
 	}
+	printJSON(stdout, t)
+	return exitOK
+}
+
+// cmdResolve 崩溃恢复路径:apply 在 MarkApplying 之后、MarkApplied/MarkFailed 之前
+// 被硬杀/断电, 日志永久停在 applying —— 施加进程已不存在, 状态机却拒绝
+// apply 重入(applying→applying 非法)与 rollback(applying 无出边到 rolled_back)。
+// applying→failed 是状态表内唯一合法出边, 本命令只做这一迁移, 不代为回滚:
+// 崩溃时落盘日志里各步 OpResult 未固化(只有内存态更新过), 无法区分哪些步骤
+// 真正施加过; 真实执行轨迹只存在于审计链(tx_apply 条目), 操作员据此走
+// status 回读 + rollback(只回滚可证前缀)或重新发起事务。
+//
+// 竞态说明:若施加进程其实仍存活(未崩溃),两个进程各持一份 Load 得到的内存快照,
+// 后写者会在持锁重读时撞上基线分歧(ErrConcurrentModify)而 exit 1 ——
+// fail-closed:宁可双进程互斥报错, 绝不让同一事务在未知进度上被后写者覆盖前写者。
+// 盖**空 TxID** 外围审计(resolve 无步语义, 与 propose/status 同类)。
+func cmdResolve(args []string, stdout, stderr io.Writer) int {
+	id, code, ok := wantIDArgs(args, stdout, stderr)
+	if !ok {
+		return code
+	}
+	t, code, ok := mustLoad(id, stdout, stderr)
+	if !ok {
+		return code
+	}
+	if t.Status != tx.StatusApplying {
+		stampPlain("resolve", id, "error")
+		return failRuntime(stdout, stderr,
+			fmt.Sprintf("resolve 仅适用于卡在 applying 的事务(当前 %s)", t.Status))
+	}
+	if err := t.MarkFailed(); err != nil {
+		stampPlain("resolve", id, "error")
+		return failRuntime(stdout, stderr, fmt.Sprintf("判定 failed 失败: %v", err))
+	}
+	stampPlain("resolve", id, "success")
 	printJSON(stdout, t)
 	return exitOK
 }

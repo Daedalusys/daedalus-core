@@ -8,9 +8,10 @@
 # 用法:从仓库根执行(CI 与本地 dev 均适用)。
 set -euo pipefail
 
-SRC="daedalus/files/system/opt/daedalus/shared/policy.toml"
-DST="daedalus-sdk/policy/testdata/policy.toml"
+SRC="files/system/opt/daedalus/shared/policy.toml"
+DST="../daedalus-sdk/policy/testdata/policy.toml"
 
-[ -f "$SRC" ] || { echo "错误:生产策略不存在: $SRC(请从仓库根执行)" >&2; exit 1; }
+[ -f "$SRC" ] || { echo "错误:生产策略不存在: $SRC(请从 daedalus-core 仓库根执行)" >&2; exit 1; }
+[ -d "$(dirname "$DST")" ] || { echo "错误:SDK 兄弟仓夹具目录不存在: $(dirname "$DST")(需 core 与 daedalus-sdk 平级检出)" >&2; exit 1; }
 cp "$SRC" "$DST"
 echo "已同步: $SRC -> $DST"

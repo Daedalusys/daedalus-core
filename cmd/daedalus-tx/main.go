@@ -6,12 +6,13 @@
 //	daedalus-tx propose  <tx-id> <adapter> <args-json> [--unit-dir <path>]
 //	daedalus-tx apply    <tx-id> [--unit-dir <path>]
 //	daedalus-tx rollback <tx-id> [--unit-dir <path>]
+//	daedalus-tx resolve  <tx-id>
 //	daedalus-tx status   <tx-id>
 //
 // stdout 契约(每条子命令**恰一份**机器可读 JSON 文档; 上层 copilot 层
 // 解析 CLI stdout, 而非 JSON-RPC):
 //   - begin   → {"tx_id":"<16hex>"}
-//   - propose/apply/rollback/status → 事务日志全文(id/created_at/status/steps/rollback_plan)
+//   - propose/apply/rollback/resolve/status → 事务日志全文(id/created_at/status/steps/rollback_plan)
 //   - 一切错误 → {"error":"..."} 且退出码非零
 //
 // 退出码与 daedalus 家族 CLI 对齐(镜像 cmd/daedalus-host/main.go):
@@ -23,8 +24,8 @@
 //
 // ★ 审计盖章规则(本文件承重): 只有 begin(step 0)/
 // apply(步 1..N 升序)/rollback(步 N+1..)的事务条目携带 Entry.TxID/TxStep;
-// propose 与 status 发出**空 TxID** 条目(tx-id 只在 args 里)。identity=daedalus-tx,
-// tool=daedalus_tx_<sub>。begin 的 tx_prev_hash 由 internal/audit 的 flock 内播种
+// propose、status 与 resolve 发出**空 TxID** 条目(tx-id 只在 args 里)。identity=daedalus-tx,
+// tool=daedalus_tx_<sub>。begin 的 tx_prev_hash 由 SDK audit 包的 flock 内播种
 // (见 audit.LogAudit); apply/rollback 的步链由本 CLI 扫描审计日志
 // 取该事务上一条 in-tx 记录 entry_hash 显式串接(跨进程续链)。
 package main
@@ -81,6 +82,8 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		return cmdApply(args, stdout, stderr)
 	case "rollback":
 		return cmdRollback(args, stdout, stderr)
+	case "resolve":
+		return cmdResolve(args, stdout, stderr)
 	case "status":
 		return cmdStatus(args, stdout, stderr)
 	default:
@@ -153,6 +156,7 @@ func usage() string {
 		"  daedalus-tx propose  <tx-id> <adapter> <args-json> [--unit-dir <path>]\n" +
 		"  daedalus-tx apply    <tx-id> [--unit-dir <path>]\n" +
 		"  daedalus-tx rollback <tx-id> [--unit-dir <path>]\n" +
+		"  daedalus-tx resolve   <tx-id>\n" +
 		"  daedalus-tx status   <tx-id>\n\n" +
 		"旗标: --unit-dir <path> —— service.set 单元文件解析目录覆写(集成测试逃生舱;\n" +
 		"      不给时按 $HOME/.config/systemd/user 解析; 只影响解析目录, 守卫恒生效)。\n" +
@@ -171,10 +175,4 @@ func registeredAdapterNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// i18nUsageErr 保留一个稳定的未知子命令消息钩子(当前直接英文/中文内联, 不引 i18n
-// 键面, 以免 tx CLI 在未定义 locale 键时产生噪声; 未来 i18n 化在此收敛)。
-func i18nUsageErr(sub string) string {
-	return fmt.Sprintf("未知子命令: %s", sub)
 }

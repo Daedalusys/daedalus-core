@@ -184,13 +184,16 @@ const RETRY_DELAY_MS = 2_000;
 export const _retryDelayMsForTest: { ms: number } = { ms: RETRY_DELAY_MS };
 
 /**
- * 解析 LLM 请求超时(毫秒):env DAEDALUS_LLM_TIMEOUT_MS 未设/非数字/非正回退
+ * 解析 LLM 请求超时(毫秒):env DAEDALUS_LLM_TIMEOUT_MS 未设/非十进制整数/非正回退
  * 默认 30000,合法值 clamp 到 [1000, 300000](防 0 立即 abort、防超大值永久挂起)。
+ * 形状门与 exec.ts resolveWatchdogTimeoutMs 同源:parseInt 的静默前缀解析
+ * ("1e5" → 1、"30s" → 30)会把操作员写的覆写值读成另一回事,宁可回退默认。
  */
 export function parseTimeoutMs(): number {
   const raw = getEnv("DAEDALUS_LLM_TIMEOUT_MS");
   if (!raw) return DEFAULT_TIMEOUT_MS;
-  const n = Number.parseInt(raw, 10);
+  if (!/^\d+$/.test(raw)) return DEFAULT_TIMEOUT_MS;
+  const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_TIMEOUT_MS;
   return Math.min(300_000, Math.max(1_000, n));
 }

@@ -1,11 +1,7 @@
-# daedalus/core 模块级忽略项(blueprint 嵌入数据)。
+# daedalus-core 模块级忽略项。
 #
-# cmd/daedalus-blueprint/blueprints/ 是构建期复制产物(just blueprint-embed 用
-# rsync 从 daedalus/plugin/blueprint/blueprints/ 复制而来),供 //go:embed
-# all:blueprints/* 编入二进制。不入库——源码侧
-# daedalus/plugin/blueprint/blueprints/ 才是唯一事实源,复制产物随时可再生成。
-cmd/daedalus-blueprint/blueprints/
-daedalus-blueprint
+# 蓝图嵌入数据副本(blueprint-embed rsync 产物)不在本仓——能力源码与
+# 其忽略规则都在兄弟仓 daedalus-plugins/(见该仓 .gitignore)。
 
 # go.work 本地 dev 桥(3 仓平级 clone 后生成;不入库;模板 go.work.example 入库)
 go.work

@@ -1,11 +1,6 @@
 /**
- * Daedalus OS Copilot 命令执行桥接器。
- *
- * 启动沙箱化的 daedalus-shell Go MCP 服务器二进制（stdio JSON-RPC），
- * 并按行分隔执行 JSON-RPC 2.0 握手以调用 `shell_exec` 能力工具。
- *
- * 强制执行 40 秒看门狗定时器，将子进程的 stderr 与 stdout 分离，
- * 通过 SIGINT 监听器处理进程清理，并对 JSON-RPC 结果进行二次解析。
+ * Daedalus OS Copilot 命令执行桥接器：启动沙箱化 daedalus-shell Go MCP 服务器（stdio JSON-RPC），
+ * 按行分隔 JSON-RPC 2.0 握手调用 `shell_exec`；强制 40s 看门狗、stderr/stdout 分离、SIGINT 清理、结果二次解析。
  */
 
 export interface ExecResult {
@@ -20,9 +15,6 @@ const activeProcesses = new Set<{ kill(signo?: string): void }>();
 
 let signalHandlerRegistered = false;
 
-/**
- * 在 Deno 或 Node/Bun 运行时中注册一次 SIGINT 处理器。
- */
 function ensureSignalHandlerRegistered(): void {
   if (signalHandlerRegistered) {
     return;
@@ -34,7 +26,7 @@ function ensureSignalHandlerRegistered(): void {
       try {
         proc.kill("SIGKILL");
       } catch {
-        // 子进程可能已经退出
+        // 子进程可能已经退出(kill 失败即目标已死,忽略是安全的)。
       }
     }
     activeProcesses.clear();
@@ -60,37 +52,59 @@ function ensureSignalHandlerRegistered(): void {
   }
 }
 
-/**
- * 探测文件/路径是否可访问（stat 成功即视为存在）。
- */
 function pathExists(target: string): boolean {
   try {
     (globalThis as any).Deno.statSync(target);
     return true;
   } catch {
-    // 文件不存在或不可访问
     return false;
   }
 }
+
+// 看门狗缺省 40s;env 覆写的合法值域 clamp 到 [1000, 300000]。
+const DEFAULT_WATCHDOG_TIMEOUT_MS = 40000;
 
 /**
  * 读取看门狗超时毫秒数：DAEDALUS_WATCHDOG_TIMEOUT_MS 环境变量覆写 → 缺省 40000。
  * execAllowlisted（MCP 桥）与 tx CLI 调用层（execTx*）共用同一旋钮，
  * 保证两条执行通道的超时语义逐字节一致（rc 124 / SIGKILL / 同款提示文案）。
+ *
+ * 值域处理与 llm.ts parseTimeoutMs 同一模式:未设/非十进制整数/非正一律回退缺省,
+ * 合法值 clamp 到 [1000, 300000]。防的是 `setTimeout(NaN|0)` 立即触发——
+ * 那会让每条正常命令被误判超时、返回假的 rc 124,比无看门狗更危险;
+ * 超大值则让看门狗形同虚设(进程可永久挂起)。
  */
-function resolveWatchdogTimeoutMs(): number {
-  return Number(
-    (typeof (globalThis as any).Deno?.env?.get === "function"
-      ? (globalThis as any).Deno.env.get("DAEDALUS_WATCHDOG_TIMEOUT_MS")
-      : process.env.DAEDALUS_WATCHDOG_TIMEOUT_MS) ?? 40000,
-  );
+export function resolveWatchdogTimeoutMs(): number {
+  const raw = typeof (globalThis as any).Deno?.env?.get === "function"
+    ? (globalThis as any).Deno.env.get("DAEDALUS_WATCHDOG_TIMEOUT_MS")
+    : process.env.DAEDALUS_WATCHDOG_TIMEOUT_MS;
+  if (raw === undefined || raw === "") {
+    return DEFAULT_WATCHDOG_TIMEOUT_MS;
+  }
+  // 严格十进制整数形状门。parseInt 会静默前缀解析:"1e5" → 1、"30s" → 30,
+  // 操作员写下的覆写值被读成另一回事(且撞上 clamp 下限,看门狗秒级触发),
+  // 形状不符就明确回退缺省,绝不猜意图。
+  if (!/^\d+$/.test(raw)) {
+    return DEFAULT_WATCHDOG_TIMEOUT_MS;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    return DEFAULT_WATCHDOG_TIMEOUT_MS;
+  }
+  return Math.min(300_000, Math.max(1_000, n));
 }
 
 /**
  * 解析 Go 版 daedalus-shell MCP 服务器（stdio JSON-RPC）二进制路径。
- * 解析顺序：DAEDALUS_SHELL_BIN 环境变量 → 生产默认 /usr/local/bin/daedalus-shell →
- *   开发态仓库构建产物 daedalus/core/bin/daedalus-shell（含向上回溯最多 10 层父目录）。
- * 全部探测失败时回退到生产路径（让用户看到友好错误）。
+ * 顺序：① DAEDALUS_SHELL_BIN 环境变量覆写（仓外路径与 demo 布局位唯一通道，
+ * `just dev-copilot` 的 scripts/copilot-prep.sh 即注入）→ ② 生产默认
+ * /usr/local/bin/daedalus-shell（镜像出厂位；优先级恒在一切开发态候选之前
+ * —— 生产解析顺序字节冻结的守护轨，勿动）→ ③ 开发态回退 = 仓内安装态
+ * files/system/usr/local/bin/daedalus-shell（`just plugin-pack` 落位）。
+ * demo 前缀重写通道不在本文件落码：宿主侧 cmd/daedalus-host/paths_demo.go
+ * 构造 entrypoint 时重写镜像路径，其运行链路最终由 ① 承接。
+ * 宿主构造 argv 铁律：候选只许落在本仓内，且绝不向上回溯父目录；
+ * 全部探测失败回退生产路径（让用户看到友好错误）。
  */
 function resolveShellBinary(): string {
   const envPath =
@@ -106,39 +120,26 @@ function resolveShellBinary(): string {
     return productionPath;
   }
 
+  // ④ 仓内安装态候选（与 tests/deno/exec.test.ts 枚举 1:1 对齐；铁律不探仓外）
   const devCandidates = [
-    "daedalus/core/bin/daedalus-shell",
-    "../daedalus/core/bin/daedalus-shell",
+    "files/system/usr/local/bin/daedalus-shell",
+    "daedalus-core/files/system/usr/local/bin/daedalus-shell",
+    "../daedalus-core/files/system/usr/local/bin/daedalus-shell",
   ];
   for (const rel of devCandidates) {
     if (pathExists(rel)) {
       return rel;
     }
   }
-
-  // 向上回溯最多 10 层父目录查找仓库内构建产物
-  let cwd = (globalThis as any).Deno.cwd();
-  for (let i = 0; i < 10; i++) {
-    const tryPath = `${cwd}/daedalus/core/bin/daedalus-shell`;
-    if (pathExists(tryPath)) {
-      return tryPath;
-    }
-    const parent = cwd.replace(/\/[^/]+\/?$/, "");
-    if (parent === cwd) break;
-    cwd = parent;
-  }
   return productionPath;
 }
 
 /**
  * 解析 Go 版 daedalus-tx 事务原语 CLI（纯命令行, 非 MCP 服务器）二进制路径。
- * 与 resolveShellBinary 逐项镜像（计划 todo 26）：
- *   DAEDALUS_TX_BIN 环境变量 → 生产默认 /usr/local/bin/daedalus-tx →
- *   开发态仓库构建产物 daedalus/core/bin/daedalus-tx（含向上回溯最多 10 层父目录）。
- * 全部探测失败时回退到生产路径（让用户看到友好错误）。
- * 注：manifest `--allow-run` 已放行 /usr/local/bin/daedalus-tx（todo 25）；
- * dev 态走 DAEDALUS_TX_BIN 覆写 + 向上回溯是钉死的合规开发流（todo 16 v1 执行模型：
- * daedalus-tx 是调用用户自己的进程, 无 systemd 单元）。
+ * 与 resolveShellBinary 逐项镜像：DAEDALUS_TX_BIN 覆写 → 生产默认
+ * /usr/local/bin/daedalus-tx → 仓内构建产物（含向上回溯 10 层父目录）；
+ * 全部失败回退生产路径。manifest `--allow-run` 已放行该二进制；dev 态走
+ * 覆写 + 回溯是约定合规开发流（v1: daedalus-tx 是调用用户自己的进程）。
  */
 function resolveTxBinary(): string {
   const envPath = typeof (globalThis as any).Deno?.env?.get === "function"
@@ -154,8 +155,8 @@ function resolveTxBinary(): string {
   }
 
   const devCandidates = [
-    "daedalus/core/bin/daedalus-tx",
-    "../daedalus/core/bin/daedalus-tx",
+    "daedalus-core/bin/daedalus-tx",
+    "../daedalus-core/bin/daedalus-tx",
   ];
   for (const rel of devCandidates) {
     if (pathExists(rel)) {
@@ -166,7 +167,7 @@ function resolveTxBinary(): string {
   // 向上回溯最多 10 层父目录查找仓库内构建产物
   let cwd = (globalThis as any).Deno.cwd();
   for (let i = 0; i < 10; i++) {
-    const tryPath = `${cwd}/daedalus/core/bin/daedalus-tx`;
+    const tryPath = `${cwd}/daedalus-core/bin/daedalus-tx`;
     if (pathExists(tryPath)) {
       return tryPath;
     }
@@ -177,9 +178,6 @@ function resolveTxBinary(): string {
   return productionPath;
 }
 
-/**
- * 通过派生的 daedalus-shell Go MCP 服务器执行已列入白名单的命令。
- */
 export async function execAllowlisted(
   command: string,
   args: string[] = [],
@@ -220,7 +218,6 @@ export async function execAllowlisted(
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
-  // 异步将子进程 stderr 管道传输到单独的缓冲区/流中
   let childStderrText = "";
   const stderrPromise = (async () => {
     try {
@@ -246,11 +243,10 @@ export async function execAllowlisted(
     }
   })();
 
-  // 标准输入输出 JSON-RPC 通信处理器
   let timeoutId: any;
   let isTimedOut = false;
 
-  // 看门狗超时与 tx 调用层共用同一解析（默认 40000ms, env 覆写 DAEDALUS_WATCHDOG_TIMEOUT_MS）
+  // 看门狗超时与 tx 调用层共用同一解析
   const timeoutMs = resolveWatchdogTimeoutMs();
 
   const watchdogPromise = new Promise<ExecResult>((resolve) => {
@@ -263,7 +259,7 @@ export async function execAllowlisted(
       }
       resolve({
         stdout: "",
-        stderr: "Timeout: command execution exceeded 40s",
+        stderr: `Timeout: command execution exceeded ${timeoutMs / 1000}s`,
         returncode: 124,
         error: "copilot exec timeout",
       });
@@ -285,7 +281,6 @@ export async function execAllowlisted(
         }
       };
 
-      // 用于从子进程 stdout 读取 JSON-RPC 行的辅助函数
       let stdoutBuffer = "";
       const stdoutReader = childProcess.stdout?.getReader
         ? childProcess.stdout.getReader()
@@ -335,7 +330,6 @@ export async function execAllowlisted(
         throw new Error("Unexpected EOF from shell MCP server stdout");
       };
 
-      // 步骤 1：发送 initialize 请求（id: 1）
       await writeLine({
         jsonrpc: "2.0",
         id: 1,
@@ -350,7 +344,6 @@ export async function execAllowlisted(
         },
       });
 
-      // 步骤 2：读取 id 1 的 initialize 响应
       const initResp = await readNextJsonLine();
       if (initResp.id !== 1 || initResp.error) {
         throw new Error(
@@ -362,13 +355,11 @@ export async function execAllowlisted(
         );
       }
 
-      // 步骤 3：发送 notifications/initialized
       await writeLine({
         jsonrpc: "2.0",
         method: "notifications/initialized",
       });
 
-      // 步骤 4：发送 tools/call 请求（id: 2）
       await writeLine({
         jsonrpc: "2.0",
         id: 2,
@@ -382,7 +373,6 @@ export async function execAllowlisted(
         },
       });
 
-      // 步骤 5：读取 id 2 的 tools/call 响应
       const callResp = await readNextJsonLine();
       if (callResp.id !== 2) {
         throw new Error(`Expected response id 2, got ${callResp.id}`);
@@ -406,7 +396,6 @@ export async function execAllowlisted(
         throw new Error("MCP response missing result.content[0].text payload");
       }
 
-      // 二次解析 result.content[0].text
       const innerResult = JSON.parse(firstText) as {
         stdout?: string;
         stderr?: string;
@@ -425,7 +414,7 @@ export async function execAllowlisted(
       if (isTimedOut) {
         return {
           stdout: "",
-          stderr: "Timeout: command execution exceeded 40s",
+          stderr: `Timeout: command execution exceeded ${timeoutMs / 1000}s`,
           returncode: 124,
           error: "copilot exec timeout",
         };
@@ -462,16 +451,16 @@ export async function execAllowlisted(
 }
 
 // ===========================================================================
-// daedalus-tx 事务原语调用层（计划 todo 26）。
+// daedalus-tx 事务原语调用层。
 //
-// ★ 与 execAllowlisted 的本质区别: daedalus-tx 是**用户态一次性 CLI**(todo 15/16),
+// ★ 与 execAllowlisted 的本质区别: daedalus-tx 是**用户态一次性 CLI**,
 // 不是 stdio MCP 服务器 —— 每次调用 spawn argv、读 stdout **恰一份**机器可读
-// JSON 文档(todo 15 stdout 契约), 错误也走 {"error":...} + 非零退出码
+// JSON 文档, 错误也走 {"error":...} + 非零退出码
 // (1 运行期 / 2 用法)。本层直接 JSON.parse CLI stdout, **不经 MCP 的
 // result.content[].text 二次包裹** —— 没有 MCP-wire 那层双反斜杠转义
 // (\"ActiveState\" 形态), 单层文档转义一次解析即得终值。
 // ★ 失败永不 throw: 非零退出 / stdout 不可解析 / spawn 失败 / 看门狗超时,
-// 一律归一化为结构化 TxFailure(kind 判别), 由调用方(main.ts, todo 27)渲染。
+// 一律归一化为结构化 TxFailure(kind 判别), 由调用方(main.ts)渲染。
 // ★ 看门狗与 shell 通道完全同源: resolveWatchdogTimeoutMs + SIGKILL +
 // rc 124 + "copilot exec timeout" 文案 + activeProcesses 清理链。
 // ===========================================================================
@@ -484,7 +473,7 @@ export type TxStatus =
   | "rolled_back"
   | "failed";
 
-/** 步骤执行规范化结果 —— JSON 键是 internal/tx/tx.go OpResult 钉死的线上契约。 */
+/** 步骤执行规范化结果 —— JSON 键是 internal/tx/tx.go OpResult 线上契约。 */
 export interface TxOpResult {
   returncode: number;
   stdout?: string;
@@ -648,7 +637,7 @@ async function runTxCli(argv: string[]): Promise<TxRawRun> {
     if (raced.timedOut) {
       return {
         stdout: "",
-        stderr: "Timeout: command execution exceeded 40s",
+        stderr: `Timeout: command execution exceeded ${timeoutMs / 1000}s`,
         returncode: 124,
         kind: "timeout",
         error: "copilot exec timeout",
@@ -680,7 +669,7 @@ async function runTxCli(argv: string[]): Promise<TxRawRun> {
   }
 }
 
-/** 从 stdout 提取 todo 15 契约的唯一 JSON 文档(单行紧凑 + 换行)。 */
+/** 从 stdout 提取契约约定的唯一 JSON 文档(单行紧凑 + 换行)。 */
 function parseTxStdout(
   stdout: string,
 ): { doc: unknown } | { parseError: string } {

@@ -4,6 +4,7 @@ import {
   execTxApply,
   execTxPreview,
   execTxPropose,
+  resolveWatchdogTimeoutMs,
 } from "../../plugin/copilot/exec.ts";
 
 let mockSpawnedCommands: Array<{ cmd: string; options: any; instance: any }> = [];
@@ -426,12 +427,16 @@ Deno.test("Copilot Exec - registers signal listener for process cleanup", () => 
 Deno.test("Copilot Exec - handles watchdog timeout triggering SIGKILL and returncode 124", async () => {
   setup();
   nextProcessBehavior = { hang: true };
-  Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", "50");
+  // clamp 下限 1000:取合法最小值,让看门狗最快触发以验证行为
+  Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", "1000");
 
   try {
     const result = await execAllowlisted("df", ["-h"]);
     expect(result.returncode).toBe(124);
     expect(result.stderr).toContain("Timeout: command execution exceeded");
+    // 文案里的秒数取**生效值**而非缺省 40s:覆写成 1000ms 却报 40s 会把操作员
+    // 引向"看门狗没生效"的误判。
+    expect(result.stderr).toContain("exceeded 1s");
     expect(result.error).toBe("copilot exec timeout");
 
     const spawned = mockSpawnedCommands[0];
@@ -439,6 +444,48 @@ Deno.test("Copilot Exec - handles watchdog timeout triggering SIGKILL and return
   } finally {
     Deno.env.delete("DAEDALUS_WATCHDOG_TIMEOUT_MS");
     teardown();
+  }
+});
+
+// ===========================================================================
+// resolveWatchdogTimeoutMs 值域钳位(与 llm.ts parseTimeoutMs 同一模式)
+//
+// ★ 守门测试:未设/非数字/非正一律回退缺省 40000,合法值 clamp 到
+// [1000, 300000]。防的是 Number("abc")=NaN 或 0 直接进 setTimeout——
+// 看门狗立即触发,每条正常命令被误判成 rc 124 假超时;超大值则让
+// 看门狗形同虚设。两条通道(execAllowlisted / execTx*)共用本函数。
+// ===========================================================================
+
+Deno.test("TestResolveWatchdogTimeoutMs_Clamp - 非法值回退缺省、合法值钳位到 [1000, 300000]", () => {
+  const orig = Deno.env.get("DAEDALUS_WATCHDOG_TIMEOUT_MS");
+  try {
+    // 未设 → 缺省
+    Deno.env.delete("DAEDALUS_WATCHDOG_TIMEOUT_MS");
+    expect(resolveWatchdogTimeoutMs()).toBe(40000);
+
+    // 非数字 / 非十进制整数形状 / 0 / 负数 → 缺省(回退而非取钳位下限,与 llm.ts 语义一致)
+    // "1e5"/"30s"/"0x10" 是 parseInt 静默前缀解析的回归用例:旧实现会把它们读成
+    // 1/30/0,操作员写的覆写值被读成另一个数量级。
+    for (const bad of ["abc", "0", "-5", "NaN", "1e5", "30s", "0x10", "+45000", " 45000", "45_000"]) {
+      Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", bad);
+      expect(resolveWatchdogTimeoutMs()).toBe(40000);
+    }
+
+    // clamp 边界
+    Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", "20");
+    expect(resolveWatchdogTimeoutMs()).toBe(1000);
+    Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", "999999");
+    expect(resolveWatchdogTimeoutMs()).toBe(300000);
+
+    // 域内原值透传
+    Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", "45000");
+    expect(resolveWatchdogTimeoutMs()).toBe(45000);
+  } finally {
+    if (orig === undefined) {
+      Deno.env.delete("DAEDALUS_WATCHDOG_TIMEOUT_MS");
+    } else {
+      Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", orig);
+    }
   }
 });
 
@@ -742,7 +789,8 @@ Deno.test("TestExecTxPropose_UnparseableStdout - exit 0 non-JSON maps to kind tx
 
 Deno.test("TestExecTxApply_WatchdogTimeout - 40s watchdog (env-overridable) SIGKILLs and maps to kind tx_timeout", async () => {
   const f = await makeTxFixture("hang");
-  Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", "300");
+  // clamp 下限 1000:取合法最小值触发看门狗
+  Deno.env.set("DAEDALUS_WATCHDOG_TIMEOUT_MS", "1000");
   try {
     const start = Date.now();
     const result = await execTxApply(TX_FIXTURE_ID);
