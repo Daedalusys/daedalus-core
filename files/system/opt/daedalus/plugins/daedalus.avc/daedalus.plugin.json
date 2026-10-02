@@ -1,0 +1,38 @@
+{
+  "id": "daedalus.avc",
+  "name": "Daedalus SELinux AVC Denial Query",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-avc",
+  "permissions": {
+    "read": [
+      "/var/log/audit",
+      "/etc/selinux"
+    ],
+    "write": [],
+    "run": [
+      "/usr/sbin/ausearch",
+      "/usr/bin/audit2why",
+      "/usr/bin/audit2allow"
+    ]
+  },
+  "tools": [
+    "avc_recent",
+    "avc_explain",
+    "avc_summary"
+  ],
+  "i18n": [
+    "en_US",
+    "zh_CN"
+  ],
+  "checksums": {
+    "bin/daedalus-avc": "sha256:54d4b5f6007082fc0e0b57cfd70e41dca960d9b5c75d4936b99d0c9f89482e0d",
+    "daedalus.plugin.json": "sha256:5d348e1d30822ee7e8545c419db8d000797705e101acef3055c14566f5a9ca47"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}

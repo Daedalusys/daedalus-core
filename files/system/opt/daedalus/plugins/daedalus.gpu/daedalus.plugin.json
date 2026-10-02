@@ -1,0 +1,41 @@
+{
+  "id": "daedalus.gpu",
+  "name": "Daedalus GPU Telemetry",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-gpu",
+  "permissions": {
+    "read": [
+      "/sys/class/drm",
+      "/dev/dri",
+      "/proc"
+    ],
+    "write": [],
+    "run": [
+      "/usr/bin/nvidia-smi",
+      "/usr/bin/rocm-smi",
+      "/usr/bin/nvtop",
+      "/usr/bin/intel_gpu_top"
+    ]
+  },
+  "tools": [
+    "gpu_list",
+    "gpu_status",
+    "gpu_processes",
+    "gpu_memory"
+  ],
+  "i18n": [
+    "en_US",
+    "zh_CN"
+  ],
+  "checksums": {
+    "bin/daedalus-gpu": "sha256:d6fd9318ca32db9aeeb78517e8bf21fd2168ff2b11de486b926888a722148c09",
+    "daedalus.plugin.json": "sha256:413aef469bafe3c2314585f329d060201fbfa436085b0a9f49adca8370b55652"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}

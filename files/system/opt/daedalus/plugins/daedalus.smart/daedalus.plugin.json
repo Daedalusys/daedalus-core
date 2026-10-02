@@ -1,0 +1,39 @@
+{
+  "id": "daedalus.smart",
+  "name": "Daedalus SMART Health",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-smart",
+  "permissions": {
+    "read": [
+      "/dev/disk",
+      "/sys/block",
+      "/run/udev"
+    ],
+    "write": [],
+    "run": [
+      "/usr/sbin/smartctl",
+      "/usr/bin/smartctl"
+    ]
+  },
+  "tools": [
+    "smart_list",
+    "smart_health",
+    "smart_attributes",
+    "smart_test"
+  ],
+  "i18n": [
+    "en_US",
+    "zh_CN"
+  ],
+  "checksums": {
+    "bin/daedalus-smart": "sha256:3b4d6c419abcbeadf51aeb66aa71fcfb5e5cb8571f00c8aa62a879332e99c68c",
+    "daedalus.plugin.json": "sha256:b2f77035b2e1b634cdb8cff2e13dc6fde4952b0947b921277d2dd80a14c4923e"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}
