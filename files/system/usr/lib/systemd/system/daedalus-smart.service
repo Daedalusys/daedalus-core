@@ -1,0 +1,35 @@
+[Unit]
+Description=Daedalus Disk SMART Health MCP Sandbox Profile
+# smartctl 在磁盘进入低功耗/待机时的读取可能需 >1s 唤醒,unit 不设 After= 之类的
+# 磁盘就绪硬排序 —— 盘缺席时 smartctl 以退出码位 1(open failed)优雅降级为
+# note,而非崩溃。
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.smart)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
+ExecStart=/opt/daedalus/plugins/daedalus.smart/bin/daedalus-smart
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+# CAP_DAC_READ_SEARCH 让 smartctl 绕过 DAC 读检查读取块设备设备节点
+# (/dev/sda 权限 0660 root:disk,而 DynamicUser 不在 disk 组)与 /sys/block、
+# /dev/disk 下的引用,而非给 CAP_SYS_ADMIN 等 root 能力。
+# 无此能力时 smart_list/health/attributes 会以退出码位 1(open failed)降级为
+# note(而非崩溃)—— smartctl 把错误写 stdout、stderr 空,故位掩码处理不 fatal。
+# AmbientCapabilities 与 NoNewPrivileges 兼容(systemd 在 exec 前预先 raise)。
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
