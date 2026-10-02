@@ -1,0 +1,34 @@
+[Unit]
+Description=Daedalus SELinux AVC Denial Query MCP Sandbox Profile
+# audit.log 位于 /var/log/audit/audit.log,由 auditd(或 kernel 写入)产生。
+# 单元自检无硬性依赖 auditd(它未启动时 ausearch 会以 "Error opening" 优雅降级
+# 为 note),故 [Unit] 段不写 After=auditd.service 之类的硬排序。
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.avc)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
+ExecStart=/opt/daedalus/plugins/daedalus.avc/bin/daedalus-avc
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+# CAP_DAC_READ_SEARCH 让 ausearch 绕过 DAC 读检查读取 root-only 审计日志
+# (/var/log/audit/audit.log 权限 0600 root:root)与 SELinux 策略目录
+# (/etc/selinux/targeted/contexts/...),而非给 CAP_SYS_ADMIN 等 root 能力。
+# 无此能力时 avc_recent/explain/summary 会以 EACCES 降级为 note(而非崩溃)。
+# AmbientCapabilities 与 NoNewPrivileges 兼容(systemd 在 exec 前预先 raise)。
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
