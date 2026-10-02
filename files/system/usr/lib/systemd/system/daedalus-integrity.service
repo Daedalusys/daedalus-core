@@ -1,0 +1,27 @@
+[Unit]
+Description=Daedalus Integrity Verification MCP Sandbox Profile
+# rpm DB 可读性不依赖 journald;无需 After=systemd-journald.service。
+# rpm -V 需读取 /var/lib/rpm 数据库与磁盘文件元数据,非 root 会因 EACCES 将
+# 部分路径误判为 missing(Permission denied),降级 note 而非崩溃。
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.integrity)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性(计划 todo 9,决策 16/22);手工漂移将导致构建失败。
+ExecStart=/opt/daedalus/plugins/daedalus.integrity/bin/daedalus-integrity
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
