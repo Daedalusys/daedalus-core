@@ -1,0 +1,37 @@
+[Unit]
+Description=Daedalus GPU Telemetry MCP Sandbox Profile
+# 数据源:三厂商用户态 CLI(nvidia-smi / rocm-smi / intel_gpu_top)。均可选;
+# 本单元不声明硬性依赖,缺任一 CLI 时对应厂商在 tools/list 里按"跳过 + note"
+# 降级,不 crash。未装 NVIDIA 驱动时 nvidia-smi 也可能以 rc=1 返回 "No devices
+# were found",同样按空集降级(见 gpu.go handleVendorError)。
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.gpu)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
+ExecStart=/opt/daedalus/plugins/daedalus.gpu/bin/daedalus-gpu
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+# GPU CLI 需要读 /dev/dri/card*(root:video 0660,rocm-smi 遍历)、
+# /dev/dri/renderD*(root:render 0660,intel_gpu_top)、/dev/nvidia*(nvidia-smi
+# 通常 0666,nouveau 需 video)、/dev/kfd(KFD 进程信息)。
+# DynamicUser 无 video/render/kfd 组成员时相关 CLI 会以 "权限不足" 降级为 note,
+# 故此处显式给补充组;缺任一组名时 systemd 会警告但不致命(允许跨发行版)。
+SupplementaryGroups=video render
+# CapabilityBoundingSet 不给任何能力:GPU 遥测只读,不要求 root 也不要求 CAP_*
+# (rocm-smi/intel_gpu_top 均走用户态 ioctl,靠组权限而非 capability)。
+CapabilityBoundingSet=
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
