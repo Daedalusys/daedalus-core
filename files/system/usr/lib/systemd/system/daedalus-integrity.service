@@ -7,13 +7,20 @@ Description=Daedalus Integrity Verification MCP Sandbox Profile
 [Service]
 Type=simple
 # ExecStart 内容由插件 manifest(daedalus.integrity)派生:构建期 76-daedalus-plugin-gen.sh
-# 调 daedalus-host render-unit 渲染并自校验一致性(计划 todo 9,决策 16/22);手工漂移将导致构建失败。
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
 ExecStart=/opt/daedalus/plugins/daedalus.integrity/bin/daedalus-integrity
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=read-only
 StateDirectory=daedalus
 NoNewPrivileges=yes
+# CAP_DAC_READ_SEARCH 让 rpm -V 绕过 DAC 读检查读取 root-only 文件(如
+# /etc/shadow、/boot/*)做完整性校验,而不给 CAP_SYS_ADMIN 等 root 能力。
+# 与 journal 单元用 SupplementaryGroups 折中同类;rpm DB 本身 world-readable,
+# 缺此能力仍能读 DB,差异仅在 root-only 文件路径的 EACCES 降级。
+# AmbientCapabilities 与 NoNewPrivileges 兼容(systemd 在 exec 前预先 raise)。
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 CPUQuota=50%
 MemoryMax=256M
 IOWeight=100
