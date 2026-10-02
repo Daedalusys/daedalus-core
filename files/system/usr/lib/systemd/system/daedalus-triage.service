@@ -1,0 +1,37 @@
+[Unit]
+Description=Daedalus Boot & Crash Triage MCP Sandbox Profile
+# 启动 / 崩溃诊断依赖 journald 已就绪:boot_blame/critical_chain 读
+# systemd 启动计时数据(last_boot_log / coredumps_list 经由 systemd-coredump
+# 写入 journal),After 属 [Unit] 指令;[Service] 段内的 After 会被 systemd
+# 忽略,不得放错段。仅排序,不构成硬依赖(Requires/Wants 不写)。
+After=systemd-journald.service
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.triage)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
+ExecStart=/opt/daedalus/plugins/daedalus.triage/bin/daedalus-triage
+DynamicUser=yes
+# 生产 /var/log/journal/<machine-id>/*.journal 为 0640/0660 root:systemd-journal,
+# DynamicUser 默认不属于任何组则读不到持久日志(只落回内存 journal 或空结果)。
+# 显式加入 systemd-journal 补充组换取读权限;manifest read 权限无法赋予组身份。
+# coredumpctl list/info 自身不需额外组:列表/详情数据来自 journal 元数据
+# (systemd-coredump 写入的 _COREDUMP_* 与 COREDUMP_*),/var/lib/systemd/coredump
+# 下的原始 corefile 为 0640 root:root(group=root 非 systemd-coredump),即便加
+# systemd-coredump 补充组也读不到,且 list/info 无需读原始字节,故不引入。
+SupplementaryGroups=systemd-journal
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
