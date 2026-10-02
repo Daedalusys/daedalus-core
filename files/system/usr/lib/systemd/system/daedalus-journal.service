@@ -1,5 +1,8 @@
 [Unit]
 Description=Daedalus Journal MCP Sandbox Profile
+# 日志读取依赖 journald 已就绪(After 属 [Unit] 指令;[Service] 段内的 After
+# 会被 systemd 忽略,不得放错段)。仅排序,不构成硬依赖(Requires/Wants 不写)。
+After=systemd-journald.service
 
 [Service]
 Type=simple
@@ -7,6 +10,10 @@ Type=simple
 # 调 daedalus-host render-unit 渲染并自校验一致性(计划 todo 9,决策 16/22);手工漂移将导致构建失败。
 ExecStart=/opt/daedalus/plugins/daedalus.journal/bin/daedalus-journal
 DynamicUser=yes
+# 生产 /var/log/journal/<machine-id>/*.journal 为 0640/0660 root:systemd-journal,
+# DynamicUser 默认不属于任何组则读不到持久日志(只落回内存 journal 或空结果)。
+# 显式加入 systemd-journal 补充组换取读权限;manifest read 权限无法赋予组身份。
+SupplementaryGroups=systemd-journal
 ProtectSystem=strict
 ProtectHome=read-only
 StateDirectory=daedalus
