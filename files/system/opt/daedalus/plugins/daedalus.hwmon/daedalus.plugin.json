@@ -1,0 +1,39 @@
+{
+  "id": "daedalus.hwmon",
+  "name": "Daedalus Hardware Sensors",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-hwmon",
+  "permissions": {
+    "read": [
+      "/sys/class/hwmon",
+      "/sys/class/thermal",
+      "/sys/class/power_supply",
+      "/sys/class/powercap"
+    ],
+    "write": [],
+    "run": []
+  },
+  "tools": [
+    "hwmon_temperatures",
+    "hwmon_fans",
+    "hwmon_voltages",
+    "hwmon_power",
+    "hwmon_battery",
+    "hwmon_thermal_zones"
+  ],
+  "i18n": [
+    "en_US",
+    "zh_CN"
+  ],
+  "checksums": {
+    "bin/daedalus-hwmon": "sha256:adfc0093475ba71e5fecc0d1d59b781f91b53a84396f46e97f5b6725c3f2545a",
+    "daedalus.plugin.json": "sha256:b42ae391096730222793c04504968a348db32a19c2c8242d4ed1b22b01e7996c"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}

@@ -1,0 +1,36 @@
+{
+  "id": "daedalus.journal",
+  "name": "Daedalus Journal Query",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-journal",
+  "permissions": {
+    "read": [
+      "/var/log/journal",
+      "/run/log/journal"
+    ],
+    "write": [],
+    "run": [
+      "/usr/bin/journalctl"
+    ]
+  },
+  "tools": [
+    "journal_query",
+    "journal_follow",
+    "journal_last_boot"
+  ],
+  "i18n": [
+    "en_US",
+    "zh_CN"
+  ],
+  "checksums": {
+    "bin/daedalus-journal": "sha256:0df6dfd8eb2dc7a1ec3fbcbc9ae270cee95d8e065ee424d8c0a2bd33a21d85ec",
+    "daedalus.plugin.json": "sha256:727bec0388de48359ac036b02e94417ea7024ecdc0402f9f478e1ef33895ffda"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}

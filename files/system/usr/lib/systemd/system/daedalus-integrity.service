@@ -1,0 +1,34 @@
+[Unit]
+Description=Daedalus Integrity Verification MCP Sandbox Profile
+# rpm DB 可读性不依赖 journald;无需 After=systemd-journald.service。
+# rpm -V 需读取 /var/lib/rpm 数据库与磁盘文件元数据,非 root 会因 EACCES 将
+# 部分路径误判为 missing(Permission denied),降级 note 而非崩溃。
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.integrity)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
+ExecStart=/opt/daedalus/plugins/daedalus.integrity/bin/daedalus-integrity
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+# CAP_DAC_READ_SEARCH 让 rpm -V 绕过 DAC 读检查读取 root-only 文件(如
+# /etc/shadow、/boot/*)做完整性校验,而不给 CAP_SYS_ADMIN 等 root 能力。
+# 与 journal 单元用 SupplementaryGroups 折中同类;rpm DB 本身 world-readable,
+# 缺此能力仍能读 DB,差异仅在 root-only 文件路径的 EACCES 降级。
+# AmbientCapabilities 与 NoNewPrivileges 兼容(systemd 在 exec 前预先 raise)。
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+[Unit]
+Description=Daedalus File Search MCP Sandbox Profile (Baloo Indexer Bridge)
+# search_files / search_content 走会话 D-Bus 探测 org.kde.baloo + fork
+# baloosearch(链接 libKF6Baloo,直读 Baloo sqlite 索引);DynamicUser 沙箱里
+# /run/user/<dynuid>/bus 不存在,connect 失败 → 三工具统一降级空集 + note,
+# 不致命。baloosearch/balooctl 缺失同上。
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.search)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
+ExecStart=/opt/daedalus/plugins/daedalus.search/bin/daedalus-search
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+# 无 AmbientCapabilities:baloosearch 仅读 Baloo sqlite + 调 KF6 客户端库,
+# 不读 /dev/disk/*(无 CAP_DAC_READ_SEARCH 之需);D-Bus 客户端走 SessionBus
+# 经进程级 socket,无须提升。
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+[Unit]
+Description=Daedalus Hardware Sensors MCP Sandbox Profile
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.hwmon)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
+ExecStart=/opt/daedalus/plugins/daedalus.hwmon/bin/daedalus-hwmon
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
