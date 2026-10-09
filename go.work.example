@@ -2,23 +2,15 @@ go 1.25.0
 
 use (
 	.
-	../daedalus-plugins/avc
 	../daedalus-plugins/blueprint
 	../daedalus-plugins/dupe
 	../daedalus-plugins/fs
-	../daedalus-plugins/gpu
-	../daedalus-plugins/hwmon
-	../daedalus-plugins/integrity
-	../daedalus-plugins/journal
 	../daedalus-plugins/pkg
 	../daedalus-plugins/proc
-	../daedalus-plugins/search
 	../daedalus-plugins/service
 	../daedalus-plugins/shell
-	../daedalus-plugins/smart
 	../daedalus-plugins/sysinfo
 	../daedalus-plugins/trace
-	../daedalus-plugins/triage
 	../daedalus-sdk
 )
 
