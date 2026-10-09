@@ -159,7 +159,7 @@ plugin-pack: blueprint-embed
     stage="${TMPDIR:-/tmp}/daedalus-plugin-pack-stage"
     find "${stage}" -mindepth 1 -delete 2>/dev/null || true
     declare -A cap_bin   # cap → 插件仓现构产物绝对路径,供 /usr/local/bin 双落位腿复用
-    for cap in fs shell pkg sysinfo service blueprint dupe trace proc; do
+    for cap in fs shell pkg sysinfo service blueprint dupe diskclean organize trace proc; do
         id="daedalus.${cap}"
         src="$root/daedalus-plugins/${cap}"
         manifest="${src}/daedalus.plugin.json"
