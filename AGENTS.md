@@ -2,12 +2,12 @@
 
 **Generated:** 2026-09-21
 **Repo:** `github.com/Daedalusys/daedalus-core` (Go module root + image build)
-**Siblings:** `../daedalus-sdk/` (11 安全核心包)、`../daedalus-plugins/` (17 Go 能力插件 monorepo)
+**Siblings:** `../daedalus-sdk/` (11 安全核心包)、`../daedalus-plugins/` (9 Go 能力插件 monorepo)
 
 ## OVERVIEW
 Immutable, atomic, AI-native desktop OS on AlmaLinux Bootc (KDE variant). Adds a Model Context Protocol (MCP) capability-middleware layer with three security boundaries (model/capability, enforcement/sandboxing, evidence/verification), tamper-evident audit logging, systemd credential isolation, and atomic rollback.
 
-**本仓职责**: 镜像编排 (`Containerfile` + `files/` 构建树) + 5 个 core runtime 二进制 (`cmd/daedalus-{host,audit,tx,smoke,plugin-pack}`) + copilot 插件源码 (`plugin/copilot/`) + 契约包 (`internal/{controller,tx}`)。**SDK 与 17 个 Go 能力插件已迁出独立仓**(见兄弟仓)。
+**本仓职责**: 镜像编排 (`Containerfile` + `files/` 构建树) + 5 个 core runtime 二进制 (`cmd/daedalus-{host,audit,tx,smoke,plugin-pack}`) + copilot 插件源码 (`plugin/copilot/`) + 契约包 (`internal/{controller,tx}`)。**SDK 与 9 个 Go 能力插件已迁出独立仓**(见兄弟仓)。
 
 > 愿景与设计层总览见 [VISION.md](VISION.md);本文件是操作知识库,两层互补不重叠。
 
@@ -73,7 +73,7 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 | CI / image build | `just build` / `.github/workflows/build-daedalus.yml` | repo root context, runs `just build` (sync + podman build) + `just go-test`/`just test` + 零残留断言 |
 
 ## CODE MAP
-CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored). Source paths under `cmd/` `internal/` `plugin/` `files/` (本仓), `../daedalus-sdk/` (SDK 包) 与 `../daedalus-plugins/` (17 能力插件) are authoritative.
+CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored). Source paths under `cmd/` `internal/` `plugin/` `files/` (本仓), `../daedalus-sdk/` (SDK 包) 与 `../daedalus-plugins/` (9 能力插件) are authoritative.
 
 | Symbol / Component | Type | Location | Role |
 |--------------------|------|----------|------|
@@ -92,7 +92,7 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 | `pathguard` | Go pkg | `../daedalus-sdk/pathguard/` | fs 路径校验 (ALLOWED_DIRS 前缀边界, 空字节, realpath) |
 | `audit` | Go pkg | `../daedalus-sdk/audit/` | 哈希链审计库, Python 金样字节级兼容 (三种序列化模式) |
 | `objectmodel` | Go pkg | `../daedalus-sdk/objectmodel/` | 对象模型 schema 单一事实源;Kind 封闭枚举 7 类 + spec/status 信封 `Object` |
-| `cmd/daedalus-{fs,shell,pkg,sysinfo,service,blueprint,dupe,trace,proc,hwmon,journal,triage,integrity,avc,gpu,smart,search}` | Go binaries | `../daedalus-plugins/{fs,shell,pkg,sysinfo,service,blueprint,dupe,trace,proc,hwmon,journal,triage,integrity,avc,gpu,smart,search}/cmd/` | 17 个 MCP stdio 能力服务器 (镜像态 = 插件内 `bin/`) |
+| `cmd/daedalus-{fs,shell,pkg,sysinfo,service,blueprint,dupe,trace,proc}` | Go binaries | `../daedalus-plugins/{fs,shell,pkg,sysinfo,service,blueprint,dupe,trace,proc}/cmd/` | 9 个 MCP stdio 能力服务器 (镜像态 = 插件内 `bin/`) |
 | `policy.toml` | TOML | `files/system/opt/daedalus/shared/policy.toml` | 安全策略单一事实源 ([shell]/[fs]/[audit]/[objectmodel]/[blueprints]) |
 | `daedalus.plugin.json` | manifest | `plugin/copilot/` + `../daedalus-plugins/<cap>/` | 插件声明 (id/type/runtime/executable/entrypoint/permissions/tools/resources/i18n) |
 | `policy.ts` | TS module | `plugin/copilot/policy.ts` | Proposal schema validation & frozen shellpolicy copy |
@@ -294,7 +294,7 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
   - **Shell scripts**: `files/scripts/{60-ai-middleware,65-ai-safety,70-daedalus-mcp-servers,75-daedalus-copilot,76-daedalus-plugin-gen}.sh`, `usr/local/bin/daedalus` wrapper, `scripts/sync-daedalus.sh`, `scripts/pack-copilot-plugin.sh`, `scripts/justfile.demo`, `scripts/copilot-prep.sh`
   - **systemd units**: `daedalus-audit.service`, `daedalus-env.service`, `daedalus-{fs,shell,pkg,sysinfo,service,blueprint,dupe}.service`, and each capability's `.service.d/{landlock,credentials}.conf` drop-ins
   - **Policy / manifests**: `files/system/opt/daedalus/shared/policy.toml`, `plugin/copilot/daedalus.plugin.json`, `../daedalus-plugins/<cap>/daedalus.plugin.json`
-- **三仓平级布局(决策 23/24 + 25 + 迁移至 issue-migration-to-3-repos)**: 本仓 = 代码逻辑层 + copilot 插件源码 + 镜像构建落位 + 5 个 core runtime; `../daedalus-sdk/` = SDK 公开仓(11 安全核心包 + 5 Provider/Slot 占位 + state/dirs); `../daedalus-plugins/` = 插件仓(17 Go 能力插件 monorepo)。镜像内 `opt/daedalus/plugins/` 是**构建产物(安装态)**, `plugin/` 与 `../daedalus-plugins/<cap>/` 是**源码侧定义** — 两者绝不同步混用。**三仓须平级 clone**(仓名必须为 `daedalus-core` / `daedalus-sdk` / `daedalus-plugins`,与本仓 `go.work` 路径对应),由 `just verify-dev-layout` 守门。
+- **三仓平级布局(决策 23/24 + 25 + 迁移至 issue-migration-to-3-repos)**: 本仓 = 代码逻辑层 + copilot 插件源码 + 镜像构建落位 + 5 个 core runtime; `../daedalus-sdk/` = SDK 公开仓(11 安全核心包 + 5 Provider/Slot 占位 + state/dirs); `../daedalus-plugins/` = 插件仓(9 Go 能力插件 monorepo)。镜像内 `opt/daedalus/plugins/` 是**构建产物(安装态)**, `plugin/` 与 `../daedalus-plugins/<cap>/` 是**源码侧定义** — 两者绝不同步混用。**三仓须平级 clone**(仓名必须为 `daedalus-core` / `daedalus-sdk` / `daedalus-plugins`,与本仓 `go.work` 路径对应),由 `just verify-dev-layout` 守门。
 - **插件命名语义(目录名 ≠ 系统组件,是"能力提供者")**: 插件目录名/id(`shell/`、`daedalus.shell` 等)是**稳定技术标识符** — 被 systemd 单元、CI、import 路径、copilot 硬编码引用锁定,永不改; manifest `name` 是**人类可读显示名**,按"XX 能力"语义命名,只影响展示层。`shell` = 受控命令执行能力(不是 shell 解释器); `service` = 只读服务状态查询能力(不是 systemd 服务,状态变更走 `daedalus-tx`); `pkg` = dnf/rpm 只读包查询能力; `fs` = 路径作用域文件读写能力。完整对照表见 `../daedalus-plugins/README.md`「命名语义」段。
 - **Vendor tree = `base_image/`**: Vendored upstream fork (gitignored). Updated from `files/` (及 `plugin/` → `base_image/plugin/`, 在 COPY 白名单外) via `scripts/sync-daedalus.sh` before container builds.
 - **Go 依赖策略**: 仅入库 `go.mod` + `go.sum`(版本与完整性锁); `vendor/` 不入库,构建期 `go build` 自动从 module proxy 下载到 `GOMODCACHE`,首次构建需联网; `go mod verify` 校验 go.sum 完整性。`go.work` 不入库,模板 `go.work.example` 入库 — clone 后 `cp go.work.example go.work`。
@@ -305,7 +305,7 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
 - **测试布局**: Deno 测试住仓库根 `tests/deno/`(镜像外),相对导入指向 `plugin/copilot/` 源码;Go 测试随包住本仓 `cmd/`、`internal/` 及兄弟仓各包。镜像 rootfs 内零测试文件。
 - **Single Containerfile**: `Containerfile` at repository root is the sole build entry point. All `*.daedalus` aliases have been removed.
 - **i18n 多语言(强制)**: 所有插件的 UI 字符串必须经 `i18n.ts` 的 `t(key, ...args)` 走,不在源码里硬编码。locale 文件在 `<plugin>/i18n/<locale>.json`(POSIX 下划线命名,`en_US` / `zh_CN` / `ja_JP` / `ko_KR` 等); manifest 声明 `"i18n": ["en_US", "zh_CN"]` 数组形式,en_US 必定位兜底。声明 ↔ 实物用 `scripts/plugin-i18n-sync.sh` 双向校验,CI 走严模式(exit 1 拒漂移),开发者加新 locale 走 `--autofix` 自动改写 manifest。locale 探测: `LC_ALL` > `LANG` > `en_US`,支持精确匹配 → 语言级回退(精确 `zh_CN` → 语言级 `zh` → 兜底 `en_US`)。命名: `<key>` 风格 + `{0}` `{1}` printf 占位符。Go 侧 MCP server 的字符串翻译在 P1 单独做(共享同一份 JSON 文件,经 `embed.FS` 嵌入二进制)。
-- **本仓库边界**: 本仓装的是 daedalus 运行时(本仓 Go 静态二进制 + `cmd/` 5 个 core runtime) + 官方自带 copilot 插件(`plugin/copilot/`) + 17 个能力插件(主源在 `../daedalus-plugins/<cap>/`,本仓只持 `bin/` 构建产物) + 这些官方插件的运维工具(`scripts/plugin-i18n-sync.sh` 等)。**插件开发脚手架**(生成新插件骨架、`daedalus-plugin-scaffold new` 之类)属另一个仓库,本仓库不实现; **外部作者的插件**各自维护在各自仓库,通过 `daedalus-host` 加载(后续 plan)。
+- **本仓库边界**: 本仓装的是 daedalus 运行时(本仓 Go 静态二进制 + `cmd/` 5 个 core runtime) + 官方自带 copilot 插件(`plugin/copilot/`) + 9 个能力插件(主源在 `../daedalus-plugins/<cap>/`,本仓只持 `bin/` 构建产物) + 这些官方插件的运维工具(`scripts/plugin-i18n-sync.sh` 等)。**插件开发脚手架**(生成新插件骨架、`daedalus-plugin-scaffold new` 之类)属另一个仓库,本仓库不实现; **外部作者的插件**各自维护在各自仓库,通过 `daedalus-host` 加载(后续 plan)。
 - **禁止注释引用计划编号**: `todo N` / `决策 N` / `oracle review` / `round-N` 等进度信息写 commit message 或 `.omo/plans/`,不进源码注释。
 - **注释只写 why,不写 what**: 代码可自解释处不加注释。
 - **单文件注释密度软上限 ~15%**: 后续可接 CI 门禁。
