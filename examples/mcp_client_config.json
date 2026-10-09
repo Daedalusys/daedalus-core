@@ -28,6 +28,16 @@
       "command": "/opt/daedalus/plugins/daedalus.dupe/bin/daedalus-dupe",
       "args": [],
       "description": "Daedalus OS large & duplicate file scanner (Go binary; read-only scan of /home, /var/log, /tmp; sha256 / size-only / first-1mb algorithms)"
+    },
+    "daedalus-diskclean": {
+      "command": "/opt/daedalus/plugins/daedalus.diskclean/bin/daedalus-diskclean",
+      "args": [],
+      "description": "Daedalus Disk Cleanup (Go binary; scan journal/dnf cache/PackageKit/coredump/old kernel + confirm_token-gated deletion via daedalus-tx disk.clean adapter)"
+    },
+    "daedalus-organize": {
+      "command": "/opt/daedalus/plugins/daedalus.organize/bin/daedalus-organize",
+      "args": [],
+      "description": "Daedalus File Organizer (Go binary; plan by_type/by_date/by_size/by_ext + conflict preview (rename/skip/abort) + confirm_token-gated os.Rename via daedalus-tx organize.move adapter)"
     }
   }
 }

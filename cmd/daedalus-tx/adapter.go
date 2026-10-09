@@ -35,6 +35,10 @@ func init() {
 	RegisterAdapter("service.set", serviceSetAdapter{})
 	// package.set —— 包生命周期适配器(见 package_set.go)。
 	RegisterAdapter("package.set", packageSetAdapter{})
+	// disk.clean —— 磁盘清理适配器(见 disk_clean.go;daedalus.diskclean 插件写通道)。
+	RegisterAdapter("disk.clean", diskCleanAdapter{})
+	// organize.move —— 文件整理移动适配器(见 organize_move.go;daedalus.organize 插件写通道)。
+	RegisterAdapter("organize.move", organizeMoveAdapter{})
 }
 
 // RegisterAdapter 注册一个适配器(重复注册覆盖)。

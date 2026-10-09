@@ -3,8 +3,10 @@ go 1.25.0
 use (
 	.
 	../daedalus-plugins/blueprint
+	../daedalus-plugins/diskclean
 	../daedalus-plugins/dupe
 	../daedalus-plugins/fs
+	../daedalus-plugins/organize
 	../daedalus-plugins/pkg
 	../daedalus-plugins/proc
 	../daedalus-plugins/service
