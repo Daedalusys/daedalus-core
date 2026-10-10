@@ -107,6 +107,17 @@ func Load() (*View, error) {
 	return Project(txs)
 }
 
+// ViewWithForTest 仅供测试使用 — 生产代码禁止调用。
+// 直接把 Entry 列表构造为 View,绕过 desiredview.Load 的 journal 依赖。
+// 函数名前缀 "ViewWithForTest" 是约定;若生产代码误调,review 应拒。
+func ViewWithForTest(entries []Entry) *View {
+	m := make(map[key]Entry, len(entries))
+	for _, e := range entries {
+		m[key{string(e.Kind), e.Name}] = e
+	}
+	return &View{m: m}
+}
+
 func parseArgs(raw json.RawMessage) (stepArgs, error) {
 	if len(raw) == 0 {
 		return stepArgs{}, errors.New("args 为空")

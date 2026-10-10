@@ -96,6 +96,14 @@ RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     /ctx/build_files/build.sh 78 79
 
+# === Stage 6.6:启用 P4 controller systemd unit(80-daedalus-controller) ===
+# controller unit 是 daedalus-host-controller.service,镜像构建期 systemctl
+# enable 写入 preset,bootc 启动后自动拉起。在 host unit 之后(78-79)、
+# 签名(90)之前,不在 finalize 阶段(stage 8)。
+RUN --mount=type=tmpfs,dst=/tmp \
+    --mount=type=bind,from=ctx,source=/,target=/ctx \
+    /ctx/build_files/build.sh 80
+
 # === Stage 7:签名 + image info(90 + 91) ===
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
