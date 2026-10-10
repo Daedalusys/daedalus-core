@@ -422,3 +422,10 @@ qemu:
 # 参数透传: just integration-test [--tamper-step-args](本机 just 不透传位置参数,经 {{args}} 插值取参,与 dev-install 同法)
 integration-test args='':
     bash tests/integration/tx_service_roundtrip.sh "{{args}}"
+
+# 启用 host controller systemd unit(运行中镜像/dev 虚机场景)
+enable-controller:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    systemctl enable --now daedalus-host-controller.service
+    systemctl status daedalus-host-controller.service --no-pager
