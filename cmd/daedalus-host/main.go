@@ -85,6 +85,8 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		return code
 	case "drift":
 		return cmdDrift(stdout, stderr, args)
+	case "ownership":
+		return cmdOwnership(stdout, stderr, args)
 	case "inspect", "verify", "run-plugin", "render-unit":
 		id, tail, err := parseIDArgs(args)
 		if err != nil {
