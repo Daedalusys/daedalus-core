@@ -126,3 +126,47 @@ func TestPackageHasNoFuncBodies(t *testing.T) {
 		}
 	}
 }
+
+// TestObject_EnvelopeBytes_MatchSDK 锁 SDK objectmodel 包与本 controller
+// 别名包的 JSON 字节形态完全一致 —— 别名偷换形态(改 SDK 字段 / tag / 顺序)
+// 必须使本测试编译失败或失败,防止 v1 线上契约漂移(Review Focus #5)。
+//
+// 这里**复制**了 SDK TestObject_GoldenRoundTrip_FullMetadata 的 want 字面量
+// (controller 是 internal 包,无法直接 import objectmodel 的测试常量;
+// 字面量复制是刻意的锁步机制,改一处必须同时改另一处)。
+func TestObject_EnvelopeBytes_MatchSDK(t *testing.T) {
+	obj := Object{
+		APIVersion: "v1",
+		Kind:       "service",
+		Metadata: Metadata{
+			Name:            "sshd.service",
+			Labels:          map[string]string{"app": "sshd"},
+			Annotations:     map[string]string{"owner": "daedalus"},
+			Generation:      7,
+			UID:             "sshd-uid-1",
+			ResourceVersion: "rv-9",
+			OwnerReferences: []OwnerReference{{Kind: "service", Name: "parent.service"}},
+			Finalizers:      []Finalizer{"daedalus.core/protect"},
+		},
+		Spec: json.RawMessage(`{"desired_state":"active"}`),
+		Status: Status{
+			ObservedGeneration: 6,
+			Conditions: []Condition{{
+				Type:               "Ready",
+				Status:             "True",
+				Reason:             "AsExpected",
+				Message:            "unit active",
+				LastTransitionTime: time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC),
+			}},
+			Properties: map[string]string{"ActiveState": "active"},
+		},
+	}
+	b, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"api_version":"v1","kind":"service","metadata":{"name":"sshd.service","labels":{"app":"sshd"},"annotations":{"owner":"daedalus"},"generation":7,"uid":"sshd-uid-1","resource_version":"rv-9","owner_references":[{"kind":"service","name":"parent.service"}],"finalizers":["daedalus.core/protect"]},"spec":{"desired_state":"active"},"status":{"observed_generation":6,"conditions":[{"type":"Ready","status":"True","reason":"AsExpected","message":"unit active","last_transition_time":"2026-10-10T00:00:00Z"}],"properties":{"ActiveState":"active"}}}`
+	if string(b) != want {
+		t.Fatalf("controller 别名与 SDK envelope 字节漂移:\n got %s\nwant %s", b, want)
+	}
+}

@@ -126,9 +126,9 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | --- | --- | --- | --- |
 | CRD | `objectmodel.go` Kind 封闭枚举 + manifest `resources` | A 定义层 | v1 已交付 |
 | apiVersion | 信封有 `api_version` 键,无版本化需求,投影恒空 | A | when-needed |
-| metadata.labels / annotations / generation | 信封 `objectmodel.Metadata` 已在场,读侧 `MatchLabels`;尚无填充方 | A | P4 填值 |
-| metadata.uid | 无 | A | when-needed |
-| metadata.resourceVersion | 无(tx 单写者) | A | when-needed |
+| metadata.labels / annotations / generation | 信封 `objectmodel.Metadata` 已在场;读侧 `MatchLabels` + `FilterByLabels` 列表筛选;写侧 `SetLabel` / `SetAnnotation` / `BumpGeneration` 已交付(sdk#1 P3,2026-10-10) | A | v1 已交付 |
+| metadata.uid | `Metadata.UID` 已交付;校验非空时无控制字符 + 长度 ≤ 253(sdk#1 P3) | A | v1 已交付 |
+| metadata.resourceVersion | `Metadata.ResourceVersion` 已交付;`BumpGeneration` 不动它,由 provider 在 set spec 后回填(sdk#1 P3) | A | v1 已交付 |
 | spec/status 分离 | 信封 `objectmodel.Object{api_version,kind,metadata,spec,status}`,Resource 与 ServiceState 双投影 | A | v1 已交付 |
 | Conditions | `objectmodel.Condition` 三态 + `UpsertCondition`;`service.query` 产出 `Ready` | A | v1 已交付 |
 | controller / reconcile | 无 controller 循环(tx 用户显式调用);期望投影已裁决+落码 `internal/desiredview`(裁决文 `docs/desired-state-projection.md`,sdk#4) | B | 契约缝 ReconcileFunc → P4 |
@@ -139,7 +139,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | scheduler | **故意无**(桌面单机) | — | 故意无 |
 | namespace | 无(DynamicUser 隔离替代) | C | P4+ |
 | RBAC | 无 | C | 开放问题 |
-| finalizer / ownerRef / GC | 无 | A | when-needed(随 delete 适配器) |
+| finalizer / ownerRef / GC | `Metadata.OwnerReferences` / `Metadata.Finalizers` 字段 + `Validate` 已交付(sdk#1 P3);GC 触发逻辑归 P4 | A | P4 |
 | events | audit 是证据链,非事件流 | B | P4 |
 | server-side apply | 无(tx 全量快照) | C | 开放问题 |
 | kubectl diff | tx status 可回放日志;preview 限事务 | C | P4 |
@@ -213,10 +213,10 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus 每笔事务自带 
 
 | 缺口 | 现在 | 为什么后做 |
 | --- | --- | --- |
-| metadata 块 | 信封 `Metadata{name,labels,annotations,generation}` 已在;`Resource` 声明仍 3 字段 | 按标签筛选的消费者是调和循环,声明侧预先造值只会得到空格 |
+| metadata 块 | 信封 `Metadata{name,labels,annotations,generation,uid,resource_version,owner_references,finalizers}` 全字段已交付;writer 端 `BumpGeneration`/`SetLabel`/`SetAnnotation`/`AddFinalizer` 在场(sdk#1 P3) | 按标签筛选的消费者是调和循环(P4);声明侧预先造值只会得到空格 |
 | spec/status 信封 | **已闭合**:`Object{api_version,kind,metadata,spec,status}`,`Resource.Object()` 与 `ServiceState.Object()` 双投影 | — |
 | Conditions | **已闭合**:`Condition` 三态 + `UpsertCondition`(同状态写回不刷新转换时刻);`service.query` 产出 `Ready` | 执行面转换时刻随 tx apply 落地 |
-| ownerRef / finalizer | 无父子、无延迟删除 | 先有 delete 适配器,才谈延迟删除 |
+| ownerRef / finalizer | 字段在场 + 校验在场(sdk#1 P3);无 GC 触发逻辑 | GC 归 P4 |
 
 ### B 架构层(P4)
 
@@ -264,7 +264,7 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus 每笔事务自带 
 | 阶段 | 内容 | 理由 |
 | --- | --- | --- |
 | P2 | package kind + 事务适配器 | **已交付 v1.1**(plan daedalus-pkg-kind,2026-09-15) |
-| P3 | 契约类型被真实消费(Condition、Generation) | **Condition 已交付**(2026-09-26:信封升入 SDK、`service.query` 产出 `Ready`);Generation 字段在场但无填充方,其消费者是 P4 投影管道 |
+| P3 | 契约类型被真实消费(Condition、Generation) | **已完成**(2026-10-10):Condition 已交付(2026-09-26,`service.query` 产出 `Ready`);Generation 字段 + `BumpGeneration` writer 已交付;`Metadata.UID` / `ResourceVersion` / `OwnerReferences` / `Finalizers` 字段 + `Validate` 已交付(sdk#1 plan `2026-10-10-vision-p3-object-model.md`);其消费者(controller 调和循环 + finalizer GC)归 P4 投影管道 |
 | P4 | controller runtime + 外部 controller 插件 | list-watch/reconcile 把已钉的契约缝长出行为 |
 | P5 | 文档/示例/评估 harness 运营化 | 三仓各自演进,无强制迁移 |
 

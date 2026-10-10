@@ -16,10 +16,12 @@ import (
 // 形状的唯一事实源在 SDK objectmodel(插件仓要 import,本包是 internal 不可达),
 // 此处别名保持 v1 线上契约与金样字节形态不变。
 type (
-	Object    = objectmodel.Object
-	Metadata  = objectmodel.Metadata
-	Status    = objectmodel.Status
-	Condition = objectmodel.Condition
+	Object         = objectmodel.Object
+	Metadata       = objectmodel.Metadata
+	Status         = objectmodel.Status
+	Condition      = objectmodel.Condition
+	OwnerReference = objectmodel.OwnerReference
+	Finalizer      = objectmodel.Finalizer
 )
 
 // Result 是动词处理器的返回契约(requeue_after_ns 为非负纳秒数,零值抑制)。
