@@ -1,0 +1,13 @@
+[Unit]
+Description=Daedalus host controller runtime (P4 reconcile skeleton)
+After=daedalus-host.service
+Wants=daedalus-host.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/daedalus-host controller start --foreground --poll-interval=2s
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
