@@ -9,9 +9,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -88,6 +90,63 @@ func TestTaskSet_Propose_EnabledHappyPath(t *testing.T) {
 	}
 	if af.Verb != "enable" {
 		t.Errorf("verb got %q want %q", af.Verb, "enable")
+	}
+}
+
+func TestTaskSet_Propose_RejectsUnknownDesiredState(t *testing.T) {
+	a := taskSetAdapter{}
+	_, _, err := a.Propose(unitDirCtx(t.TempDir()),
+		json.RawMessage(`{"name":"backup","desired_state":"started"}`))
+	if err == nil {
+		t.Fatal("表外 desired_state 竟然 Propose 成功")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `unknown desired_state "started"`) {
+		t.Errorf("报错未包含表外值逐字标识: %s", msg)
+	}
+	if !strings.Contains(msg, "enabled|disabled|absent") {
+		t.Errorf("报错未点名 v1 词表: %s", msg)
+	}
+}
+
+func TestTaskSet_Propose_RejectsMissingFile_AllStates(t *testing.T) {
+	unitDir := t.TempDir() // 空：没有任何 timer 文件
+	for _, state := range []string{"enabled", "disabled", "absent"} {
+		t.Run(state, func(t *testing.T) {
+			a := taskSetAdapter{}
+			_, _, err := a.Propose(unitDirCtx(unitDir),
+				json.RawMessage(fmt.Sprintf(`{"name":"backup","desired_state":%q}`, state)))
+			if err == nil {
+				t.Fatalf("missing-file + desired_state=%q 竟然 Propose 成功", state)
+			}
+			if !strings.Contains(err.Error(), "task file not found:") {
+				t.Errorf("[%s] 报错未逐字点名 task file not found: %s", state, err.Error())
+			}
+		})
+	}
+}
+
+func TestTaskSet_Propose_RejectsMissingDesiredState(t *testing.T) {
+	a := taskSetAdapter{}
+	_, _, err := a.Propose(unitDirCtx(t.TempDir()),
+		json.RawMessage(`{"name":"backup"}`))
+	if err == nil {
+		t.Fatal("缺 desired_state 竟然 Propose 成功")
+	}
+	if !strings.Contains(err.Error(), `缺 "desired_state"`) {
+		t.Errorf("报错未点名 missing field: %s", err.Error())
+	}
+}
+
+func TestTaskSet_Propose_RejectsTrailingJSON(t *testing.T) {
+	a := taskSetAdapter{}
+	_, _, err := a.Propose(unitDirCtx(t.TempDir()),
+		json.RawMessage(`{"name":"backup","desired_state":"enabled"}x`))
+	if err == nil {
+		t.Fatal("尾随 JSON 竟然 Propose 成功")
+	}
+	if !strings.Contains(err.Error(), "尾随数据") {
+		t.Errorf("报错未点名 trailing data: %s", err.Error())
 	}
 }
 
