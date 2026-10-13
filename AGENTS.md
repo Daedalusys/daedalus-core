@@ -27,7 +27,7 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 ├── cmd/                       # ★ 5 个 core runtime 二进制入口
 │   ├── daedalus-host/          #   插件 list/inspect/verify/run-plugin/render-unit (决策 16:非父进程,零 spawn)
 │   ├── daedalus-audit/         #   哈希链审计 CLI (--identity/--tool/--args/--outcome/--log-path, verify 子命令)
-│   ├── daedalus-tx/            #   事务通道 CLI (begin→propose→apply→rollback; service/package 适配器)
+│   ├── daedalus-tx/            #   事务通道 CLI (begin→propose→apply→rollback; service/package/task 适配器)
 │   ├── daedalus-smoke/         #   镜像内端到端 smoke (v3 构建机补跑; todo 18)
 │   └── daedalus-plugin-pack/   #   zip 打包器 (checksums 注入 + manifest 规范化自摘要 + zip-slip 防线)
 ├── internal/                  # ★ 契约包 (核心 runtime 共享;其余安全包已迁 daedalus-sdk)
@@ -64,7 +64,7 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 | 安全白名单 / 策略 | `files/system/opt/daedalus/shared/policy.toml` + `../daedalus-sdk/policy/` | 单一事实源,Go 运行时读取;ALLOW_COMMANDS env 整体 REPLACE;损坏或缺失均 fail-closed 拒启(回退 Default 需 development opt-in) |
 | Copilot 侧冻结副本 | `plugin/copilot/policy.ts` | 与 `../daedalus-sdk/shellpolicy` 同步义务;契约由 `tests/deno/shellpolicy_contract.test.ts` 钉 |
 | Audit hash chain | `../daedalus-sdk/audit/` + `cmd/daedalus-audit/` | genesis `0`*64, syscall.Flock, sha256 链, Python 金样字节级兼容 (`../daedalus-sdk/audit/testdata/golden.jsonl`) |
-| 事务通道(service/package) | `cmd/daedalus-tx/` + `internal/tx/` | begin→propose→apply→rollback;service/package 适配器;euid 守门;sidecar 落盘必捕获 |
+| 事务通道(service/package/task) | `cmd/daedalus-tx/` + `internal/tx/` | begin→propose→apply→rollback;service/package/task 适配器;euid 守门;sidecar 落盘必捕获 |
 | 期望视图投影(sdk#4) | `internal/desiredview/` + `docs/desired-state-projection.md` | journal→Current Desired View 纯函数全量 replay;applied 唯一提交点;封闭映射 fail-closed;`[ownership]` 归 P4 落 policy |
 | Add systemd sandbox rule | `files/system/usr/lib/systemd/system/daedalus-*.service.d/*.conf` | landlock.conf = seccomp/network;credentials.conf = LoadCredential |
 | Reorder / add image build step | `files/scripts/NN-name.sh` | 60-ai-middleware, 65-ai-safety, 70-daedalus-mcp-servers, 75-daedalus-copilot, 76-daedalus-plugin-gen |
@@ -80,7 +80,7 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 | `daedalus` CLI | wrapper script | `files/system/usr/local/bin/daedalus` | 询问宿主构造启动命令 (不自己声明 Deno 权限), `$HOME` 占位展开后 exec |
 | `daedalus-host` | Go binary | `cmd/daedalus-host/` (镜像态 `usr/local/bin/daedalus-host`) | 插件 list/inspect/verify/run-plugin/render-unit;**非父进程,零 spawn**;`paths.go` / `paths_demo.go` build-tag 互斥(dev 路径重写仅 demo 编译期常驻) |
 | `daedalus-audit` | Go binary | `cmd/daedalus-audit/` (镜像态 `usr/local/bin/`) | 哈希链审计 CLI;所有审计写入唯一入口 |
-| `daedalus-tx` | Go binary | `cmd/daedalus-tx/` | 事务 CLI;`begin`→`propose`→`apply`→`rollback`;service/package 适配器;user-scope-only (service) / root-only (package) euid 守门 |
+| `daedalus-tx` | Go binary | `cmd/daedalus-tx/` | 事务 CLI;`begin`→`propose`→`apply`→`rollback`;service/package/task 适配器;user-scope-only (service/task) / root-only (package) euid 守门 |
 | `daedalus-smoke` | Go binary | `cmd/daedalus-smoke/` | 镜像内端到端 smoke;v3 构建机补跑 |
 | `daedalus-plugin-pack` | Go binary | `cmd/daedalus-plugin-pack/` | zip 打包器;checksums 注入 + manifest 规范化自摘要 + zip-slip 防线 |
 | `controller` | Go pkg | `internal/controller/` | 决策 25 契约缝锁定包;host/tx 共享 |
@@ -157,9 +157,10 @@ Traditional systems grant AI agents or LLM clients unrestricted shell access, po
 > 本段由 plan `aios-object-model-alignment` W7/T31 增量追加 (决策 25 落地;完整决策与执行模型细节见 `.omo/plans/aios-object-model-alignment.md`,此处不重复)。
 
 - **单一事实源**: 对象模型 schema 只有 `../daedalus-sdk/objectmodel/` 一处定义。`Resource` 是 manifest 声明类型,三字段元组 `kind` + `name` + `desired_state` (JSON 键 `kind`/`name`/`desired_state`),绝不掺入 systemctl 字段;`ServiceState` 是查询/状态载荷共用类型 (`kind`/`name`/`desired_state`/`properties`/`conditions`,Properties 键为 systemctl 属性名原文、Conditions 是其上的派生语义层,两层并存不互替)。信封 `Object`(`api_version`/`kind`/`metadata{name,labels,annotations,generation}`/`spec`/`status{observed_generation,conditions,properties}`)同在 `objectmodel/envelope.go`,两类载荷都投影进它;`internal/controller` 的同名类型是它的**别名**,不得出现第二份形状。labels/annotations/generation 目前只有读侧 API(`MatchLabels`/`GetCondition`/`UpsertCondition`)无填充方,填充归调和循环;uid/resourceVersion/ownerRef/finalizers 未落地(出现真实消费者再谈),id 也未进入 v1 声明模式。
-- **资源种类**: `Kind` 封闭枚举共 7 类 (service / package / container / capability / task / transaction / policy),v1 仅 `service` 与 `package` 有 provider;其余五类是保留枚举位,校验器接受、策略网关 fail-closed 拒绝。**新增资源种类必须先在 `../daedalus-sdk/objectmodel/` 加 Kind 常量 + `kindRegistry` 登记 + 校验分支**,再经 `policy.toml [objectmodel].enabled_kinds` 放行(三点漂移测试钉死)。
+- **资源种类**: `Kind` 封闭枚举共 7 类 (service / package / container / capability / task / transaction / policy),v1 现 `service`、`package`、`task` 有 provider;其余四类(container / capability / transaction / policy)是保留枚举位,校验器接受、策略网关 fail-closed 拒绝(2026-10-13 issue #1 架构收敛: capability 收编于 VISION §4 / #45 闭环;transaction 等 use case 证明;container / policy 是后续 plan 排队项)。**新增资源种类必须先在 `../daedalus-sdk/objectmodel/` 加 Kind 常量 + `kindRegistry` 登记 + 校验分支**,再经 `policy.toml [objectmodel].enabled_kinds` 放行(三点漂移测试钉死)。
 - **package kind (plan `daedalus-pkg-kind` 增量追加)**: `package` 自此有 provider — 只读观测走 `../daedalus-plugins/pkg/` 的 `dnf_query`/`dnf_list_installed` (`../daedalus-sdk/pkgquery`),状态变更一律经 `daedalus-tx` 的 `package.set` 适配器(事务通道, begin→propose→apply→rollback);`desired_state` 为 `present`/`absent`/`latest` 三值冻结三元组,映射 dnf `install`/`remove`/`upgrade` (`packageSetVerbs`,表外值拒绝);适配器 euid==0 守门(错串 `package.set requires root (euid=0); re-run via sudo`,与 `service.set` 的 user-scope-only 强制镜像对称 — package 强制 root,service 拒绝 root 单元);回滚依托 `dnf history undo`,Apply 以"捕获 dnf history id + sidecar 落盘 (`<txID>-<step.Index>.dnf_history_id`,tx-id 经 D-1 裁决的 ctx 侧路透传给适配器,`tx.Step` 六键线上契约不动)"为**成功必要条件** — 捕获或落盘任一失败都整体判 Apply 失败,杜绝"Apply 成功但 Rollback 不可用" (fail-closed 哲学);Rollback 读侧 sidecar 缺失/不可读→严格 error,不兜底、绝不猜 history id,history 已清理时 `present`/`latest` best-effort `remove` 兜底、`absent` 严格 error 且 dnf 物理零调用(不可逆)。
-- **transactable**: 不是所有资源都事务化。事务性资源(目前 service / package)的状态变更走 `daedalus-tx` (begin→propose→apply→rollback) 通道;未启用 / 无 tx 适配器的非事务性资源被策略网关与适配器注册表拒绝,连 begin→propose→apply 序列都无法发起。v1 执行模型: `daedalus-tx` 是用户态调用的 CLI,无 systemd 单元(决策 25)。
+- **task kind (plan `daedalus-task-kind` 增量追加, issue #1 第一刀)**: `task` 自此有 provider (`daedalus-tx task.set` 适配器),仅生命周期管理形式(2026-10-13 架构裁决:cron 替代形态独立 plan,不在本 plan 范围)。`desired_state` 为 `enabled`/`disabled`/`absent` 三值冻结(同 `package` 同款, 同表即守, Propose 提前拒)。映射 `systemctl --user enable|disable` 以及 absent 的复合路径 (observe is-enabled → 必要时 disable → rm → daemon-reload, disable 失败即整体失败不继续 rm)。适配器复用 `unitguard.go` 与 `service_set_exec.go` 的全部助手(单元名正则同款);任务验证为 Adapter 接口跨域验证后不需新增抽象(spec §7)。资源位置 `~/.config/systemd/user/<stem>.timer` 与 service.set 同域同守卫。没有独立的 `daedalus-task` MCP server (L0 query/drift 缺口— drift 看 task 为空集合, 后续 plan 排队)。
+- **transactable**: 不是所有资源都事务化。事务性资源(目前 service / package / task)的状态变更走 `daedalus-tx` (begin→propose→apply→rollback) 通道;未启用 / 无 tx 适配器的非事务性资源被策略网关与适配器注册表拒绝,连 begin→propose→apply 序列都无法发起。v1 执行模型: `daedalus-tx` 是用户态调用的 CLI,无 systemd 单元(决策 25)。
 - **状态字段**: `ActiveState`/`SubState` 等观测态不在声明 schema 里,由 `../daedalus-sdk/state/` 包提供 — `state.jsonl` 追加式观测缓存,行形 `StateEntry{kind, name, observed_at, payload}`,payload 为序列化的 `objectmodel.ServiceState`。state 是派生缓存,与哈希链审计(证据层)分离;v1 状态记忆按上下文隔离 (DynamicUser 命名空间,决策 25 补充条款)。
 - **安装态 vs 源码侧**: 镜像安装态 `files/system/opt/daedalus/plugins/daedalus.*/daedalus.plugin.json` 的 `resources` 字段(含 `desired_state` 补全与 checksums 注入)是 `just plugin-pack` 的构建期产物;源码侧仅 `../daedalus-plugins/service/` 与 `../daedalus-plugins/pkg/` 声明 `resources`,其余 4 个既有能力与 copilot manifest 暂不写。`76-daedalus-plugin-gen.sh` 构建期交叉核对 `resources[].kind` ⊆ `[objectmodel].enabled_kinds`,漂移即拒构建。
 
