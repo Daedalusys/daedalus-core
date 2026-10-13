@@ -39,6 +39,8 @@ func init() {
 	RegisterAdapter("disk.clean", diskCleanAdapter{})
 	// organize.move —— 文件整理移动适配器(见 organize_move.go;daedalus.organize 插件写通道)。
 	RegisterAdapter("organize.move", organizeMoveAdapter{})
+	// task.set —— task 生命周期适配器(见 task_set.go;user 域 systemd timer 生命周期)。
+	RegisterAdapter("task.set", taskSetAdapter{})
 }
 
 // RegisterAdapter 注册一个适配器(重复注册覆盖)。
