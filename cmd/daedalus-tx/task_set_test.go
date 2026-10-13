@@ -12,21 +12,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Daedalusys/daedalus-core/internal/tx"
 )
 
 // installFakeSystemctl 安装假 systemctl 并注入包级变量(测试结束自动还原)。
-// enabledOut 是 `is-enabled` 子命令的固定回显(如 "disabled");
-// exitCode 是恒定的退出码(0=全成功; 非零用于观测失败路径)。返回 capture 路径。
-func installFakeSystemctl(t *testing.T, enabledOut string, exitCode int) string {
+// enabledOut 是 `is-enabled` 子命令的固定回显(如 "disabled" / "enabled");
+// disableExit 是 `disable` 子命令独立退出码(0=成功 / 非零用于镶试 apply 负面路径);
+// 其他子命令均返回 0。返回 capture 路径。
+func installFakeSystemctl(t *testing.T, enabledOut string, disableExit int) string {
 	t.Helper()
 	dir := t.TempDir()
 	capture := filepath.Join(dir, "argv.txt")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + strconv.Quote(capture) +
-		"\nif [ \"$2\" = is-enabled ]; then printf '%s\\n' " + strconv.Quote(enabledOut) + "; fi\nexit " +
-		strconv.Itoa(exitCode) + "\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + strconv.Quote(capture) + "\n"
+	script += "case \"$2\" in\n"
+	script += "  is-enabled) printf '%s\\n' " + strconv.Quote(enabledOut) + " ;;\n"
+	script += "  disable)    exit " + strconv.Itoa(disableExit) + " ;;\n"
+	script += "esac\nexit 0\n"
 	path := filepath.Join(dir, "systemctl")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("写入假 systemctl 失败: %v", err)
@@ -35,6 +41,45 @@ func installFakeSystemctl(t *testing.T, enabledOut string, exitCode int) string 
 	systemctlUserBinary = path
 	t.Cleanup(func() { systemctlUserBinary = orig })
 	return capture
+}
+
+// readCaptured 读取 capture 为"每次调用一行 argv"的切片; 文件不存在 → nil(从未执行)。
+func readCaptured(t *testing.T, capture string) []string {
+	t.Helper()
+	data, err := os.ReadFile(capture)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("读 capture 失败: %v", err)
+	}
+	s := strings.TrimSuffix(string(data), "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+// mustBuildTaskSetBefore 构造 step.BeforeState JSON, 仅填 Propose/Apply 必需的 UnitFile。
+// Apply/Rollback 测试用本帮手生成 before_state: 内容与 enabled_state 供 Rollback 检查。
+func mustBuildTaskSetBefore(t *testing.T, unitDir, stem, content, enabledState string) json.RawMessage {
+	t.Helper()
+	unitFile, err := filepath.Abs(filepath.Join(unitDir, stem))
+	if err != nil {
+		t.Fatalf("计算 unitFile 路径失败: %v", err)
+	}
+	if content == "" {
+		b, err := json.Marshal(taskSetBefore{TimerName: stem, UnitFile: unitFile, EnabledState: enabledState})
+		if err != nil {
+			t.Fatalf("序列化 before_state 失败: %v", err)
+		}
+		return b
+	}
+	b, err := json.Marshal(taskSetBefore{TimerName: stem, UnitFile: unitFile, FileContent: &content, EnabledState: enabledState})
+	if err != nil {
+		t.Fatalf("序列化 before_state 失败: %v", err)
+	}
+	return b
 }
 
 // writeTimerFile 在 unitDir 下写一个 timer 单元文件。
@@ -147,6 +192,90 @@ func TestTaskSet_Propose_RejectsTrailingJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "尾随数据") {
 		t.Errorf("报错未点名 trailing data: %s", err.Error())
+	}
+}
+
+// ===== Apply =====
+
+func TestTaskSet_Apply_Enabled(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
+	capture := installFakeSystemctl(t, "disabled", 0)
+
+	a := taskSetAdapter{}
+	res := a.Apply(unitDirCtx(unitDir), tx.Step{
+		Args:        json.RawMessage(`{"name":"backup","desired_state":"enabled"}`),
+		BeforeState: mustBuildTaskSetBefore(t, unitDir, "backup.timer", "[Timer]\n", "disabled"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	want := []string{"--user enable backup.timer"}
+	if got := readCaptured(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("systemctl 调用序列 got %v want %v", got, want)
+	}
+}
+
+func TestTaskSet_Apply_Disabled(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
+	capture := installFakeSystemctl(t, "enabled", 0)
+
+	a := taskSetAdapter{}
+	res := a.Apply(unitDirCtx(unitDir), tx.Step{
+		Args:        json.RawMessage(`{"name":"backup","desired_state":"disabled"}`),
+		BeforeState: mustBuildTaskSetBefore(t, unitDir, "backup.timer", "[Timer]\n", "enabled"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	want := []string{"--user disable backup.timer"}
+	if got := readCaptured(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("systemctl 调用序列 got %v want %v", got, want)
+	}
+}
+
+func TestTaskSet_Apply_Absent_DisablesRemovesReloads(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
+	capture := installFakeSystemctl(t, "enabled", 0)
+
+	a := taskSetAdapter{}
+	res := a.Apply(unitDirCtx(unitDir), tx.Step{
+		Args:        json.RawMessage(`{"name":"backup","desired_state":"absent"}`),
+		BeforeState: mustBuildTaskSetBefore(t, unitDir, "backup.timer", "[Timer]\n", "enabled"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	want := []string{
+		"--user is-enabled backup.timer",
+		"--user disable backup.timer",
+		"--user daemon-reload",
+	}
+	if got := readCaptured(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("systemctl 调用序列 got %v want %v", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(unitDir, "backup.timer")); !os.IsNotExist(err) {
+		t.Errorf("absent 后 timer 文件应被删除, stat err = %v", err)
+	}
+}
+
+func TestTaskSet_Apply_Absent_DisableFails_DoesNotRemove(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
+	_ = installFakeSystemctl(t, "enabled", 1) // disable 返回非零
+
+	a := taskSetAdapter{}
+	res := a.Apply(unitDirCtx(unitDir), tx.Step{
+		Args:        json.RawMessage(`{"name":"backup","desired_state":"absent"}`),
+		BeforeState: mustBuildTaskSetBefore(t, unitDir, "backup.timer", "[Timer]\n", "enabled"),
+	})
+	if res.Returncode == 0 {
+		t.Fatal("disable 失败时 apply 应返回 rc!=0")
+	}
+	if _, err := os.Stat(filepath.Join(unitDir, "backup.timer")); err != nil {
+		t.Errorf("disable 失败后 timer 文件必须保留, stat err = %v", err)
 	}
 }
 
