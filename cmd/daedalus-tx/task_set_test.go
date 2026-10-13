@@ -279,4 +279,103 @@ func TestTaskSet_Apply_Absent_DisableFails_DoesNotRemove(t *testing.T) {
 	}
 }
 
+// ===== Rollback =====
+
+func TestTaskSet_Rollback_RestoresFileContent(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	if err := os.MkdirAll(unitDir, 0o755); err != nil {
+		t.Fatalf("建 unitDir 失败: %v", err)
+	}
+	// file 不存在(已 absent 删除)
+	capture := installFakeSystemctl(t, "disabled", 0)
+
+	a := taskSetAdapter{}
+	res := a.Rollback(unitDirCtx(unitDir), tx.Step{
+		Args:        json.RawMessage(`{"name":"backup","desired_state":"absent"}`),
+		BeforeState: mustBuildTaskSetBefore(t, unitDir, "backup.timer", "[Timer]\n", "enabled"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("rollback 意外失败: %+v", res)
+	}
+	want := []string{"--user daemon-reload", "--user enable backup.timer"}
+	if got := readCaptured(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("systemctl 调用序列 got %v want %v", got, want)
+	}
+	got, err := os.ReadFile(filepath.Join(unitDir, "backup.timer"))
+	if err != nil {
+		t.Fatalf("文件应已恢复, 读错误: %v", err)
+	}
+	if string(got) != "[Timer]\n" {
+		t.Errorf("文件内容 got %q want %q", got, "[Timer]\n")
+	}
+}
+
+func TestTaskSet_Rollback_RestoresEnabledState(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
+	capture := installFakeSystemctl(t, "disabled", 0)
+
+	a := taskSetAdapter{}
+	res := a.Rollback(unitDirCtx(unitDir), tx.Step{
+		Args:        json.RawMessage(`{"name":"backup","desired_state":"enabled"}`),
+		BeforeState: mustBuildTaskSetBefore(t, unitDir, "backup.timer", "[Timer]\n", "enabled"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("rollback 意外失败: %+v", res)
+	}
+	want := []string{"--user enable backup.timer"}
+	if got := readCaptured(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("systemctl 调用序列 got %v want %v", got, want)
+	}
+}
+
+func TestTaskSet_Rollback_DoesNotDeleteUnmanagedFile(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	if err := os.MkdirAll(unitDir, 0o755); err != nil {
+		t.Fatalf("建 unitDir 失败: %v", err)
+	}
+	writeTimerFile(t, unitDir, "backup.timer", "UNRELATED")
+	capture := installFakeSystemctl(t, "static", 0) // is-enabled 返回 static(表外)→ 不发动词
+
+	a := taskSetAdapter{}
+	res := a.Rollback(unitDirCtx(unitDir), tx.Step{
+		Args:        json.RawMessage(`{"name":"backup","desired_state":"absent"}`),
+		BeforeState: mustBuildTaskSetBefore(t, unitDir, "backup.timer", "", "static"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("rollback 意外失败: %+v", res)
+	}
+	got, err := os.ReadFile(filepath.Join(unitDir, "backup.timer"))
+	if err != nil {
+		t.Fatalf("文件应保留, 读错误: %v", err)
+	}
+	if string(got) != "UNRELATED" {
+		t.Errorf("文件内容被误改 got %q want %q", got, "UNRELATED")
+	}
+	if calls := readCaptured(t, capture); calls != nil {
+		t.Errorf("非恢复动词表外值不应发动词, got %v", calls)
+	}
+}
+
+func TestTaskSet_Rollback_SkipsUnknownEnabledState(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
+	capture := installFakeSystemctl(t, "static", 0) // is-enabled 返回静态
+
+	a := taskSetAdapter{}
+	res := a.Rollback(unitDirCtx(unitDir), tx.Step{
+		Args:        json.RawMessage(`{"name":"backup","desired_state":"enabled"}`),
+		BeforeState: mustBuildTaskSetBefore(t, unitDir, "backup.timer", "[Timer]\n", "static"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("rollback 意外失败: %+v", res)
+	}
+	if !strings.Contains(res.Stdout, "static") {
+		t.Errorf("stdout 应点名 enabled_state=\"static\", got %q", res.Stdout)
+	}
+	if calls := readCaptured(t, capture); calls != nil {
+		t.Errorf("static 不应发动词, got 调用序列 %v", calls)
+	}
+}
+
 
