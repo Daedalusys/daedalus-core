@@ -17,8 +17,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Daedalusys/daedalus-sdk/policy"
 	"github.com/Daedalusys/daedalus-core/internal/tx"
+	"github.com/Daedalusys/daedalus-sdk/policy"
 )
 
 // euidOverride 临时把 geteuid 翻为 e(测试 root/non-root 路径),测试结束自动还原。
@@ -78,8 +78,8 @@ func TestPolicySet_Propose_LoadedHappyPath(t *testing.T) {
 	if af.DesiredState != "loaded" {
 		t.Errorf("after desired_state got %q want %q", af.DesiredState, "loaded")
 	}
-	if af.SourceRef != "policy.ref.toml" {
-		t.Errorf("after source_ref got %q want %q", af.SourceRef, "policy.ref.toml")
+	if af.ContentRef != "policy.ref.toml" {
+		t.Errorf("after source_ref got %q want %q", af.ContentRef, "policy.ref.toml")
 	}
 }
 
@@ -240,8 +240,8 @@ func TestPolicySet_Propose_Absent_HappyPath(t *testing.T) {
 	if err := json.Unmarshal(after, &af); err != nil {
 		t.Fatal(err)
 	}
-	if af.SourceRef != "" {
-		t.Errorf("absent 不应带 source_ref, got %q", af.SourceRef)
+	if af.ContentRef != "" {
+		t.Errorf("absent 不应带 source_ref, got %q", af.ContentRef)
 	}
 }
 
@@ -332,8 +332,12 @@ func TestPolicySet_Apply_Loaded_DriftZeroPasses(t *testing.T) {
 	refPath := filepath.Join(dir, "new.ref.toml")
 	oldContent := []byte("enabled_kinds = [\"service\"]\n")
 	newContent := []byte("enabled_kinds = [\"service\", \"package\"]\n")
-	if err := os.WriteFile(targetPath, oldContent, 0o644); err != nil { t.Fatal(err) }
-	if err := os.WriteFile(refPath, newContent, 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(targetPath, oldContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(refPath, newContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	policyFilePath = targetPath
 	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
 
@@ -360,8 +364,12 @@ func TestPolicySet_Apply_Loaded_DriftDetected(t *testing.T) {
 	snapshotContent := []byte("enabled_kinds = [\"service\"]\n")
 	// 当前文件已被人手改过(与 snapshot 不同)——drift 检测应触发
 	currentContent := []byte("enabled_kinds = [\"container\"]\n")
-	if err := os.WriteFile(targetPath, currentContent, 0o644); err != nil { t.Fatal(err) }
-	if err := os.WriteFile(refPath, []byte("enabled_kinds = [\"package\"]\n"), 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(targetPath, currentContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(refPath, []byte("enabled_kinds = [\"package\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	policyFilePath = targetPath
 	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
 
@@ -385,7 +393,9 @@ func TestPolicySet_Apply_Absent_WritesSentinel(t *testing.T) {
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "policy.toml")
 	oldContent := []byte("enabled_kinds = [\"service\"]\n")
-	if err := os.WriteFile(targetPath, oldContent, 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(targetPath, oldContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	policyFilePath = targetPath
 	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
 
@@ -412,7 +422,9 @@ func TestPolicySet_Apply_Absent_DriftDetected(t *testing.T) {
 	targetPath := filepath.Join(dir, "policy.toml")
 	snapshotContent := []byte("enabled_kinds = [\"service\"]\n")
 	currentContent := []byte("enabled_kinds = [\"container\"]\n")
-	if err := os.WriteFile(targetPath, currentContent, 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(targetPath, currentContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	policyFilePath = targetPath
 	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
 
@@ -435,7 +447,9 @@ func TestPolicySet_Apply_RejectsEuidNonZero(t *testing.T) {
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "policy.toml")
 	content := []byte("enabled_kinds = [\"service\"]\n")
-	if err := os.WriteFile(targetPath, content, 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(targetPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	policyFilePath = targetPath
 	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
 
@@ -458,7 +472,9 @@ func TestPolicySet_Rollback_RestoresLoaded(t *testing.T) {
 	origContent := []byte("enabled_kinds = [\"service\"]\n")
 	// 模拟 Apply loaded 之后:文件已经是新内容
 	appliedContent := []byte("enabled_kinds = [\"service\", \"package\"]\n")
-	if err := os.WriteFile(targetPath, appliedContent, 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(targetPath, appliedContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	policyFilePath = targetPath
 	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
 
@@ -482,7 +498,9 @@ func TestPolicySet_Rollback_RestoresAbsent(t *testing.T) {
 	targetPath := filepath.Join(dir, "policy.toml")
 	origContent := []byte("enabled_kinds = [\"service\"]\n")
 	// 模拟 Apply absent 之后:文件已变成 sentinel
-	if err := os.WriteFile(targetPath, []byte(policy.DisabledSentinel), 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(targetPath, []byte(policy.DisabledSentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	policyFilePath = targetPath
 	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
 
@@ -508,7 +526,9 @@ func TestPolicySet_Rollback_RejectsEuidNonZero(t *testing.T) {
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "policy.toml")
 	content := []byte("enabled_kinds = [\"service\"]\n")
-	if err := os.WriteFile(targetPath, content, 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(targetPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	policyFilePath = targetPath
 	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
 

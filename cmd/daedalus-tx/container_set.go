@@ -1,28 +1,11 @@
 package main
 
-// container_set.go —— container.set 事务适配器(A-form 严格生命周期管理)。
+// container_set.go —— container.set 事务适配器(rootless podman 生命周期)。
 //
-// 三段生命周期(与 adapter.go 的 Adapter 契约对齐):
-//   - Propose: 解析 {name, desired_state} → euid==0 拒(rootless-only 守门)→
-//     containerStateOK 词表门 → podmanNameGate 名称门 → observeContainerState
-//     → 容器是否存在 + desired_state 组合 fail-closed / idempotent 分流 →
-//     双快照序列化。无写副作用。
-//   - Apply:   三连重校验 → 词表映射: present=空 verb/no-op assert; absent=rm --force;
-//     started=必要时 start; stopped=必要时 stop. 返 rc/Stdout/Stderr 原样.
-//   - Rollback: 三连重校验 + 快照解析 → 若 before.ContainerID=="" (absent 单向)
-//     走 no-op + stdout note(spec G8, 不可逆);否则按 before.StateRunning 表外 + 影
-//     → start/stop 恢复(纵深防御).
-//
-// desired_state 语义面:
-//   - A-form 严格: present/started/stopped 三值 要求容器已存在,Propose 不在场即拒;
-//     absent 接受不存在(idempotent,快照为空,Apply 也是 no-op).
-//   - 词表 = present | absent | started | stopped 四值封闭, containerStateOK 守门.
-//   - "absent" 单一不可逆: Apply 跑 rm --force 后无法 auto-recreate; Rollback
-//     返 rc=0 + stdout note(让消费方 audit `daedalus_tx_rollback` 行看见事件),
-//     **不**调用 podman run(B-form 工具,本 plan 范围外).
-//
-// euid 守门: 与 service.set 镜像 user-scope-only 反面;但 euid==0 报 rootful 路径
-// 风险(共享 quadlet+service.set 协同通道的字面文案).
+// desired_state 四值封闭 present|absent|started|stopped;present/started/stopped
+// 要求容器已存在(absent 允许不存在,idempotent)。absent 走 rm --force,不可回滚
+// (podman rm 后无 run-spec 无法 recreate)。euid==0 拒:只管理当前用户 rootless 域。
+// shared / rootful 容器走 quadlet + service.set,不归本适配器。
 
 import (
 	"bytes"
@@ -82,9 +65,7 @@ type containerSetAfter struct {
 	Verb         string `json:"verb,omitempty"`
 }
 
-// containerSetAdapter 无状态空壳: 三段已由 Task 4 / Task 5 全填; 当前 Task 仅
-// 实现 Propose, Apply/Rollback 暂为 not-implemented stub,跟 task.set Plan-2
-// 阶段相同.
+// containerSetAdapter 无状态空壳(三段均在本文件实现).
 type containerSetAdapter struct{}
 
 // containerStateOK 报告 state 是否属于 v1 container.set 的 desired_state 集合
@@ -173,6 +154,7 @@ func (containerSetAdapter) Propose(ctx context.Context, args json.RawMessage) (j
 //   - absent:  podman rm --force <name>,rc 原值透传.
 //   - started: 若 before.StateRunning==false → podman start; 已 running → no-op.
 //   - stopped: 若 before.StateRunning==true → podman stop; 已 stopped → no-op.
+//
 // default 不可达(词表门已拦);兜底返 rc=1.
 func (containerSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 	in, err := parseContainerSetArgs(step.Args)
@@ -238,7 +220,7 @@ func (containerSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult 
 
 // Rollback: 三连重校验 + 快照解析 + G8 absent 单向不可逆分支 + 双状态恢复.
 //   - absent 路径(快照的 ContainerID 空,表明 Propose 期容器不存在):返 rc=0
-//     + stdout note,不调 podman(单向不可逆,B-form 才能 recreate).
+//   - stdout note,不调 podman(单向不可逆,B-form 才能 recreate).
 //   - before.StateRunning == nil: 返 rc=0 + stdout reason("状态未知, skip restore verb").
 //   - before.StateRunning 已知: 映射到 start/stop(被 containerSetInverseVerbs 锁),
 //     调 podman;rc 原值透传.

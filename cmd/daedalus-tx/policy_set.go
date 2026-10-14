@@ -1,22 +1,9 @@
 package main
 
-// policy_set.go —— policy.set 事务适配器(manager-only,A-form)。
+// policy_set.go —— policy.set 事务适配器(manager-only, A-form 严格生命周期管理)。
 //
-// 三段生命周期(与 adapter.go 的 Adapter 契约对齐):
-//   - Propose: 解析 {name, desired_state, content_ref} → euid==0 守门 → 词表门 →
-//     ref 解析(相对路径 + 允许根守卫)→ 读当前 policy 文件(A-form 要求已存在)
-//     → 读 ref 文件(loaded)/ 跳过(absent)→ 双快照 {policy_path, previous_content,
-//     previous_sha256} / {policy_path, desired_state, source_ref}。
-//   - Apply:   三连重校验 → drift 断言(当前 sha256 == before.previous_sha256)
-//     → 写盘(loaded=ref 内容 / absent=sentinel)→ 读回 sha256 校验(A5)。
-//   - Rollback: 三连重校验 → 把 before.previous_content 写回 + 读回校验。
-//
-// desired_state 语义面:
-//   - loaded = 系统策略应为 content_ref 指向的内容;drift = 当前文件与 Propose 快照不一致.
-//   - absent = kill switch;写 SDK DisabledSentinel → policy.Load 返 ErrDisabled → 进程 fail-closed.
-//   - absent 与 container 不同:**可逆**(policy 是文件,BeforeState 带旧内容,Rollback 能恢复).
-//
-// 范围:manager-only(A-form);agent 侧不实现,kill switch 由 fleet 通道分发.
+// loaded 写 content_ref 指向的内容(以 ref sha256 走 drift-zero 断言);
+// absent 写 SDK DisabledSentinel 触发 fail-closed(可逆,Rollback 写回旧内容)。
 
 import (
 	"bytes"
@@ -48,11 +35,11 @@ func policyDirFrom(ctx context.Context) string {
 	return s
 }
 
-// policySetVerbs desired_state 语义标记(不是 action 名——真实动作在 Apply 里按
-// 状态 switch)。loaded → "load";absent → "disable"。表外值由 policyStateOK 拒。
-var policySetVerbs = map[string]string{
-	"loaded": "load",
-	"absent": "disable",
+// policySetStates 封闭 desired_state 词表;仅做 set membership 用途(Apply 按状态
+// switch 分流)。表外值由 policyStateOK 拒。
+var policySetStates = map[string]struct{}{
+	"loaded": {},
+	"absent": {},
 }
 
 // policySetArgs 是步骤 args 的线上形态(锁定三键 schema, 未知键拒绝)。
@@ -70,11 +57,11 @@ type policySetBefore struct {
 	PreviousSha256  string `json:"previous_sha256"`
 }
 
-// policySetAfter 提议的目标态视图: source_ref 仅 loaded 有意义(absent 不留).
+// policySetAfter 提议的目标态视图: ContentRef 仅 loaded 有意义(absent 不留).
 type policySetAfter struct {
 	PolicyPath   string `json:"policy_path"`
 	DesiredState string `json:"desired_state"`
-	SourceRef    string `json:"source_ref,omitempty"`
+	ContentRef   string `json:"content_ref,omitempty"`
 }
 
 // policySetAdapter 无状态空壳: 三段均由本 plan 落地(与 task/container 的 signature 一致).
@@ -82,7 +69,7 @@ type policySetAdapter struct{}
 
 // policyStateOK 报告 state 是否属于 v1 policy.set 的 desired_state 集合(两值封闭).
 func policyStateOK(state string) bool {
-	_, ok := policySetVerbs[state]
+	_, ok := policySetStates[state]
 	return ok
 }
 
@@ -148,7 +135,7 @@ func (policySetAdapter) Propose(ctx context.Context, args json.RawMessage) (json
 		if refData == nil {
 			return nil, nil, fmt.Errorf("ref file not found: %s", abs)
 		}
-		after.SourceRef = in.ContentRef
+		after.ContentRef = in.ContentRef
 	}
 
 	before, err := json.Marshal(policySetBefore{
@@ -167,7 +154,7 @@ func (policySetAdapter) Propose(ctx context.Context, args json.RawMessage) (json
 }
 
 // Apply: 三连重校验 → drift 断言(当前 sha256 == before.previous_sha256)→
-// 写盘(loaded=ref 内容 / absent=DisabledSentinel)→ 读回 sha256 校验(A5)。
+// 写盘(loaded=ref 内容 / absent=DisabledSentinel)→ 读回 sha256 校验(防"写了没生效")。
 // drift 失败 / 写回失败 / 任何中间失败均返 rc=1,不修改文件。
 func (policySetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 	in, err := parsePolicySetArgs(step.Args)
@@ -244,7 +231,7 @@ func (policySetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 	return tx.OpResult{}
 }
 
-// Rollback: 三连重校验 → 取 BeforeState.PreviousContent 写回(A5 读回校验)。
+// Rollback: 三连重校验 → 取 BeforeState.PreviousContent 写回 + 读回 sha256 校验。
 // 同一路径同时覆盖 loaded 与 absent(若之前是 absent 写 sentinel,这里把旧内容写回,
 // 拆掉 kill switch; 之前是 loaded 改内容,这里恢复)。
 func (policySetAdapter) Rollback(_ context.Context, step tx.Step) tx.OpResult {

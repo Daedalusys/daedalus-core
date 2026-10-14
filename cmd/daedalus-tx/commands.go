@@ -295,52 +295,40 @@ func rollbackStep(ctx context.Context, step tx.Step) tx.OpResult {
 	return a.Rollback(ctx, step)
 }
 
-// extractUnitDir 从 propose/apply/rollback 的位置参数里摘出 `--unit-dir <path>`
-// 旗标: 至多一次、必须携带非空跟随值, 否则报用法错误(exit 2)。
-// 返回 (其余位置参数, 覆写目录(未给则 ""))。ok=false 时已打印错误文档。
-func extractUnitDir(args []string, stdout, stderr io.Writer) ([]string, string, bool) {
+// extractFlag 从 propose/apply/rollback 的位置参数里摘出 `--<flag> <value>`
+// 旗标:至多一次、必须携带非空跟随值,否则报用法错误(exit 2)。
+// 返回(其余位置参数, 覆写值(未给则 ""))。ok=false 时已打印错误文档。
+// name 是旗标名(含 -- 前缀,用于错误消息);missingMsg 是 missing value 时的错误消息。
+func extractFlag(args []string, name, missingMsg string, stdout, stderr io.Writer) ([]string, string, bool) {
 	rest := make([]string, 0, len(args))
-	dir := ""
+	val := ""
 	for i := 0; i < len(args); i++ {
-		if args[i] != "--unit-dir" {
+		if args[i] != name {
 			rest = append(rest, args[i])
 			continue
 		}
-		if dir != "" {
-			failUsage(stdout, stderr, "--unit-dir 至多出现一次")
+		if val != "" {
+			failUsage(stdout, stderr, name+" 至多出现一次")
 			return nil, "", false
 		}
 		if i+1 >= len(args) || args[i+1] == "" {
-			failUsage(stdout, stderr, `--unit-dir 需要跟随非空 <path> 参数`)
+			failUsage(stdout, stderr, missingMsg)
 			return nil, "", false
 		}
-		dir = args[i+1]
+		val = args[i+1]
 		i++
 	}
-	return rest, dir, true
+	return rest, val, true
+}
+
+// extractUnitDir 从 propose/apply/rollback 的位置参数里摘出 `--unit-dir <path>`
+// 旗标(service.set 解析目录覆写;其它适配器忽略)。
+func extractUnitDir(args []string, stdout, stderr io.Writer) ([]string, string, bool) {
+	return extractFlag(args, "--unit-dir", "--unit-dir 需要跟随非空 <path> 参数", stdout, stderr)
 }
 
 // extractPolicyDir 从 propose/apply/rollback 的位置参数里摘出 `--policy-dir <path>`
-// 旗标, 模式同 extractUnitDir(为 task/container/service 不影响; 仅 policy.set 适配器
-// 读). 至多一次、必须携带非空跟随值, 否则报用法错误(exit 2).
+// 旗标(policy.set 解析目录覆写;其它适配器忽略)。
 func extractPolicyDir(args []string, stdout, stderr io.Writer) ([]string, string, bool) {
-	rest := make([]string, 0, len(args))
-	dir := ""
-	for i := 0; i < len(args); i++ {
-		if args[i] != "--policy-dir" {
-			rest = append(rest, args[i])
-			continue
-		}
-		if dir != "" {
-			failUsage(stdout, stderr, "--policy-dir 至多出现一次")
-			return nil, "", false
-		}
-		if i+1 >= len(args) || args[i+1] == "" {
-			failUsage(stdout, stderr, `----policy-dir 需要跟随非空 <path> 参数`)
-			return nil, "", false
-		}
-		dir = args[i+1]
-		i++
-	}
-	return rest, dir, true
+	return extractFlag(args, "--policy-dir", "--policy-dir 需要跟随非空 <path> 参数", stdout, stderr)
 }

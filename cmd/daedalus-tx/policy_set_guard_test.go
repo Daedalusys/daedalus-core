@@ -56,9 +56,9 @@ func TestPolicySet_Guard_RejectsRefEscape(t *testing.T) {
 	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
 
 	for _, ref := range []string{
-		"/etc/passwd",       // 绝对
-		"../escape.toml",    // ..
-		"sub/../../escape",  // 内含 ..
+		"/etc/passwd",      // 绝对
+		"../escape.toml",   // ..
+		"sub/../../escape", // 内含 ..
 	} {
 		t.Run(ref, func(t *testing.T) {
 			a := policySetAdapter{}

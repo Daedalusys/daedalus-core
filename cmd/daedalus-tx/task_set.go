@@ -1,29 +1,11 @@
 package main
 
-// task_set.go —— task.set 事务适配器。
+// task_set.go —— task.set 事务适配器(user 域 systemd timer 生命周期)。
 //
-// 三段生命周期(与 adapter.go 的 Adapter 契约对齐):
-//   - Propose: 解析 {name, desired_state} → 词表门(封闭三值)→ normalizeTimerName
-//     → resolveUnitFile + guardUnitPath(系统域逐字拒)→ readUnitFileSnapshot
-//     → 文件不存在即拒(v1 三值全部需要文件存在,fail-closed)→ observeTimerEnabledState
-//     → 双快照序列化。无副作用:不跑 systemctl、不写文件。
-//   - Apply:   三连重校验(纵深防御)→ 词表映射:enabled→enable / disabled→disable
-//     / absent→observe+maybe disable+rm+daemon-reload。disable 失败即返回 rc=1,
-//     **不**继续 rm(任务 4 在 TestTaskSet_Apply_Absent_DisableFails_DoesNotRemove 钉死)。
-//   - Rollback: 三连重校验 + 快照 unit_file 守卫 → 文件内容漂移恢复(写后 daemon-reload)→
-//     按 before.enabled_state 恢复 enabled 态;file_content 为 nil 时**不删除**当前文件
-//     (A3 非适配器所建文件);is-enabled 表外值不发动词,stdout 记原因。
-//
-// desired_state 语义面:
-//   - 封闭三值 enabled|disabled|absent(任务 2 词表门,后续 plan 引入 cron 替代形态
-//     会加 "created" 档,届时拆分 taskSetVerbs 即可);
-//   - Propose 提前拒(同 package.set): 表外值即退;不"先提议后拒绝"中转语义;
-//   - 文件缺失 → Propose 拒,统一错误串 "task file not found: <path>(task.set 只管理
-//     已存在的 timer;创建走 cron 替代 plan)"。
-//
-// 逆动词的语义选择: enabled→enable / disabled→disable 两档恢复性动词映射;
-// static / linked / masked 等 systemd 表外值不发动词(reason 记 stdout,与 service.set
-// 同款尽力恢复语义)。
+// desired_state 三值封闭 enabled|disabled|absent。前两者映射 systemctl --user
+// enable|disable;absent 走 observe → 必要时 disable → rm → daemon-reload 复合路径。
+// 文件缺失时 Propose 一律拒(enabled/disabled 会失败,absent 也需要可逆快照)。
+// 逆动词映射按 before.enabled_state 恢复;表外值不发动词(尽力恢复语义)。
 
 import (
 	"bytes"
@@ -53,8 +35,8 @@ var taskSetInverseVerbs = map[string]string{
 	"disabled": "disable",
 }
 
-// taskFileMissingMsg 是 Propose 在文件缺失时的统一拒串(任务 3 的 review focus 决策:三值
-// 一致拒)。逐字锁定,消费方在测试里逐字比对。
+// taskFileMissingMsg 是 Propose 在文件缺失时的统一拒串(三值一致拒;逐字锁定,
+// 消费方在测试里逐字比对)。
 const taskFileMissingMsg = "task file not found: %s (task.set 只管理已存在的 timer;创建走 cron 替代 plan)"
 
 // taskSetArgs 是步骤 args 的线上形态(锁定两键 schema, 未知键拒绝)。
@@ -107,9 +89,8 @@ func parseTaskSetArgs(raw json.RawMessage) (taskSetArgs, error) {
 	return in, nil
 }
 
-// Propose (a-e 全段): 解析 → 词表门 → 名称门(隐式 .timer 后缀)→ resolveUnitFile +
-// guardUnitPath → 文件快照 → **三值文件存在性门**(任务 3 广义化扩展)→ enabled_state 观测 →
-// 双快照序列化。
+// Propose: 解析 → 词表门 → 名称门(隐式 .timer 后缀)→ resolveUnitFile +
+// guardUnitPath → 文件快照 → 三值文件存在性门 → enabled_state 观测 → 双快照序列化。
 func (taskSetAdapter) Propose(ctx context.Context, args json.RawMessage) (json.RawMessage, json.RawMessage, error) {
 	in, err := parseTaskSetArgs(args)
 	if err != nil {
@@ -134,10 +115,8 @@ func (taskSetAdapter) Propose(ctx context.Context, args json.RawMessage) (json.R
 		return nil, nil, err
 	}
 	if content == nil {
-		// 三值一致 fail-closed(任务 3 / Review Focus #1 决策):
-		// enabled 在无文件时 systemctl enable 会失败;disabled 也会因 unit 不存在而失败;
-		// absent 在无文件时无任何副作用,语义上"已 absent",但 Propose 必须有可逆快照
-		// 才能生成 rollback 计划,无论 desired_state 哪个值。
+		// 三值一致 fail-closed:enabled 在无文件时 systemctl enable 会失败;disabled 也因
+		// unit 不存在失败;absent 无副作用但 Propose 需要可逆快照才能生成回滚计划。
 		return nil, nil, fmt.Errorf(taskFileMissingMsg, target)
 	}
 	enabled, err := observeTimerEnabledState(ctx, timer)
@@ -160,7 +139,7 @@ func (taskSetAdapter) Propose(ctx context.Context, args json.RawMessage) (json.R
 	return before, after, nil
 }
 
-// Apply (d-f): 三连重校验 → 词表映射 → 直发 systemd → absent 走复合流程(任务 4 钉)。
+// Apply: 三连重校验 → 词表映射 → 直发 systemd → absent 走复合流程。
 // disable 失败即整体失败,后续 rm **不**执行。
 func (taskSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 	in, err := parseTaskSetArgs(step.Args)
@@ -197,7 +176,7 @@ func (taskSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 
 	case "absent":
 		// 复合流程:observe → 必要时 disable → rm → daemon-reload。
-		// 任一步失败即整体失败,**不**继续 rm(任务 4 review focus #2)。
+		// 任一步失败即整体失败,**不**继续 rm。
 		var agg tx.OpResult
 		currentEnabled, err := observeTimerEnabledState(ctx, timer)
 		if err != nil {
@@ -297,7 +276,7 @@ func (taskSetAdapter) Rollback(ctx context.Context, step tx.Step) tx.OpResult {
 			}
 		}
 	} else {
-		// file_content 为 nil 且当前文件存在 → 不删(任务 5 / Review Focus #3)。
+		// file_content 为 nil 且当前文件存在 → 不删(非适配器所建文件,防误删)。
 		if cur, rerr := readUnitFileSnapshot(before.UnitFile); rerr == nil && cur != nil {
 			agg.Stdout += fmt.Sprintf(
 				"file_content 在提议时为 nil(snapshot 记录无原文件), 当前文件存在 %s, 跳过删除(非适配器所建)\n",

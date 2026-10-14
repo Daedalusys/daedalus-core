@@ -35,10 +35,10 @@ func TestTaskSet_Guard_RejectsSystemScope(t *testing.T) {
 
 func TestTaskSet_Guard_RejectsInvalidName(t *testing.T) {
 	for _, name := range []string{
-		"a b",     // 空格
-		"a/b",     // 路径分隔
-		"-x",      // 前导中划线(argv 注入)
-		"a\x00b",  // 空字节
+		"a b",    // 空格
+		"a/b",    // 路径分隔
+		"-x",     // 前导中划线(argv 注入)
+		"a\x00b", // 空字节
 	} {
 		t.Run(name, func(t *testing.T) {
 			// normalizeTimerName 是名称门唯一出口——未达此已拒,证明门起作用。

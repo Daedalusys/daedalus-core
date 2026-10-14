@@ -2,10 +2,9 @@ package main
 
 // policy_set_exec.go —— policy.set 的文件 I/O 与路径解析助手层。
 //
-// policy_set.go 负责三段生命周期的编排与校验; 本文件只做 policyFilePath 注入、
-// 原子写(防"写了没生效")、ref 路径解析、sha256 校验三件机械事。SDK 跨仓的
-// policy.DisabledSentinel 由本文件 import 后提供给 Apply absent 用(避免跨仓
-// 字面量漂移,见 ledger R1)。
+// policy_set.go 负责三段生命周期编排;本文件做 policyFilePath 注入、原子写
+// (防"写了没生效")、ref 路径解析、sha256 校验四件机械事。SDK 跨仓的
+// policy.DisabledSentinel 是 sentinel 字节唯一事实源(避免跨仓字面量漂移)。
 
 import (
 	"bytes"
@@ -42,9 +41,9 @@ func readPolicyFileBytes(path string) ([]byte, error) {
 }
 
 // writePolicyFileAtomic 写入 + 读回 sha256 一致性校验两步:
-//   1. 写 `<path>.tmp.<rand>` → Sync → Rename → 父目录 Sync(同 fs 内原子).
-//   2. 读回,计算 sha256,必须 == sha256Hex(content).
-//   任一步失败返 error,调用方据此判 OpResult.Returncode=1(A5 写回校验).
+//  1. 写 `<path>.tmp.<rand>` → Sync → Rename → 父目录 Sync(同 fs 内原子).
+//  2. 读回,计算 sha256,必须 == sha256Hex(content).
+//     任一步失败返 error,调用方据此判 OpResult.Returncode=1.
 func writePolicyFileAtomic(path string, content []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp.*")
@@ -75,7 +74,7 @@ func writePolicyFileAtomic(path string, content []byte) error {
 		_ = d.Sync()
 		d.Close()
 	}
-	// 读回校验 sha256(spec A5)
+	// 读回校验 sha256(防"写了没生效")
 	got, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("读回校验失败: %w", err)
@@ -91,6 +90,7 @@ func writePolicyFileAtomic(path string, content []byte) error {
 //   - 绝对路径(以 / 开头)
 //   - 含 `..` 回溯段
 //   - 解析后落在 baseDir 之外
+//
 // 不解析符号链接(留给 v2;当前 v1 assume ref 路径在受信任 manifest 同仓目录)。
 func policyPathResolve(ref, baseDir string) (string, error) {
 	if filepath.IsAbs(ref) {
@@ -120,7 +120,7 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// detectSentinel 严格首行匹配 SDK DisabledSentinel(spec A4 防包装).
+// detectSentinel 严格首行匹配 SDK DisabledSentinel(防"包装过的哨兵"绕过).
 func detectSentinel(data []byte) bool {
 	return bytes.HasPrefix(data, []byte(policy.DisabledSentinel))
 }
