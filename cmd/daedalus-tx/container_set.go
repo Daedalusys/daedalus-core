@@ -265,10 +265,11 @@ func (containerSetAdapter) Rollback(ctx context.Context, step tx.Step) tx.OpResu
 		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf("before_state 解析失败: %v", err)}
 	}
 
-	// (G8) absent 路径 = 单向不可逆. 快照 ContainerID 为空表明 Propose 期容器就
-	// 不存在(idempotent absent);此时 rollback 什么都不做.任何 Podman 调用都违反
-	// A4("rollback 不重建容器").
-	if before.ContainerID == "" {
+	// (G8) absent 路径 = 单向不可逆, 与 before 详情无关.
+	// Apply 调了 rm --force 后,容器在 daedalus 视角下已消失;recreate 需要 run-spec,
+	// 不在 v1 范围(B-form plan).本路径返 rc=0 + stdout note,不调 podman.
+	// idempotent absent(Propose 期容器不存在)也归此路径(快照空字段,无需区分).
+	if in.DesiredState == "absent" {
 		return tx.OpResult{Returncode: 0, Stdout: fmt.Sprintf(
 			"container %q was removed; recreation requires run-spec not in v1 scope",
 			in.Name)}
