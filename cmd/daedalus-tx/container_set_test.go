@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -98,5 +99,178 @@ func TestContainerSet_Propose_PresentHappyPath(t *testing.T) {
 	}
 	if af.Verb != "" {
 		t.Errorf("present verb got %q want empty", af.Verb)
+	}
+}
+
+func TestContainerSet_Propose_RejectsEuidZero(t *testing.T) {
+	orig := geteuid
+	geteuid = func() int { return 0 }
+	t.Cleanup(func() { geteuid = orig })
+
+	a := containerSetAdapter{}
+	_, _, err := a.Propose(context.Background(),
+		json.RawMessage(`{"name":"web","desired_state":"present"}`))
+	if err == nil {
+		t.Fatal("euid==0 必须拒绝")
+	}
+	want := "container.set requires rootless (euid=0 indicates rootful path; use quadlet + service.set for rootful containers)"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("拒串漂移: got %q want substring %q", err.Error(), want)
+	}
+}
+
+func TestContainerSet_Propose_RejectsUnknownDesiredState(t *testing.T) {
+	withNonRootEuid(t)
+	installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	_, _, err := a.Propose(context.Background(),
+		json.RawMessage(`{"name":"web","desired_state":"running"}`))
+	if err == nil {
+		t.Fatal("表外 desired_state 必须拒绝")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `unknown desired_state "running"`) {
+		t.Errorf("未点名表外值: %s", msg)
+	}
+	if !strings.Contains(msg, "present|absent|started|stopped") {
+		t.Errorf("未点名 v1 词表: %s", msg)
+	}
+}
+
+func TestContainerSet_Propose_RejectsInvalidName(t *testing.T) {
+	withNonRootEuid(t)
+	installFakePodman(t, "[]", 0)
+
+	for _, name := range []string{
+		"a b",    // 空格
+		"a/b",    // 路径分隔
+		"-x",     // 前导中划线(argv 注入)
+		"a\x00b", // 空字节(经 json.Marshal 转 \u0000)
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := containerSetAdapter{}
+			args, err := json.Marshal(containerSetArgs{Name: name, DesiredState: "present"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = a.Propose(context.Background(), args)
+			if err == nil {
+				t.Fatalf("%q 应被名称门拒", name)
+			}
+			if !strings.Contains(err.Error(), "invalid container name:") {
+				t.Errorf("%q 未点名 invalid container name: got %q", name, err.Error())
+			}
+		})
+	}
+}
+
+// notFoundInspect 制造容器不存在的 fixture: podman inspect 返回空数组 + rc=0.
+const notFoundInspect = `[]`
+
+func TestContainerSet_Propose_RejectsPresentWhenAbsent(t *testing.T) {
+	withNonRootEuid(t)
+	installFakePodman(t, notFoundInspect, 0)
+
+	a := containerSetAdapter{}
+	_, _, err := a.Propose(context.Background(),
+		json.RawMessage(`{"name":"web","desired_state":"present"}`))
+	if err == nil {
+		t.Fatal("present + 容器不存在 必须拒绝")
+	}
+	want := `container "web" not found; create out of v1 scope`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("拒串漂移: got %q want substring %q", err.Error(), want)
+	}
+}
+
+func TestContainerSet_Propose_RejectsStartedWhenAbsent(t *testing.T) {
+	withNonRootEuid(t)
+	installFakePodman(t, notFoundInspect, 0)
+
+	a := containerSetAdapter{}
+	_, _, err := a.Propose(context.Background(),
+		json.RawMessage(`{"name":"web","desired_state":"started"}`))
+	if err == nil {
+		t.Fatal("started + 容器不存在 必须拒绝")
+	}
+	if !strings.Contains(err.Error(), `container "web" not found`) {
+		t.Errorf("拒串漂移: %s", err.Error())
+	}
+}
+
+func TestContainerSet_Propose_RejectsStoppedWhenAbsent(t *testing.T) {
+	withNonRootEuid(t)
+	installFakePodman(t, notFoundInspect, 0)
+
+	a := containerSetAdapter{}
+	_, _, err := a.Propose(context.Background(),
+		json.RawMessage(`{"name":"web","desired_state":"stopped"}`))
+	if err == nil {
+		t.Fatal("stopped + 容器不存在 必须拒绝")
+	}
+	if !strings.Contains(err.Error(), `container "web" not found`) {
+		t.Errorf("拒串漂移: %s", err.Error())
+	}
+}
+
+func TestContainerSet_Propose_AbsentIdempotentWhenAbsent(t *testing.T) {
+	withNonRootEuid(t)
+	installFakePodman(t, notFoundInspect, 0)
+
+	a := containerSetAdapter{}
+	before, after, err := a.Propose(context.Background(),
+		json.RawMessage(`{"name":"web","desired_state":"absent"}`))
+	if err != nil {
+		t.Fatalf("absent + 容器不存在 应 idempotent 放行, 意外失败: %v", err)
+	}
+	var b containerSetBefore
+	if err := json.Unmarshal(before, &b); err != nil {
+		t.Fatal(err)
+	}
+	if b.ContainerName != "web" {
+		t.Errorf("container_name got %q want %q", b.ContainerName, "web")
+	}
+	if b.ContainerID != "" {
+		t.Errorf("idempotent 路径下 container_id 应缺席, got %q", b.ContainerID)
+	}
+	if b.StateRunning != nil {
+		t.Errorf("idempotent 路径下 state_running 应缺席, got %v", *b.StateRunning)
+	}
+	if b.Image != "" {
+		t.Errorf("idempotent 路径下 image 应缺席, got %q", b.Image)
+	}
+	var af containerSetAfter
+	if err := json.Unmarshal(after, &af); err != nil {
+		t.Fatal(err)
+	}
+	if af.Verb != "rm" {
+		t.Errorf("absent verb got %q want rm", af.Verb)
+	}
+}
+
+func TestContainerSet_Propose_RejectsMissingDesiredState(t *testing.T) {
+	withNonRootEuid(t)
+	a := containerSetAdapter{}
+	_, _, err := a.Propose(context.Background(),
+		json.RawMessage(`{"name":"web"}`))
+	if err == nil {
+		t.Fatal("缺 desired_state 必须拒绝")
+	}
+	if !strings.Contains(err.Error(), `缺 "desired_state"`) {
+		t.Errorf("未点名 missing field: %s", err.Error())
+	}
+}
+
+func TestContainerSet_Propose_RejectsTrailingJSON(t *testing.T) {
+	withNonRootEuid(t)
+	a := containerSetAdapter{}
+	_, _, err := a.Propose(context.Background(),
+		json.RawMessage(`{"name":"web","desired_state":"present"}x`))
+	if err == nil {
+		t.Fatal("尾随 JSON 必须拒绝")
+	}
+	if !strings.Contains(err.Error(), "尾随数据") {
+		t.Errorf("未点名 trailing data: %s", err.Error())
 	}
 }
