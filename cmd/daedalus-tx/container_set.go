@@ -236,7 +236,58 @@ func (containerSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult 
 	return tx.OpResult{Returncode: 1, Error: fmt.Sprintf("unknown desired_state %q", in.DesiredState)}
 }
 
-// Rollback (Task 5 实现; Task 2 stub).
+// Rollback: 三连重校验 + 快照解析 + G8 absent 单向不可逆分支 + 双状态恢复.
+//   - absent 路径(快照的 ContainerID 空,表明 Propose 期容器不存在):返 rc=0
+//     + stdout note,不调 podman(单向不可逆,B-form 才能 recreate).
+//   - before.StateRunning == nil: 返 rc=0 + stdout reason("状态未知, skip restore verb").
+//   - before.StateRunning 已知: 映射到 start/stop(被 containerSetInverseVerbs 锁),
+//     调 podman;rc 原值透传.
 func (containerSetAdapter) Rollback(ctx context.Context, step tx.Step) tx.OpResult {
-	return tx.OpResult{Returncode: 1, Error: "container.set Rollback not implemented (task 5)"}
+	in, err := parseContainerSetArgs(step.Args)
+	if err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
+	if geteuid() == 0 {
+		return tx.OpResult{Returncode: 1, Error: containerScopeRejectMsg}
+	}
+	if !containerStateOK(in.DesiredState) {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+			`unknown desired_state %q (v1 支持 present|absent|started|stopped)`, in.DesiredState)}
+	}
+	if err := podmanNameGate(in.Name); err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
+	if len(step.BeforeState) == 0 {
+		return tx.OpResult{Returncode: 1, Error: "rollback 缺少 before_state 快照"}
+	}
+	var before containerSetBefore
+	if err := json.Unmarshal(step.BeforeState, &before); err != nil {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf("before_state 解析失败: %v", err)}
+	}
+
+	// (G8) absent 路径 = 单向不可逆. 快照 ContainerID 为空表明 Propose 期容器就
+	// 不存在(idempotent absent);此时 rollback 什么都不做.任何 Podman 调用都违反
+	// A4("rollback 不重建容器").
+	if before.ContainerID == "" {
+		return tx.OpResult{Returncode: 0, Stdout: fmt.Sprintf(
+			"container %q was removed; recreation requires run-spec not in v1 scope",
+			in.Name)}
+	}
+	// before.StateRunning 缺失(理论上不该发生, 防御性):不发动词.
+	if before.StateRunning == nil {
+		return tx.OpResult{Returncode: 0, Stdout: fmt.Sprintf(
+			"container %q present state unknown (no StateRunning snapshot); skip restore verb",
+			in.Name)}
+	}
+	key := fmt.Sprintf("%t", *before.StateRunning)
+	verb, ok := containerSetInverseVerbs[key]
+	if !ok {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+			"unexpected StateRunning 序列化值 %q, 不在 inverse 词表", key)}
+	}
+	res := podmanExec(ctx, verb, in.Name)
+	if res.Returncode != 0 && res.Error == "" {
+		res.Error = fmt.Sprintf("podman %s %s 失败: rc=%d %s", verb, in.Name, res.Returncode, res.Stderr)
+	}
+	return res
 }

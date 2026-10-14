@@ -422,3 +422,98 @@ func TestContainerSet_Apply_Stopped_NoOpWhenAlreadyStopped(t *testing.T) {
 		t.Errorf("已 stopped 不应发动词, got %v", calls)
 	}
 }
+
+// ===== Rollback =====
+
+// absentBefore 构造 absent + 容器不曾存在的快照(ContainerID 空字符串).
+func absentBefore(t *testing.T, name string) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(containerSetBefore{ContainerName: name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestContainerSet_Rollback_Absent_NoOpWithNote(t *testing.T) {
+	withNonRootEuid(t)
+	capture := installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	res := a.Rollback(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"absent"}`),
+		BeforeState: absentBefore(t, "web"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("absent rollback 应返 rc=0, got %d: %s", res.Returncode, res.Error)
+	}
+	if !strings.Contains(res.Stdout, "recreation requires run-spec not in v1 scope") {
+		t.Errorf("Stdout 应点名不可逆提示, got %q", res.Stdout)
+	}
+	if !strings.Contains(res.Stdout, `"web"`) {
+		t.Errorf("Stdout 应含容器名 %q, got %q", "web", res.Stdout)
+	}
+	if calls := readPodmanCalls(t, capture); calls != nil {
+		t.Errorf("absent rollback 不应调 podman, got %v", calls)
+	}
+}
+
+func TestContainerSet_Rollback_RestoresStoppedFromStarted(t *testing.T) {
+	// before 记录了"stopped"现况; Apply 发了 `start web` 到达 running;
+	// Rollback 应还原到 stopped,调 `stop web`(幂等)。
+	withNonRootEuid(t)
+	capture := installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	res := a.Rollback(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"started"}`),
+		BeforeState: mustBuildContainerSetBefore(t, "web", "abc123", false, "nginx:latest", "Exited"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("rollback 意外失败: %+v", res)
+	}
+	want := []string{"stop web"}
+	if got := readPodmanCalls(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("podman 调用序列 got %v want %v", got, want)
+	}
+}
+
+func TestContainerSet_Rollback_RestoresRunningFromStopped(t *testing.T) {
+	// before 记录了"running"现况; Apply 发了 `stop web`;
+	// Rollback 应还原到 running,调 `start web`.
+	withNonRootEuid(t)
+	capture := installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	res := a.Rollback(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"stopped"}`),
+		BeforeState: mustBuildContainerSetBefore(t, "web", "abc123", true, "nginx:latest", "Up"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("rollback 意外失败: %+v", res)
+	}
+	want := []string{"start web"}
+	if got := readPodmanCalls(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("podman 调用序列 got %v want %v", got, want)
+	}
+}
+
+func TestContainerSet_Rollback_PresentFromPresent(t *testing.T) {
+	// before 记录了"running"(present assert 场景下 BeforeState 也填); Rollback
+	// 按 running=true 映射到 `start`(幂等).
+	withNonRootEuid(t)
+	capture := installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	res := a.Rollback(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"present"}`),
+		BeforeState: mustBuildContainerSetBefore(t, "web", "abc123", true, "nginx:latest", "Up"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("rollback 意外失败: %+v", res)
+	}
+	want := []string{"start web"}
+	if got := readPodmanCalls(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("podman 调用序列 got %v want %v", got, want)
+	}
+}
