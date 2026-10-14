@@ -1,0 +1,179 @@
+package main
+
+// container_set.go —— container.set 事务适配器(A-form 严格生命周期管理)。
+//
+// 三段生命周期(与 adapter.go 的 Adapter 契约对齐):
+//   - Propose: 解析 {name, desired_state} → euid==0 拒(rootless-only 守门)→
+//     containerStateOK 词表门 → podmanNameGate 名称门 → observeContainerState
+//     → 容器是否存在 + desired_state 组合 fail-closed / idempotent 分流 →
+//     双快照序列化。无写副作用。
+//   - Apply:   三连重校验 → 词表映射: present=空 verb/no-op assert; absent=rm --force;
+//     started=必要时 start; stopped=必要时 stop. 返 rc/Stdout/Stderr 原样.
+//   - Rollback: 三连重校验 + 快照解析 → 若 before.ContainerID=="" (absent 单向)
+//     走 no-op + stdout note(spec G8, 不可逆);否则按 before.StateRunning 表外 + 影
+//     → start/stop 恢复(纵深防御).
+//
+// desired_state 语义面:
+//   - A-form 严格: present/started/stopped 三值 要求容器已存在,Propose 不在场即拒;
+//     absent 接受不存在(idempotent,快照为空,Apply 也是 no-op).
+//   - 词表 = present | absent | started | stopped 四值封闭, containerStateOK 守门.
+//   - "absent" 单一不可逆: Apply 跑 rm --force 后无法 auto-recreate; Rollback
+//     返 rc=0 + stdout note(让消费方 audit `daedalus_tx_rollback` 行看见事件),
+//     **不**调用 podman run(B-form 工具,本 plan 范围外).
+//
+// euid 守门: 与 service.set 镜像 user-scope-only 反面;但 euid==0 报 rootful 路径
+// 风险(共享 quadlet+service.set 协同通道的字面文案).
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/Daedalusys/daedalus-core/internal/tx"
+)
+
+// containerScopeRejectMsg 三段共用 euid==0 拒串(逐字锁定;测试与
+// AGENTS.md "shared 容器走 quadlet+service.set" 描述引用)。
+const containerScopeRejectMsg = "container.set requires rootless (euid=0 indicates rootful path; use quadlet + service.set for rootful containers)"
+
+// containerSetVerbs A-form desired_state → podman 子命令的冻结映射:
+// present 映射空 verb(no-op), absent=rm, started=start, stopped=stop. 表外
+// 由 containerSetArgs 解析前的 containerStateOK 拒; Propose 提前拒,与
+// package.set / task.set 同款.
+var containerSetVerbs = map[string]string{
+	"present": "",
+	"absent":  "rm",
+	"started": "start",
+	"stopped": "stop",
+}
+
+// containerSetInverseVerbs 恢复语义: before.StateRunning=true (字符串 "true") →
+// start; =false ("false") → stop; 缺失 → no-op + stdout reason(spec 镜 task.set).
+var containerSetInverseVerbs = map[string]string{
+	"true":  "start",
+	"false": "stop",
+}
+
+// containerSetArgs 步骤 args 的线上形态(锁定两键 schema, 未知键拒绝).
+type containerSetArgs struct {
+	Name         string `json:"name"`
+	DesiredState string `json:"desired_state"`
+}
+
+// containerSetBefore Propose 期的现状快照:
+//   - ContainerName 恒在;
+//   - ContainerID / StateRunning / Image / Status 在 idempotent absent 路径
+//     上整键缺席(omitempty).
+//   - 容器存在时全部填充.
+type containerSetBefore struct {
+	ContainerName string `json:"container_name"`
+	ContainerID   string `json:"container_id,omitempty"`
+	StateRunning  *bool  `json:"state_running,omitempty"`
+	Image         string `json:"image,omitempty"`
+	Status        string `json:"status,omitempty"`
+}
+
+// containerSetAfter 提议的目标态视图: verb 为 podman 子命令或空(present).
+type containerSetAfter struct {
+	Container    string `json:"container"`
+	DesiredState string `json:"desired_state"`
+	Verb         string `json:"verb,omitempty"`
+}
+
+// containerSetAdapter 无状态空壳: 三段已由 Task 4 / Task 5 全填; 当前 Task 仅
+// 实现 Propose, Apply/Rollback 暂为 not-implemented stub,跟 task.set Plan-2
+// 阶段相同.
+type containerSetAdapter struct{}
+
+// containerStateOK 报告 state 是否属于 v1 container.set 的 desired_state 集合
+// (A-form 四值封闭).
+func containerStateOK(state string) bool {
+	_, ok := containerSetVerbs[state]
+	return ok
+}
+
+// parseContainerSetArgs 严格解析(DisallowUnknownFields 镜像 parseServiceSetArgs).
+func parseContainerSetArgs(raw json.RawMessage) (containerSetArgs, error) {
+	var in containerSetArgs
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		return in, fmt.Errorf("invalid container.set args: %w", err)
+	}
+	if dec.More() {
+		return in, errors.New(`invalid container.set args: JSON 文档后有尾随数据`)
+	}
+	if in.DesiredState == "" {
+		return in, errors.New(`invalid container.set args: 缺 "desired_state" 字段`)
+	}
+	return in, nil
+}
+
+// Propose (a-c 全段): 三连重校验 → euid gate → 词表门 → 名称门 → observeContainerState
+// → 容器是否存在 / desired_state 组合 fail-closed 分流 → 双快照序列化.
+func (containerSetAdapter) Propose(ctx context.Context, args json.RawMessage) (json.RawMessage, json.RawMessage, error) {
+	in, err := parseContainerSetArgs(args)
+	if err != nil {
+		return nil, nil, err
+	}
+	// euid gate(euid==0 = rootful,本 kind rootless-only).
+	if geteuid() == 0 {
+		return nil, nil, errors.New(containerScopeRejectMsg)
+	}
+	if !containerStateOK(in.DesiredState) {
+		return nil, nil, fmt.Errorf(`unknown desired_state %q (v1 支持 present|absent|started|stopped)`, in.DesiredState)
+	}
+	if err := podmanNameGate(in.Name); err != nil {
+		return nil, nil, err
+	}
+	running, id, image, status, exists, err := observeContainerState(ctx, in.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !exists {
+		if in.DesiredState != "absent" {
+			// present/started/stopped 在不存在时 = A-form strict 拒
+			return nil, nil, fmt.Errorf("container %q not found; create out of v1 scope", in.Name)
+		}
+		// absent + 不存在 → idempotent(snapshot 全空字段).
+		before, _ := json.Marshal(containerSetBefore{ContainerName: in.Name})
+		after, _ := json.Marshal(containerSetAfter{
+			Container:    in.Name,
+			DesiredState: in.DesiredState,
+			Verb:         containerSetVerbs[in.DesiredState],
+		})
+		return before, after, nil
+	}
+	// 存在时:四状态都放行 Propose;StateRunning 用指针记录 true/false.
+	before, err := json.Marshal(containerSetBefore{
+		ContainerName: in.Name,
+		ContainerID:   id,
+		StateRunning:  &running,
+		Image:         image,
+		Status:        status,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("序列化 before_state 失败: %w", err)
+	}
+	after, err := json.Marshal(containerSetAfter{
+		Container:    in.Name,
+		DesiredState: in.DesiredState,
+		Verb:         containerSetVerbs[in.DesiredState],
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("序列化 after_state 失败: %w", err)
+	}
+	return before, after, nil
+}
+
+// Apply (Task 4 实现; Task 2 stub 返回 not implemented).
+func (containerSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
+	return tx.OpResult{Returncode: 1, Error: "container.set Apply not implemented (task 4)"}
+}
+
+// Rollback (Task 5 实现; Task 2 stub).
+func (containerSetAdapter) Rollback(ctx context.Context, step tx.Step) tx.OpResult {
+	return tx.OpResult{Returncode: 1, Error: "container.set Rollback not implemented (task 5)"}
+}

@@ -41,6 +41,8 @@ func init() {
 	RegisterAdapter("organize.move", organizeMoveAdapter{})
 	// task.set —— task 生命周期适配器(见 task_set.go;user 域 systemd timer 生命周期)。
 	RegisterAdapter("task.set", taskSetAdapter{})
+	// container.set —— container 生命周期适配器(见 container_set.go;rootless podman,A-form)。
+	RegisterAdapter("container.set", containerSetAdapter{})
 }
 
 // RegisterAdapter 注册一个适配器(重复注册覆盖)。
