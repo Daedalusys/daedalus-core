@@ -1,0 +1,11 @@
+[Unit]
+Description=Daedalus OS Audit Log Rotation Timer
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+Persistent=true
+Unit=daedalus-audit-rotate.service
+
+[Install]
+WantedBy=timers.target

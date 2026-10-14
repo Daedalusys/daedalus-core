@@ -30,4 +30,5 @@ done
 
 # 启用 daedalus 基础服务（单次初始化服务）
 systemctl enable daedalus-audit.service || true
+systemctl enable daedalus-audit-rotate.timer || true
 systemctl enable daedalus-env.service || true
