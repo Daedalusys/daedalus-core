@@ -141,7 +141,7 @@ func (diskCleanAdapter) Apply(_ context.Context, step tx.Step) tx.OpResult {
 }
 
 // Rollback 重建 inode(目录 MkdirAll / 文件 OpenFile)并恢复 mode。内容不恢复
-//(见文件头约束)。IsDir 为 true 时重建为目录,否则重建为空文件。
+// (见文件头约束)。IsDir 为 true 时重建为目录,否则重建为空文件。
 func (diskCleanAdapter) Rollback(_ context.Context, step tx.Step) tx.OpResult {
 	var before diskCleanBefore
 	if err := json.Unmarshal(step.BeforeState, &before); err != nil {

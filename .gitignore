@@ -19,3 +19,7 @@ files/system/usr/local/bin/daedalus-*
 
 # OhMyOpenCode 编排状态(不入库)
 .omo/
+
+# 调研草稿与对外答疑 FAQ(本次不入库 —— 调研归研究渠道,FAQ 等正式化后再考虑)
+docs/research/
+docs/superpowers/*
