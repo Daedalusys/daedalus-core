@@ -104,7 +104,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | `capability` | OS 能力 | 保留位,无 provider(七件 capability 插件是打包维度,不声明 capability 资源) |
 | `task` | 任务 | 已落地:tx `task.set`(仅生命周期 `enabled`/`disabled`/`absent`;无独立 MCP server,无资源声明) |
 | `transaction` | 事务 | 保留位,无 provider(tx 原语另位) |
-| `policy` | 策略 | 保留位,无 provider |
+| `policy` | 策略 | 已落地:tx `policy.set`(manager-only,`loaded`/`absent` 两档;`absent` 写 DisabledSentinel,`policy.Load`返 `ErrDisabled`,daedalus 服务 fail-closed;agent 侧不实现,fleet push 分发) |
 
 两轴正交:一个 `type` 可管多种 `kind`(现役两例);一种 `kind` 也可被多种 `type` 声明。type 答「包怎么装、怎么被宿主发现」,kind 答「资源在对象模型里是什么」——两张表,各答各的。
 
@@ -146,7 +146,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | --dry-run=server | copilot --dry-run(零系统调用) | C | v1 已交付 |
 | explain / OpenAPI | 无 | C | 开放问题 |
 | operator 打包 | daedalus-plugin:zip + manifest + sha256 | 无缺口 | v1 已交付 |
-| feature gate | `enabled_kinds` fail-closed,现启用 `service`、`package`、`task`、`container` | 无缺口 | v1 已交付 |
+| feature gate | `enabled_kinds` fail-closed,现启用 `service`、`package`、`task`、`container`、`policy` | 无缺口 | v1 已交付 |
 | controller-runtime | 类型已钉:`ReconcileFunc` | B | 契约缝 → P4 |
 | ServiceAccount | LoadCredential + `/etc/credstore` | 无缺口 | v1 已交付 |
 | kubelet 类比 | systemd 直接执行(76 脚本渲染 ExecStart) | 无缺口 | v1 已交付 |
@@ -166,7 +166,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 |------|------|-----|---------|
 | `query` | 读单实例 | 观测 | 已实现 |
 | `list` | 读集合 | 观测 | 已实现 |
-| `set` | 驱动向 desired_state | 声明·写 | service/package/task/container 经事务已实现 |
+| `set` | 驱动向 desired_state | 声明·写 | service/package/task/container/policy 经事务已实现 |
 | `delete` | 达到缺席态(`absent` 哨兵) | 声明·写 | 词汇预留;无 delete 适配器 |
 | `apply` | 事务提交 | 执行 | 已实现 |
 | `rollback` | 事务回滚 | 执行 | 已实现 |
@@ -175,7 +175,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 要点:
 
 - **delete** 不是「执行破坏性命令」,而是把 `desired_state` 写成 `absent`——可声明、可回滚、可审计的普通期望。absent 之后的 per-kind 语义是 v2 设计题。
-- **per-kind 词汇**归各 provider,不进本文法。现役:service = `active`/`inactive`;package = `present`/`absent`/`latest`(`packageSetVerbs`,映射 dnf,表外拒绝);task = `enabled`/`disabled`/`absent`(`taskSetVerbs`,映射 `systemctl --user enable/disable` + absent 复合 disable+rm,表外拒绝);container = `present`/`absent`/`started`/`stopped`(`containerSetVerbs`,映射 `podman start|stop|rm --force` + absent 单向不可逆,表外拒绝)。service 的 `enabled`/`disabled` 是开机自启维度,与运行态正交。container 的 `present`/`started`/`stopped` 是"在场否+运行态"两维度叠加;`absent` 单向。
+- **per-kind 词汇**归各 provider,不进本文法。现役:service = `active`/`inactive`;package = `present`/`absent`/`latest`(`packageSetVerbs`,映射 dnf,表外拒绝);task = `enabled`/`disabled`/`absent`(`taskSetVerbs`,映射 `systemctl --user enable/disable` + absent 复合 disable+rm,表外拒绝);container = `present`/`absent`/`started`/`stopped`(`containerSetVerbs`,映射 `podman start|stop|rm --force` + absent 单向不可逆,表外拒绝);policy = `loaded`/`absent`(`policySetVerbs`;`loaded`=写 `content_ref` 指向的内容,drift-zero;`absent`=写 `policy.DisabledSentinel` 触发 `policy.Load` 返 `ErrDisabled` fail-closed,可逆——Rollback 恢复旧内容)。service 的 `enabled`/`disabled` 是开机自启维度,与运行态正交。container 的 `present`/`started`/`stopped` 是"在场否+运行态"两维度叠加;`absent` 单向。policy 的 `absent` 与 container 不同——**可逆**(policy.toml 是文件,旧内容有 BeforeState 快照可写回;不是"删一个容器"那种不可恢复)。
 - **权威源**:动词 token 唯一规范在 `internal/controller/types.go` 的 Op 常量表;文档与代码冲突时以代码为准。
 - **不入表**:`begin`/`propose` 是事务生命周期原语,不是资源动词;copilot 的 L0/L1/L2 是策略层,不因动词表增减。
 
@@ -247,7 +247,7 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus 每笔事务自带 
 2. **service 只读观测**(`daedalus-plugins/service/`):`service.query`/`list` 严格只读;状态变更一律走 tx。
 3. **audit 哈希链**(`daedalus-sdk/audit/`):SHA-256 链 + Flock;begin/apply/rollback 盖 TxID+TxStep 二级链;金样钉字节兼容。
 4. **state.jsonl 观测缓存**(`daedalus-sdk/state/`):追加式最新值;派生缓存与证据层分离;按上下文隔离。
-5. **policy.toml 网关**(`files/.../policy.toml`):`enabled_kinds` 现启用 `service`、`package`、`task`、`container`;校验器接受保留 kind 而网关拒执行;三点漂移测试守门。
+5. **policy.toml 网关**(`files/.../policy.toml`):`enabled_kinds` 现启用 `service`、`package`、`task`、`container`、`policy`;校验器接受保留 kind 而网关拒执行;三点漂移测试守门。policy.set 写盘(atomic write + 读回 sha256 校验)经 `policy.DisabledSentinel` 切换为 fail-closed:`policy.Load` 首行严格匹配 sentinel 即返 `ErrDisabled`(与"缺失"`ErrNotFound` 严格区分——后者可经 `DAEDALUS_POLICY_MODE=development` opt-in 回退 Default(),ErrDisabled 永远 fail-closed)。
 6. **copilot 双通道 L0-L2**(`plugin/copilot/`):本地静态 classifier;LLM 不自标注;L0 经 y/n 进沙箱或事务;L1/L2 仅展示。
 7. **插件格式 + 宿主零 spawn**(`daedalus-sdk/plugin/` + `cmd/daedalus-host/`):zip + manifest + sha256;宿主只发现、校验、打印启动命令。
 8. **i18n P0**(`plugin/copilot/i18n.ts`):UI 字符串经 `t()`;en_US 兜底;声明与实物双向校验。(Go 侧翻译属 P1,未做。)
