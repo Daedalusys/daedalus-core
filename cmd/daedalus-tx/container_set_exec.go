@@ -76,18 +76,25 @@ func podmanExec(ctx context.Context, subArgs ...string) tx.OpResult {
 // observeContainerState 调 `podman inspect --type container --format json <name>`,
 // 解析首项的 (Running bool, Id string, Image string, Status string, exists bool)。
 // exists 语义:
-//   - rc=0 + 合法非空 JSON → exists=true, 字段填充
-//   - rc=0 + 空 JSON 数组 → exists=false (与"不存在"一致语义)
-//   - rc!=0 且进程级错误(res.Error 非空,即无法启动 / 超时)→ 上抛(A3 守门:
-//     不谎报"不存在")
-//   - rc!=0 + Error 为空 → 视为 podman 报告"找不到" → exists=false(正常 not-exists)
+//   - rc=0 + 合法非空 JSON → exists=true, 字段填充.
+//   - rc=0 + 空 JSON 数组 → exists=false (与"不存在"一致语义).
+//   - rc!=0 + stderr 含 "no such" / "not found" → exists=false (podman 报告找不到).
+//   - rc!=0 + 其他(进程为 socket / namespace 异常 / daemon 不可选等)→ 上抛 (A3
+//     不谎报"不存在"). 是上抛而不是返回 exists=false 是为了避免
+//     "podman daemon挂了"被错判为“容器不存在”的安全走错路径.
 func observeContainerState(ctx context.Context, name string) (running bool, id, image, status string, exists bool, err error) {
 	res := podmanExec(ctx, "inspect", "--type", "container", "--format", "json", name)
 	if res.Error != "" {
+		// 进程无法启动或超时(res.Error 已在 podmanExec 中填).
 		return false, "", "", "", false, fmt.Errorf("podman inspect 失败: %s", firstNonEmpty(res.Error, res.Stderr))
 	}
 	if res.Returncode != 0 {
-		return false, "", "", "", false, nil
+		// rc != 0: 检查 stderr 是否是 podman 正常“找不到”(区别于“连接失败”等).
+		stderr := strings.ToLower(res.Stderr)
+		if strings.Contains(stderr, "no such") || strings.Contains(stderr, "not found") {
+			return false, "", "", "", false, nil
+		}
+		return false, "", "", "", false, fmt.Errorf("podman inspect 失败 (rc=%d, stderr=%q)", res.Returncode, res.Stderr)
 	}
 	var arr []map[string]any
 	if err := json.Unmarshal([]byte(res.Stdout), &arr); err != nil {
