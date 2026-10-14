@@ -244,7 +244,34 @@ func (policySetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 	return tx.OpResult{}
 }
 
-// Rollback (Task 5 实现; Task 2 stub).
-func (policySetAdapter) Rollback(ctx context.Context, step tx.Step) tx.OpResult {
-	return tx.OpResult{Returncode: 1, Error: "policy.set Rollback not implemented (task 5)"}
+// Rollback: 三连重校验 → 取 BeforeState.PreviousContent 写回(A5 读回校验)。
+// 同一路径同时覆盖 loaded 与 absent(若之前是 absent 写 sentinel,这里把旧内容写回,
+// 拆掉 kill switch; 之前是 loaded 改内容,这里恢复)。
+func (policySetAdapter) Rollback(_ context.Context, step tx.Step) tx.OpResult {
+	in, err := parsePolicySetArgs(step.Args)
+	if err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
+	if geteuid() != 0 {
+		return tx.OpResult{Returncode: 1, Error: policyScopeRejectMsg}
+	}
+	if !policyStateOK(in.DesiredState) {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+			`unknown desired_state %q (v1 支持 loaded|absent)`, in.DesiredState)}
+	}
+	if len(step.BeforeState) == 0 {
+		return tx.OpResult{Returncode: 1, Error: "rollback 缺少 before_state 快照"}
+	}
+	var before policySetBefore
+	if err := json.Unmarshal(step.BeforeState, &before); err != nil {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf("before_state 解析失败: %v", err)}
+	}
+	if before.PolicyPath != policyFilePath {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+			"rollback 路径与 Propose 快照不一致: before=%s now=%s", before.PolicyPath, policyFilePath)}
+	}
+	if err := writePolicyFileAtomic(policyFilePath, []byte(before.PreviousContent)); err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
+	return tx.OpResult{}
 }

@@ -448,3 +448,76 @@ func TestPolicySet_Apply_RejectsEuidNonZero(t *testing.T) {
 		t.Errorf("Apply euid!=0 拒漂移: %+v", res)
 	}
 }
+
+// ===== Rollback =====
+
+func TestPolicySet_Rollback_RestoresLoaded(t *testing.T) {
+	euidOverride(t, 0)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "policy.toml")
+	origContent := []byte("enabled_kinds = [\"service\"]\n")
+	// 模拟 Apply loaded 之后:文件已经是新内容
+	appliedContent := []byte("enabled_kinds = [\"service\", \"package\"]\n")
+	if err := os.WriteFile(targetPath, appliedContent, 0o644); err != nil { t.Fatal(err) }
+	policyFilePath = targetPath
+	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
+
+	a := policySetAdapter{}
+	res := a.Rollback(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"system-policy","desired_state":"loaded","content_ref":"x.toml"}`),
+		BeforeState: mustBuildPolicySetBefore(t, targetPath, origContent),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("rollback 意外失败: %+v", res)
+	}
+	got, _ := os.ReadFile(targetPath)
+	if string(got) != string(origContent) {
+		t.Errorf("rollback 后应为原内容, got %q want %q", got, origContent)
+	}
+}
+
+func TestPolicySet_Rollback_RestoresAbsent(t *testing.T) {
+	euidOverride(t, 0)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "policy.toml")
+	origContent := []byte("enabled_kinds = [\"service\"]\n")
+	// 模拟 Apply absent 之后:文件已变成 sentinel
+	if err := os.WriteFile(targetPath, []byte(policy.DisabledSentinel), 0o644); err != nil { t.Fatal(err) }
+	policyFilePath = targetPath
+	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
+
+	a := policySetAdapter{}
+	res := a.Rollback(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"system-policy","desired_state":"absent"}`),
+		BeforeState: mustBuildPolicySetBefore(t, targetPath, origContent),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("rollback 意外失败: %+v", res)
+	}
+	got, _ := os.ReadFile(targetPath)
+	if string(got) != string(origContent) {
+		t.Errorf("absent rollback 应恢复原内容(kill switch 可逆), got %q want %q", got, origContent)
+	}
+	if strings.HasPrefix(string(got), policy.DisabledSentinel) {
+		t.Errorf("rollback 后不应还是 sentinel, got %q", got)
+	}
+}
+
+func TestPolicySet_Rollback_RejectsEuidNonZero(t *testing.T) {
+	euidOverride(t, 1000)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "policy.toml")
+	content := []byte("enabled_kinds = [\"service\"]\n")
+	if err := os.WriteFile(targetPath, content, 0o644); err != nil { t.Fatal(err) }
+	policyFilePath = targetPath
+	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
+
+	a := policySetAdapter{}
+	res := a.Rollback(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"system-policy","desired_state":"absent"}`),
+		BeforeState: mustBuildPolicySetBefore(t, targetPath, content),
+	})
+	if res.Returncode == 0 || !strings.Contains(res.Error, policyScopeRejectMsg) {
+		t.Errorf("Rollback euid!=0 拒漂移: %+v", res)
+	}
+}
