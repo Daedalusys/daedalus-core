@@ -12,9 +12,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Daedalusys/daedalus-core/internal/tx"
 )
 
 // installFakePodman 安装假 podman 并注入包级变量(测试结束自动还原)。
@@ -272,5 +275,150 @@ func TestContainerSet_Propose_RejectsTrailingJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "尾随数据") {
 		t.Errorf("未点名 trailing data: %s", err.Error())
+	}
+}
+
+// ===== Apply =====
+
+// mustBuildContainerSetBefore 构造 before_state JSON(Apply/Rollback 测试共用).
+func mustBuildContainerSetBefore(t *testing.T, name, id string, running bool, image, status string) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(containerSetBefore{
+		ContainerName: name,
+		ContainerID:   id,
+		StateRunning:  &running,
+		Image:         image,
+		Status:        status,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// readPodmanCalls 读 capture 为"每次调用一行 argv"的切片;不存在 → nil.
+func readPodmanCalls(t *testing.T, capture string) []string {
+	t.Helper()
+	data, err := os.ReadFile(capture)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("读 capture 失败: %v", err)
+	}
+	s := strings.TrimSuffix(string(data), "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+func TestContainerSet_Apply_Present_Idempotent(t *testing.T) {
+	withNonRootEuid(t)
+	fixtureJSON := `[{"Id":"abc123","State":{"Running":true},"Image":"nginx:latest","Status":"Up"}]`
+	capture := installFakePodman(t, fixtureJSON, 0)
+
+	a := containerSetAdapter{}
+	res := a.Apply(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"present"}`),
+		BeforeState: mustBuildContainerSetBefore(t, "web", "abc123", true, "nginx:latest", "Up"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	for _, call := range readPodmanCalls(t, capture) {
+		for _, forbid := range []string{" start ", " stop ", " rm "} {
+			if strings.Contains(" "+call+" ", forbid) {
+				t.Errorf("present 不应发动词, got %q", call)
+			}
+		}
+	}
+}
+
+func TestContainerSet_Apply_Absent_RmForce(t *testing.T) {
+	withNonRootEuid(t)
+	capture := installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	res := a.Apply(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"absent"}`),
+		BeforeState: mustBuildContainerSetBefore(t, "web", "abc123", true, "nginx:latest", "Up"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	want := []string{"rm --force web"}
+	if got := readPodmanCalls(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("podman 调用序列 got %v want %v", got, want)
+	}
+}
+
+func TestContainerSet_Apply_Started_FromStopped(t *testing.T) {
+	withNonRootEuid(t)
+	capture := installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	res := a.Apply(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"started"}`),
+		BeforeState: mustBuildContainerSetBefore(t, "web", "abc123", false, "nginx:latest", "Exited"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	want := []string{"start web"}
+	if got := readPodmanCalls(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("podman 调用序列 got %v want %v", got, want)
+	}
+}
+
+func TestContainerSet_Apply_Started_NoOpWhenAlreadyRunning(t *testing.T) {
+	withNonRootEuid(t)
+	capture := installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	res := a.Apply(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"started"}`),
+		BeforeState: mustBuildContainerSetBefore(t, "web", "abc123", true, "nginx:latest", "Up"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	if calls := readPodmanCalls(t, capture); calls != nil {
+		t.Errorf("已 running 不应发动词, got %v", calls)
+	}
+}
+
+func TestContainerSet_Apply_Stopped_FromRunning(t *testing.T) {
+	withNonRootEuid(t)
+	capture := installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	res := a.Apply(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"stopped"}`),
+		BeforeState: mustBuildContainerSetBefore(t, "web", "abc123", true, "nginx:latest", "Up"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	want := []string{"stop web"}
+	if got := readPodmanCalls(t, capture); !reflect.DeepEqual(got, want) {
+		t.Errorf("podman 调用序列 got %v want %v", got, want)
+	}
+}
+
+func TestContainerSet_Apply_Stopped_NoOpWhenAlreadyStopped(t *testing.T) {
+	withNonRootEuid(t)
+	capture := installFakePodman(t, "[]", 0)
+
+	a := containerSetAdapter{}
+	res := a.Apply(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"web","desired_state":"stopped"}`),
+		BeforeState: mustBuildContainerSetBefore(t, "web", "abc123", false, "nginx:latest", "Exited"),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	if calls := readPodmanCalls(t, capture); calls != nil {
+		t.Errorf("已 stopped 不应发动词, got %v", calls)
 	}
 }

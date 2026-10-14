@@ -168,9 +168,72 @@ func (containerSetAdapter) Propose(ctx context.Context, args json.RawMessage) (j
 	return before, after, nil
 }
 
-// Apply (Task 4 实现; Task 2 stub 返回 not implemented).
+// Apply: 三连重校验(args / name / euid / 词表)→ 按 desired_state 路由:
+//   - present: 二次 inspect 确认仍存在(纵深防御); 存在 → rc=0 no-op; 不存在 → rc=1.
+//   - absent:  podman rm --force <name>,rc 原值透传.
+//   - started: 若 before.StateRunning==false → podman start; 已 running → no-op.
+//   - stopped: 若 before.StateRunning==true → podman stop; 已 stopped → no-op.
+// default 不可达(词表门已拦);兜底返 rc=1.
 func (containerSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
-	return tx.OpResult{Returncode: 1, Error: "container.set Apply not implemented (task 4)"}
+	in, err := parseContainerSetArgs(step.Args)
+	if err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
+	if geteuid() == 0 {
+		return tx.OpResult{Returncode: 1, Error: containerScopeRejectMsg}
+	}
+	if !containerStateOK(in.DesiredState) {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+			`unknown desired_state %q (v1 支持 present|absent|started|stopped)`, in.DesiredState)}
+	}
+	if err := podmanNameGate(in.Name); err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
+
+	switch in.DesiredState {
+	case "present":
+		_, _, _, _, exists, err := observeContainerState(ctx, in.Name)
+		if err != nil {
+			return tx.OpResult{Returncode: 1, Error: err.Error()}
+		}
+		if !exists {
+			return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+				"container %q not found at apply (present assert)", in.Name)}
+		}
+		return tx.OpResult{}
+
+	case "absent":
+		res := podmanExec(ctx, "rm", "--force", in.Name)
+		if res.Returncode != 0 && res.Error == "" {
+			res.Error = fmt.Sprintf("podman rm --force %s 失败: rc=%d %s", in.Name, res.Returncode, res.Stderr)
+		}
+		return res
+
+	case "started", "stopped":
+		// started/stopped 需要 before.StateRunning 判定是否 no-op.
+		var before containerSetBefore
+		if len(step.BeforeState) == 0 {
+			return tx.OpResult{Returncode: 1, Error: "apply 缺少 before_state 快照"}
+		}
+		if err := json.Unmarshal(step.BeforeState, &before); err != nil {
+			return tx.OpResult{Returncode: 1, Error: fmt.Sprintf("before_state 解析失败: %v", err)}
+		}
+		if before.StateRunning == nil {
+			return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+				"apply %s 需要 before.state_running, 但快照未记录", in.DesiredState)}
+		}
+		wantRunning := in.DesiredState == "started"
+		if *before.StateRunning == wantRunning {
+			return tx.OpResult{} // 已处于目标态,no-op
+		}
+		verb := containerSetVerbs[in.DesiredState]
+		res := podmanExec(ctx, verb, in.Name)
+		if res.Returncode != 0 && res.Error == "" {
+			res.Error = fmt.Sprintf("podman %s %s 失败: rc=%d %s", verb, in.Name, res.Returncode, res.Stderr)
+		}
+		return res
+	}
+	return tx.OpResult{Returncode: 1, Error: fmt.Sprintf("unknown desired_state %q", in.DesiredState)}
 }
 
 // Rollback (Task 5 实现; Task 2 stub).
