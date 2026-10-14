@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/Daedalusys/daedalus-sdk/policy"
+	"github.com/Daedalusys/daedalus-core/internal/tx"
 )
 
 // euidOverride 临时把 geteuid 翻为 e(测试 root/non-root 路径),测试结束自动还原。
@@ -305,5 +306,145 @@ func TestPolicySet_Propose_RejectsAlreadySentinel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already in absent") {
 		t.Errorf("拒串漂移: %s", err.Error())
+	}
+}
+
+// ===== Apply =====
+
+// mustBuildPolicySetBefore 构造 before_state JSON(Apply/Rollback 测试共用)。
+func mustBuildPolicySetBefore(t *testing.T, path string, content []byte) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(policySetBefore{
+		PolicyPath:      path,
+		PreviousContent: string(content),
+		PreviousSha256:  sha256Hex(content),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestPolicySet_Apply_Loaded_DriftZeroPasses(t *testing.T) {
+	euidOverride(t, 0)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "policy.toml")
+	refPath := filepath.Join(dir, "new.ref.toml")
+	oldContent := []byte("enabled_kinds = [\"service\"]\n")
+	newContent := []byte("enabled_kinds = [\"service\", \"package\"]\n")
+	if err := os.WriteFile(targetPath, oldContent, 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(refPath, newContent, 0o644); err != nil { t.Fatal(err) }
+	policyFilePath = targetPath
+	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
+
+	a := policySetAdapter{}
+	ctx := withPolicyDir(context.Background(), dir)
+	res := a.Apply(ctx, tx.Step{
+		Args:        json.RawMessage(`{"name":"system-policy","desired_state":"loaded","content_ref":"new.ref.toml"}`),
+		BeforeState: mustBuildPolicySetBefore(t, targetPath, oldContent),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	got, _ := os.ReadFile(targetPath)
+	if string(got) != string(newContent) {
+		t.Errorf("file content got %q want %q", got, newContent)
+	}
+}
+
+func TestPolicySet_Apply_Loaded_DriftDetected(t *testing.T) {
+	euidOverride(t, 0)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "policy.toml")
+	refPath := filepath.Join(dir, "new.ref.toml")
+	snapshotContent := []byte("enabled_kinds = [\"service\"]\n")
+	// 当前文件已被人手改过(与 snapshot 不同)——drift 检测应触发
+	currentContent := []byte("enabled_kinds = [\"container\"]\n")
+	if err := os.WriteFile(targetPath, currentContent, 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(refPath, []byte("enabled_kinds = [\"package\"]\n"), 0o644); err != nil { t.Fatal(err) }
+	policyFilePath = targetPath
+	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
+
+	a := policySetAdapter{}
+	ctx := withPolicyDir(context.Background(), dir)
+	res := a.Apply(ctx, tx.Step{
+		Args:        json.RawMessage(`{"name":"system-policy","desired_state":"loaded","content_ref":"new.ref.toml"}`),
+		BeforeState: mustBuildPolicySetBefore(t, targetPath, snapshotContent),
+	})
+	if res.Returncode == 0 {
+		t.Fatal("drift 必须 rc=1")
+	}
+	got, _ := os.ReadFile(targetPath)
+	if string(got) != string(currentContent) {
+		t.Errorf("drift 检测失败时文件不能变, got %q want %q", got, currentContent)
+	}
+}
+
+func TestPolicySet_Apply_Absent_WritesSentinel(t *testing.T) {
+	euidOverride(t, 0)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "policy.toml")
+	oldContent := []byte("enabled_kinds = [\"service\"]\n")
+	if err := os.WriteFile(targetPath, oldContent, 0o644); err != nil { t.Fatal(err) }
+	policyFilePath = targetPath
+	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
+
+	a := policySetAdapter{}
+	res := a.Apply(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"system-policy","desired_state":"absent"}`),
+		BeforeState: mustBuildPolicySetBefore(t, targetPath, oldContent),
+	})
+	if res.Returncode != 0 {
+		t.Fatalf("apply 意外失败: %+v", res)
+	}
+	got, _ := os.ReadFile(targetPath)
+	if string(got) != policy.DisabledSentinel {
+		t.Errorf("absent 后文件应为 sentinel, got %q want %q", got, policy.DisabledSentinel)
+	}
+	if !strings.Contains(res.Stdout, "WARNING") || !strings.Contains(res.Stdout, "refuse to start") {
+		t.Errorf("absent apply 应打印 WARNING + refuse to start, got stdout %q", res.Stdout)
+	}
+}
+
+func TestPolicySet_Apply_Absent_DriftDetected(t *testing.T) {
+	euidOverride(t, 0)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "policy.toml")
+	snapshotContent := []byte("enabled_kinds = [\"service\"]\n")
+	currentContent := []byte("enabled_kinds = [\"container\"]\n")
+	if err := os.WriteFile(targetPath, currentContent, 0o644); err != nil { t.Fatal(err) }
+	policyFilePath = targetPath
+	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
+
+	a := policySetAdapter{}
+	res := a.Apply(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"system-policy","desired_state":"absent"}`),
+		BeforeState: mustBuildPolicySetBefore(t, targetPath, snapshotContent),
+	})
+	if res.Returncode == 0 {
+		t.Fatal("absent drift 时必须 rc=1")
+	}
+	got, _ := os.ReadFile(targetPath)
+	if strings.HasPrefix(string(got), policy.DisabledSentinel) {
+		t.Errorf("drift 时不应写 sentinel, file was %q", got)
+	}
+}
+
+func TestPolicySet_Apply_RejectsEuidNonZero(t *testing.T) {
+	euidOverride(t, 1000)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "policy.toml")
+	content := []byte("enabled_kinds = [\"service\"]\n")
+	if err := os.WriteFile(targetPath, content, 0o644); err != nil { t.Fatal(err) }
+	policyFilePath = targetPath
+	t.Cleanup(func() { policyFilePath = "/opt/daedalus/shared/policy.toml" })
+
+	a := policySetAdapter{}
+	res := a.Apply(context.Background(), tx.Step{
+		Args:        json.RawMessage(`{"name":"system-policy","desired_state":"absent"}`),
+		BeforeState: mustBuildPolicySetBefore(t, targetPath, content),
+	})
+	if res.Returncode == 0 || !strings.Contains(res.Error, policyScopeRejectMsg) {
+		t.Errorf("Apply euid!=0 拒漂移: %+v", res)
 	}
 }

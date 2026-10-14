@@ -26,6 +26,7 @@ import (
 	"fmt"
 
 	"github.com/Daedalusys/daedalus-core/internal/tx"
+	"github.com/Daedalusys/daedalus-sdk/policy"
 )
 
 // policyDirCtxKey --policy-dir 旗标的 context 载体键(类型同名于 unitDirCtxKey
@@ -165,9 +166,82 @@ func (policySetAdapter) Propose(ctx context.Context, args json.RawMessage) (json
 	return before, afterBytes, nil
 }
 
-// Apply (Task 4 实现; Task 2 stub).
+// Apply: 三连重校验 → drift 断言(当前 sha256 == before.previous_sha256)→
+// 写盘(loaded=ref 内容 / absent=DisabledSentinel)→ 读回 sha256 校验(A5)。
+// drift 失败 / 写回失败 / 任何中间失败均返 rc=1,不修改文件。
 func (policySetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
-	return tx.OpResult{Returncode: 1, Error: "policy.set Apply not implemented (task 4)"}
+	in, err := parsePolicySetArgs(step.Args)
+	if err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
+	if geteuid() != 0 {
+		return tx.OpResult{Returncode: 1, Error: policyScopeRejectMsg}
+	}
+	if !policyStateOK(in.DesiredState) {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+			`unknown desired_state %q (v1 支持 loaded|absent)`, in.DesiredState)}
+	}
+	if len(step.BeforeState) == 0 {
+		return tx.OpResult{Returncode: 1, Error: "apply 缺少 before_state 快照"}
+	}
+	var before policySetBefore
+	if err := json.Unmarshal(step.BeforeState, &before); err != nil {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf("before_state 解析失败: %v", err)}
+	}
+	if before.PolicyPath != policyFilePath {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+			"apply 路径与 Propose 快照不一致: before=%s now=%s", before.PolicyPath, policyFilePath)}
+	}
+
+	// drift 断言: 当前文件 sha256 == before.previous_sha256;否则返 rc=1, 不写盘.
+	current, err := readPolicyFileBytes(policyFilePath)
+	if err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
+	if current == nil {
+		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(
+			"policy file missing at apply (drift detected: present at Propose, gone now): %s", policyFilePath)}
+	}
+	if sha256Hex(current) != before.PreviousSha256 {
+		return tx.OpResult{Returncode: 1, Error: "drift detected: policy file content changed between Propose and Apply (sha256 mismatch)"}
+	}
+
+	// 准备写入内容.
+	var newContent []byte
+	if in.DesiredState == "loaded" {
+		baseDir := policyDirFrom(ctx)
+		if baseDir == "" {
+			baseDir = "."
+		}
+		abs, rerr := policyPathResolve(in.ContentRef, baseDir)
+		if rerr != nil {
+			return tx.OpResult{Returncode: 1, Error: rerr.Error()}
+		}
+		refData, rerr := readPolicyFileBytes(abs)
+		if rerr != nil {
+			return tx.OpResult{Returncode: 1, Error: rerr.Error()}
+		}
+		if refData == nil {
+			return tx.OpResult{Returncode: 1, Error: fmt.Sprintf("ref file not found: %s", abs)}
+		}
+		newContent = refData
+	} else { // absent
+		newContent = []byte(policy.DisabledSentinel)
+	}
+
+	// 写盘 + 读回校验(A5).
+	if err := writePolicyFileAtomic(policyFilePath, newContent); err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
+
+	// absent 额外提醒: daemon 看到 sentinel 会 fail-closed; 切到下一步前应该 rollout 或 reload.
+	if in.DesiredState == "absent" {
+		return tx.OpResult{
+			Returncode: 0,
+			Stdout:     "WARNING: daedalus services will refuse to start until this is rolled back or re-loaded (policy.Load returns ErrDisabled on sentinel)",
+		}
+	}
+	return tx.OpResult{}
 }
 
 // Rollback (Task 5 实现; Task 2 stub).
