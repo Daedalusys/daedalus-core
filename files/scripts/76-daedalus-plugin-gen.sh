@@ -106,14 +106,23 @@ done
 grep -Eq '^[[:space:]]*allowed_commands[[:space:]]*=' "$POLICY" || fail "policy.toml 损坏: [shell] 缺 allowed_commands"
 grep -Eq '^[[:space:]]*allowed_dirs[[:space:]]*=' "$POLICY" || fail "policy.toml 损坏: [fs] 缺 allowed_dirs"
 grep -Eq '^[[:space:]]*log_path[[:space:]]*=' "$POLICY" || fail "policy.toml 损坏: [audit] 缺 log_path"
-grep -Eq '^[[:space:]]*max_size_mb[[:space:]]*=' "$POLICY" || fail "policy.toml 损坏: [audit] 缺 max_size_mb(轮转阈值)"
-grep -Eq '^[[:space:]]*retain_days[[:space:]]*=' "$POLICY" || fail "policy.toml 损坏: [audit] 缺 retain_days(保留阈值,硬底线 >=30)"
+# section_has_key:只在指定 TOML 节内查键(避免全局 grep 把 [state].max_size_mb
+# 误当成 [audit].max_size_mb 的满足)。
+section_has_key() {
+    awk -v want_sec="[$1]" -v want_key="$2" '
+        /^[[:space:]]*\[/ { s=$0; gsub(/[[:space:]]/, "", s); next }
+        s==want_sec && $0 ~ ("^[[:space:]]*" want_key "[[:space:]]*=") { found=1 }
+        END { exit(found?0:1) }
+    ' "$POLICY"
+}
+section_has_key audit max_size_mb || fail "policy.toml 损坏: [audit] 缺 max_size_mb(轮转阈值)"
+section_has_key audit retain_days || fail "policy.toml 损坏: [audit] 缺 retain_days(保留阈值,硬底线 >=30)"
 grep -q '^\[state\]' "$POLICY" || fail "policy.toml 损坏: 缺节 ^[state]"
-grep -Eq '^[[:space:]]*max_size_mb[[:space:]]*=' "$POLICY" \
+section_has_key state max_size_mb \
     || fail "policy.toml 损坏: [state] 缺 max_size_mb(state 轮转阈值)"
 # retain_days 硬底线(验收):<30 拒构建。
-POLICY_RETAIN="$(grep -E '^[[:space:]]*retain_days[[:space:]]*=' "$POLICY" | sed -E 's/.*=[[:space:]]*([0-9]+).*/\1/')"
-[ -n "$POLICY_RETAIN" ] || fail "policy.toml retain_days 无法解析"
+POLICY_RETAIN="$(awk '/^[[:space:]]*\[/{s=$0; gsub(/[[:space:]]/,"",s); next} s=="[audit]" && /^[[:space:]]*retain_days[[:space:]]*=/{gsub(/[^0-9]/,"",$0); print $0; exit}' "$POLICY")"
+[ -n "$POLICY_RETAIN" ] || fail "policy.toml [audit].retain_days 无法解析"
 [ "$POLICY_RETAIN" -ge 30 ] || fail "policy.toml [audit].retain_days=$POLICY_RETAIN < 30(验收硬底线)"
 POLICY_ALLOW="$(policy_toml_list allowed_commands "$POLICY")"
 [ -n "$POLICY_ALLOW" ] || fail "policy.toml 损坏: [shell].allowed_commands 无法解析出任何命令项"
