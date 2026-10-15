@@ -352,3 +352,52 @@ func TestTx_ResolveCrashRecovery(t *testing.T) {
 	}
 	mustVerify(t, logPath)
 }
+
+// txFakeAttrs 免 root 注入,供跨轮转测试。
+type txFakeAttrs struct{}
+
+func (txFakeAttrs) HasAppend(string) (bool, error) { return false, nil }
+func (txFakeAttrs) ClearAppend(string) error       { return nil }
+func (txFakeAttrs) SetAppend(string) error         { return nil }
+
+// TestTxScanTail_FindsRecordsInArchive:begin 被轮转进归档后,apply 仍能经
+// OpenLog(NewestFirst) 找到该事务的最大 step 与链尾哈希(否则 apply 会静默接错)。
+func TestTxScanTail_FindsRecordsInArchive(t *testing.T) {
+	logPath, _ := harness(t)
+	orig := audit.CurrentAppendOnlyOps()
+	audit.SetAppendOnlyOps(txFakeAttrs{})
+	t.Cleanup(func() { audit.SetAppendOnlyOps(orig) })
+
+	txID := "0a1b2c3d4e5f6071"
+	beginRec, err := audit.LogAudit(audit.Entry{
+		Identity: "daedalus-tx", Tool: "daedalus_tx_begin", TxID: txID, TxStep: 0, LogPath: logPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 轮转:begin 进归档
+	archiveDir := filepath.Join(filepath.Dir(logPath), "archive")
+	if _, err := audit.Rotate(audit.RotateOptions{LogPath: logPath, ArchiveDir: archiveDir, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	// begin 进归档后、apply 尚未写时扫描:旧实现只扫活跃文件会得到空尾哈希。
+	tail := scanTxTail(txID)
+	if tail.prevHash != beginRec.EntryHash {
+		t.Fatalf("应从归档找到 begin 尾哈希: got %q want %q", tail.prevHash, beginRec.EntryHash)
+	}
+	// 用该尾哈希写 apply,再扫应得 maxStep=1 与 apply 的 entry_hash。
+	applyRec, err := audit.LogAudit(audit.Entry{
+		Identity: "daedalus-tx", Tool: "daedalus_tx_apply", TxID: txID, TxStep: 1,
+		TxPrevHash: tail.prevHash, LogPath: logPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail2 := scanTxTail(txID)
+	if tail2.maxStep != 1 {
+		t.Fatalf("apply 后 maxStep 应为 1, got %d", tail2.maxStep)
+	}
+	if tail2.prevHash != applyRec.EntryHash {
+		t.Fatalf("prevHash 应为 apply 的 entry_hash, got %s want %s", tail2.prevHash, applyRec.EntryHash)
+	}
+}

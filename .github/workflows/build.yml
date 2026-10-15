@@ -103,7 +103,7 @@ jobs:
         # 主仓在 daedalus-core 子目录,缓存依赖文件路径须带前缀。
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache-dependency-path: daedalus-core/go.sum
 
       - name: Set Up Deno Runtime
@@ -267,7 +267,7 @@ jobs:
         # 主仓在 daedalus-core 子目录,缓存依赖文件路径须带前缀。
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
           cache-dependency-path: daedalus-core/go.sum
 
       - name: Prepare justfile.local (gitignored stub for import)

@@ -1,0 +1,14 @@
+[Unit]
+Description=Daedalus OS Audit Log Rotation Service
+After=multi-user.target
+
+[Service]
+Type=oneshot
+# Root needed:chattr -a / rename / chown 等;条件路径存在避免首启无日志时炸。
+ExecStart=/usr/local/bin/daedalus-audit rotate
+ConditionPathExists=/var/log/daedalus/audit.jsonl
+# 失败不阻塞启动(系统仍可写日志;下一轮由 timer 补)。
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
