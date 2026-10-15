@@ -1,0 +1,38 @@
+{
+  "id": "daedalus.organize",
+  "name": "Daedalus File Organizer (By Type / Date / Size / Extension)",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-organize",
+  "permissions": {
+    "read": [
+      "/home",
+      "/tmp",
+      "/var/log"
+    ],
+    "write": [
+      "/home",
+      "/tmp"
+    ],
+    "run": null
+  },
+  "tools": [
+    "organize_plan",
+    "organize_preview",
+    "organize_apply"
+  ],
+  "i18n": [
+    "en_US",
+    "zh_CN"
+  ],
+  "checksums": {
+    "bin/daedalus-organize": "sha256:8c7901968a68c81650089861c92ed7d31d79c1bbe2774d159a31367f9677bb6a",
+    "daedalus.plugin.json": "sha256:68999b42e46ac05a58958f3bd253276be1297ab39df96fca5ae47187520e3a3b"
+  },
+  "api_version": "0.1.0",
+  "license": "Apache-2.0",
+  "maintainer": "team@daedalusys.io"
+}
