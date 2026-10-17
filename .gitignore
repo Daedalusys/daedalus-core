@@ -19,3 +19,6 @@ files/system/usr/local/bin/daedalus-*
 
 # OhMyOpenCode 编排状态(不入库)
 .omo/
+
+# superpowers 设计稿 / 实施计划 / 自检材料(本地协作产物,不入库)
+docs/superpowers/
