@@ -56,4 +56,7 @@ if ! printf '%s\n' "${OSREL}" | grep -qx 'VARIANT=headless'; then
     exit 1
 fi
 
+# --- image tag 校验(CI 防忘:传错 IMAGE_REF 跑一遍 podman 等于浪费) ---
+echo "${IMAGE}" | grep -q "headless" || { echo "FAIL: image tag '${IMAGE}' not contain 'headless'"; exit 1; }
+
 echo "==> headless invariants OK"

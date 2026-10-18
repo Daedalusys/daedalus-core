@@ -97,6 +97,10 @@ verify-image:
     set -euo pipefail
     podman run --rm localhost/daedalus-os:latest sh -c 'find /opt \( -name "*.py" -o -name "*.pyc" -o -name "__pycache__" -o -name "*.test.ts" -o -name "go.mod" -o -name vendor \) | grep . && exit 1 || echo OK'
 
+# 跑 headless 变体不变量校验(T1 + T2 + T3 产物)
+verify-headless:
+    ./tests/build/headless-variant.sh
+
 # 3 仓平级布局守门:检查 daedalus-sdk / daedalus-plugins 兄弟仓
 # 是否以平级目录形态就位(go.work 本地 dev 桥的前置);缺哪个报哪个,exit 1。
 verify-dev-layout:
