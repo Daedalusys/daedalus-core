@@ -5,7 +5,10 @@
 **Siblings:** `../daedalus-sdk/` (11 安全核心包)、`../daedalus-plugins/` (11 Go 能力插件 monorepo)
 
 ## OVERVIEW
-Immutable, atomic, AI-native desktop OS on AlmaLinux Bootc (KDE variant). Adds a Model Context Protocol (MCP) capability-middleware layer with three security boundaries (model/capability, enforcement/sandboxing, evidence/verification), tamper-evident audit logging, systemd credential isolation, and atomic rollback.
+Immutable, atomic, AI-native fleet control-plane: hub-spoke
+(daedalus-atomic 控制面 + daedalus-agent 异构被控) running on
+AlmaLinux Bootc headless variant. Product framing: see VISION.md §1
+(2026-10-17 fleet 改造版). Adds a Model Context Protocol (MCP) capability-middleware layer with three security boundaries (model/capability, enforcement/sandboxing, evidence/verification), tamper-evident audit logging, systemd credential isolation, and atomic rollback.
 
 **本仓职责**: 镜像编排 (`Containerfile` + `files/` 构建树) + 5 个 core runtime 二进制 (`cmd/daedalus-{host,audit,tx,smoke,plugin-pack}`) + copilot 插件源码 (`plugin/copilot/`) + 契约包 (`internal/{controller,tx}`)。**SDK 与 11 个 Go 能力插件已迁出独立仓**(见兄弟仓)。
 

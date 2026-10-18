@@ -11,6 +11,9 @@
 #   build.sh --init             # 只做 system_files 拷贝(第一个 stage 调用)
 #   build.sh --finalize         # 只跑 cleanup(最后一个 stage 调用)
 #
+# 注:79-sddm-autostart.sh 已删除(2026-10-17 fleet 改造,VARIANT=headless 默认无图
+# 形登录链);build.sh 无 79 引用,prefix 匹配自动跳过该文件,不需修改本脚本。
+#
 # 行为细节:
 # - system_files 拷贝用 sentinel /var/lib/daedalus/.build_init_done 防重,
 #   只在第一个 stage 真正执行(后续 stage 看到这个文件就跳过);

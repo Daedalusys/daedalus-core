@@ -96,13 +96,15 @@ STARTWM
         # 3b) xrdp 服务器证书(部分版本 post-install 不自动生),生成幂等
         [ -x /usr/libexec/xrdp/genkeyrsa.sh ] && /usr/libexec/xrdp/genkeyrsa.sh >/dev/null 2>&1 || true
 
-        # 3c) 远程访问主线是 KVM 内置 VNC;xrdp 软件保留但不开机自启(sesman/Xvnc
-        #     链在 headless VM 上不可用)。需要 RDP 时一键恢复:
-        #     systemctl enable --now xrdp xrdp-sesman
-        systemctl disable xrdp xrdp-sesman 2>/dev/null || systemctl disable xrdp
+        # 3c) 远程访问主线是 KVM 内置 VNC;xrdp 软件保留但默认 masked(sesman/Xvnc
+        #     链在 headless VM 上不可用)。需要 RDP 时由 `daedalus-host rescue
+        #     enable-vnc` 显式 unmask + start。mask 而非 disable:防止误操作或
+        #     子服务依赖把 unit 拉起。
+        systemctl mask xrdp xrdp-sesman 2>/dev/null || systemctl mask xrdp
         open_firewall_port "3389/tcp"
-        echo "77-xrdp.sh: xrdp 就绪。VM 内需有本地用户(xrdp 经 PAM 认证该账号);"
-        echo "  装机首次进桌面建用户:virsh console 或临时加 --graphics vnc 登录后 useradd"
+        echo "77-xrdp.sh: xrdp masked(默认禁;`daedalus-host rescue enable-vnc` 显式开)。"
+        echo "  VM 内需有本地用户(xrdp 经 PAM 认证该账号);装机首次建用户:"
+        echo "  virsh console 或临时加 --graphics vnc 登录后 useradd"
 
         # 3d) 强制 Xvnc depth=24:TigerVNC 1.15 的 Xvnc 不支持 depth 32(RDP 客户端
         #     默认 32bpp 会被拼进 Xvnc 命令行 → Xvnc 启动即退出 → waitforx 超时 →
