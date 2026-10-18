@@ -1,8 +1,9 @@
-# Daedalus AIOS — 愿景与架构总览(2026-10-17 fleet 改造版)
+# Daedalus AIOS — 愿景与架构总览(2026-10-18 问卷修订)
 
 | 项目 | Daedalus(AI 原生 fleet 控制面 + Atomic 节点) |
 | --- | --- |
-| 版本日期 | 2026-10-17(本版取代 2026-09-21 单机桌面版) |
+| 协议 | Apache-2.0(开源);商业化路径 = SaaS 控制面 + 企业支持 |
+| 版本日期 | 2026-10-18(在 2026-10-17 fleet 改造基础上, 按 n=65 问卷修订用户画像与竞品区隔) |
 | 读者 | 评估者、贡献者、客户、未来的我们 |
 | 上游文档 | `docs/superpowers/specs/2026-10-17-fleet-control-plane-design.md` 是当前产品定义;本 VISION 是其对内对外的统一叙事 |
 | 文档分工 | README 上手 / AGENTS 操作 / 本稿愿景 |
@@ -10,22 +11,31 @@
 | 锚点约定 | 代码锚前缀 `daedalus-core/…` / `daedalus-sdk/…` / `daedalus-plugins/…` 指三仓平级布局下的各仓根 |
 
 > **changelog**:
+> - 2026-10-18: 用户画像修订 + 竞品区隔。依据 n=65 问卷(73% 非专业、75% solo、75% ≤5 台、49% 隐私 #1、46% 想要「AI 自动 + 可撤销按钮」)。具体:§1 加目标用户 + 竞品对照表;§2 措辞改「1-30 台 solo + 业余/独立」;§1 顶部显式 Apache-2.0。spec 同步:§1 加目标用户 + 竞品对照 + License;§2 G1 改「典型 5-30 台、P0.5 scale 验证 200 台」;§4.4 Register 响应加 snapshot_capability 字段;§5.3 P0.5 加 Mobile Control UI 与 Plan Event 字段。
 > - 2026-10-17: 本版。取代 2026-09-21 单机桌面版(spec:`docs/superpowers/specs/2026-10-17-fleet-control-plane-design.md`)。**§1 删「桌面」改「fleet 控制面 + Atomic 节点」**;§2/§3 重写为「小团队 + 大量机器」;§5「故意无」三行在 hub-spoke 下重新解释;§7 整章区分「仍故意无 / 不再故意无」;§8 增「跨机意图 + Plan + RPC 协议」段;§9 加 12(daedalus-agent / RPC / 凭证下发 / Plan 调度);§10 加 P0.5 阶段(fleet 控制面 MVP = G1+G4 端到端 demo);§11 加「daedalus-agent 长期定位」+「控制面单点 HA」开放问题。旧 VISION 入 `docs/archive/2026-09-21-vision.md`(verbatim)。
 > - 2026-09-21: 初版(单机 dady,自维护 atomic base,kde 变体)。
 
 ## §1 宣言
 
-Daedalus 是把 AI agent 当一等公民的 fleet 控制面底座。
+Daedalus 是把 AI agent 当一等公民的 fleet 控制面底座。**目标用户**:solo 运维 1-30 台 Linux 机器 + 业余/独立背景的小操作者(基于 n=65 问卷:73% 非专业,75% 团队 1 人,75% ≤5 台)。
 
 核心论题一句话:
 
-> 给一个运维多台机器的小团队一套「控制面出 Plan、人在 Plan 层批审、各机本地执行、最坏能回滚」的硬边界通道。
+> 控制面出 Plan,人在 Plan 层批审,各机本地事务,失败分桶,best-effort 回滚。
 > 保证附着于通道;其余通道在硬边界内存在,平台不背书。
+
+**与既有方案的区隔**(避免被误读为 NixOS / PVE / GPT Codex 替代):
+
+| 现有 | 它解决什么 | Daedalus 补什么 |
+|---|---|---|
+| **NixOS** | 单机声明式配置 + 原子切换, 面向所有 Linux 装机 | 跨机协调(Plan / 调度 / 分桶) + 哈希链审计 + 救砖入口;不是 Nix 体系 |
+| **PVE / Proxmox VE** | 家里云 VM 管理 | 互补而非替代:在 PVE 之上叠一层做镜像与编排 |
+| **GPT Codex / Claude Code** | 单机会话层:自己改自己 shell | 跨机 fleet 控制面 + 风险等级 + 人在环 + 审计 + best-effort 回滚;不是单机会话工具 |
 
 具体形态:**两产品 + 一个拓扑 + 一组边界**。
 
-- **两产品**。`daedalus-atomic` = 自维护 Atomic OS,既是控制面节点,也是被控机器的终态(用户主动迁移后)。`daedalus-agent` = 单 Go 二进制,装在任意 Linux(Ubuntu / CentOS / 各发行版)上,只做四件事:**读系统信息 + 接受包/文件意图 + best-effort 回滚 + 状态回报**。**入场券**:用户迁到 `daedalus-atomic` 后 agent 退场。
-- **一个拓扑**。hub-spoke。**一个控制面节点 + N 个被控节点**(N 实测可达 200)。控制面与被控之间是命令流,不是同步协议。
+- **两产品**。`daedalus-atomic` = 自维护 Atomic OS,既是控制面节点,也是被控机器的终态(用户主动迁移后)。`daedalus-agent` = 单 Go 二进制,装在任意 Linux(Ubuntu / CentOS / 各发行版)上,只做四件事:**读系统信息 + 接受包/文件意图 + best-effort 回滚 + 状态回报**。**入场券**:用户迁到 `daedalus-atomic` 后 agent 退场(spec G7 互斥)。
+- **一个拓扑**。hub-spoke。**一个控制面节点 + N 个被控节点**。N 在 5-30 台为典型目标;P0.5 控制面 scale 验证到 200 台(spec G1)。控制面与被控之间是命令流,不是同步协议。
 - **一组边界**(硬边界,软偏好)。
 
   - **硬边界**:沙箱、命令白名单、哈希链审计、凭证隔离。安全底线,无商量,任何通道不得绕开。
@@ -33,9 +43,9 @@ Daedalus 是把 AI agent 当一等公民的 fleet 控制面底座。
 
 背后仍是八个字:**硬边界,软偏好**。但应用对象从「一台桌面」变成「一组机器」——agent 不替人做决定,跨机变更需要人在 Plan 层兜底,任何机器不能自动滚后续批。
 
-## §2 问题域:小团队 + 大量机器
+## §2 问题域:1-30 台 solo 跨机运维
 
-原始动机一句话:**小团队运维多机的变更不应该零散、不可恢复。**
+原始动机一句话:**1-30 台 Linux 机器的 solo 运维,跨机变更不应该零散、不可恢复。**
 
 agent 上桌后,「单团队 + N 台机器 + AI 提案 + 人兜底 + 不瘫」这个组合的失效模式,从偶发变成常态:
 
