@@ -24,9 +24,9 @@ on:
   workflow_dispatch:
     inputs:
       VARIANT:
-        description: 'Desktop variant to build (default: kde)'
+        description: 'Image variant to build (default: headless)'
         required: false
-        default: 'kde'
+        default: 'headless'
         type: string
       PUSH:
         description: '推送到 ghcr.io(打 :latest/:<sha>/:upstream 三个 tag);默认 false,仅构建+验证不推'
@@ -225,7 +225,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [kde]
+        variant: [headless]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

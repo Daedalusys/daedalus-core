@@ -7,7 +7,10 @@
 
 ## Overview
 
-Daedalus 是一台 immutable、atomic、AI-native 的桌面操作系统底座,跑在 AlmaLinux Bootc(KDE 变体)之上。
+Daedalus 是一套 fleet 控制面底座 + 自维护 Atomic 节点 + 异构被控 daedalus-agent 入境券,
+跑在 AlmaLinux Bootc headless 变体之上(default VARIANT=headless;默认无桌面,xrdp
+保留作为救砖工具由 `daedalus-host rescue enable-vnc` 显式开)。产品定位与拓扑详见
+VISION.md §1 (2026-10-17 重写)。
 它不把裸 shell 交给 AI agent,而是给 agent 类型化资源、有边界的通道与可验证的保证。
 核心命题一句话:平台首推路径 = 类型化资源的标准操作 = 有日志事务 = 哈希链审计 = 可回滚;
 保证附着于通道,其余通道在硬边界内存在,平台不背书(VISION.md §1)。
