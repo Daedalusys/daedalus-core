@@ -8,9 +8,10 @@
 | 上游文档 | `docs/superpowers/specs/2026-10-17-fleet-control-plane-design.md` 是当前产品定义;本 VISION 是其对内对外的统一叙事 |
 | 文档分工 | README 上手 / AGENTS 操作 / 本稿愿景 |
 | 架构图 | 架构图随本版生产化更新;历史图见 `docs/archive/2026-09-21-vision.md` 引用的旧版 |
-| 锚点约定 | 代码锚前缀 `daedalus-core/…` / `daedalus-sdk/…` / `daedalus-plugins/…` 指三仓平级布局下的各仓根 |
+| 锚点约定 | 代码锚前缀 `daedalus-core/…` / `daedalus-sdk/…` / `daedalus-plugins/…` / `daedalus-agent/…` 指**四仓**平级布局下的各仓根;agent 仓 `Daedalusys/daedalus-agent` 独立, MIT License, 不属核心三仓 (Apache-2.0) |
 
 > **changelog**:
+> - 2026-10-19: spec v3.1 同步。2026-10-18 拍板 agent 落独立仓 `Daedalusys/daedalus-agent` (MIT), 不再落 `daedalus-core/cmd/daedalus-agent/`。VISION 同步:§4「三仓平级」改「四仓平级」+ §9 移除 `cmd/daedalus-agent/` 引用 + §10/§11 落点同步到新仓。spec 同步:§3 三仓拓扑改四仓拓扑;§5.2 issue `core#38` 落点改新仓。**agent 仓 MIT / 核心三仓 Apache-2.0, 双 License 模式启动**。
 > - 2026-10-18: 用户画像修订 + 竞品区隔。依据 n=65 问卷(73% 非专业、75% solo、75% ≤5 台、49% 隐私 #1、46% 想要「AI 自动 + 可撤销按钮」)。具体:§1 加目标用户 + 竞品对照表;§2 措辞改「1-30 台 solo + 业余/独立」;§1 顶部显式 Apache-2.0。spec 同步:§1 加目标用户 + 竞品对照 + License;§2 G1 改「典型 5-30 台、P0.5 scale 验证 200 台」;§4.4 Register 响应加 snapshot_capability 字段;§5.3 P0.5 加 Mobile Control UI 与 Plan Event 字段。
 > - 2026-10-17: 本版。取代 2026-09-21 单机桌面版(spec:`docs/superpowers/specs/2026-10-17-fleet-control-plane-design.md`)。**§1 删「桌面」改「fleet 控制面 + Atomic 节点」**;§2/§3 重写为「小团队 + 大量机器」;§5「故意无」三行在 hub-spoke 下重新解释;§7 整章区分「仍故意无 / 不再故意无」;§8 增「跨机意图 + Plan + RPC 协议」段;§9 加 12(daedalus-agent / RPC / 凭证下发 / Plan 调度);§10 加 P0.5 阶段(fleet 控制面 MVP = G1+G4 端到端 demo);§11 加「daedalus-agent 长期定位」+「控制面单点 HA」开放问题。旧 VISION 入 `docs/archive/2026-09-21-vision.md`(verbatim)。
 > - 2026-09-21: 初版(单机 dady,自维护 atomic base,kde 变体)。
@@ -83,11 +84,11 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 
 | 仓 | 职责 |
 | --- | --- |
-| `daedalus-core` | 镜像编排 + 5 个 core runtime + copilot 源码 + 契约缝 `internal/{controller,tx}` + **新增** `cmd/daedalus-agent/`(spec core#38) |
+| `daedalus-core` | 镜像编排 + 5 个 core runtime + copilot 源码 + 契约缝 `internal/{controller,tx}`;daedalus-agent **不** 在此仓(spec core#38 改落 `Daedalusys/daedalus-agent`) |
 | `daedalus-sdk` | 公开 contract 仓:对象模型、策略、审计、观测缓存、**新增** `daedalus/agent/v1.proto` + `Plan` 类型(spec sdk#26, sdk#27) |
 | `daedalus-plugins` | 现役 7 个 `type=capability` 插件 monorepo;**新增** `daedalus.os-state`(spec plugins#34,异构被控 OS 状态)、`daedalus.snapshot`(spec plugins#35,btrfs / LVM / snapper / rsync 能力检测) |
 
-制品链:`just plugin-pack` 编译打包 → 解压校验落安装态 → `just sync` 同步 vendor 树 → `just build` 出镜像。`verify-dev-layout.sh` 守兄弟仓就位。release zip 是分发载体,无运行时联网安装。**daedalus-agent 单 Go 二进制**(spec core#38)随 daedalus-core 构建,但产物独立分发,可装到任意 Linux。
+制品链:`just plugin-pack` 编译打包 → 解压校验落安装态 → `just sync` 同步 vendor 树 → `just build` 出镜像。`verify-dev-layout.sh` 守兄弟仓就位。release zip 是分发载体,无运行时联网安装。**daedalus-agent 单 Go 二进制**(spec core#38,仓 `Daedalusys/daedalus-agent` MIT)**独立仓独立构建**,产物独立分发,可装到任意 Linux;不在 `daedalus-core` 制品链内。
 
 ### 两产品拓扑(fleet 改造新增)
 
@@ -332,7 +333,7 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus:
 13. **daedalus-smoke**(`cmd/daedalus-smoke/`):镜像内端到端,v3 构建机补跑。
 14. **P4 controller skeleton**(2026-10-10 PR #35):reconcile 循环骨架已起;list-watch 与 reconcile 接入归 P4 + P0.5。
 15. **P3 object model**(2026-10-10):Condition / Generation / UID / ResourceVersion / OwnerReferences / Finalizers 字段 + Validate 全交付(sdk#1)。
-16. **daedalus-agent 二进制骨架**(新增,spec core#38;P0.5 端到端范围):单 Go 二进制,装在任意 Linux;RPC 接口 = `ReadSystemInfo / ApplyIntent / BestEffortRollback / ReportState` 四件;best-effort 回滚,显式标注「best-effort rollback, not bootc」(spec G3 字面要求)。
+16. **daedalus-agent 二进制骨架**(新增,spec core#38;P0.5 端到端范围,仓 `Daedalusys/daedalus-agent` MIT):单 Go 二进制,装在任意 Linux;RPC 接口 = `Register / Heartbeat / ApplyIntent / SnapshotRequest / ReportStatus` 五件(注:本仓库 spec 5.2 早期列的 4 件名 `ReadSystemInfo / ApplyIntent / BestEffortRollback / ReportState` 是初稿, 在 v3.1 实施时按 plan B 的 5 个 RPC 落);best-effort 回滚,显式标注「best-effort rollback, not bootc」(spec G3 字面要求)。
 17. **RPC 协议 + SecretProvider 下发契约**(新增,spec core#39 / sdk#26 / sdk#28):mTLS + gRPC + protobuf schema(`daedalus/agent/v1.proto`);凭证下发不落 agent 端(spec N6:agent 进程崩了 = 凭证不外泄)。
 18. **Plan 类型 + 调度器骨架**(新增,spec sdk#27 / core#40):`Plan{intents[], machines[], batching, blast_radius, risk_class}`;控制面 reconcile 接到 Plan 调度器;失败分桶(transient 重试 / persistent dirty / 整批暂停)+ 风险等级默认高(触内核/security 包 / `/etc` `/boot` `/usr` `/var/lib` 等路径 / systemd / dbus / NetworkManager)。
 
