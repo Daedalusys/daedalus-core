@@ -74,7 +74,7 @@ func nativeManifest() *plugin.Manifest {
 		Executable:  "bin/main",
 		Entrypoint:  []string{"--stdio"},
 		APIVersion:  "0.1.0",
-		License:     "Apache-2.0",
+		License: "MIT",
 		Maintainer:  "team@daedalusys.io",
 		Permissions: &plugin.Permissions{Read: []string{"/home"}, Write: []string{"/tmp"}, Run: []string{"/usr/bin/git"}},
 		Tools:       []string{"smoke_ping", "smoke_echo"},
@@ -411,7 +411,7 @@ func TestRunPlugin_Deno(t *testing.T) {
 		Executable: "main.ts",
 		Entrypoint: []string{"--allow-env", "--allow-read=/opt/daedalus,/home"},
 		APIVersion: "0.1.0",
-		License:    "Apache-2.0",
+		License: "MIT",
 		Maintainer: "team@daedalusys.io",
 	}
 	src := t.TempDir()

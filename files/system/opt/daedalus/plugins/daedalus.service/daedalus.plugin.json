@@ -37,6 +37,6 @@
     "daedalus.plugin.json": "sha256:3ba5bb0c78bfcb41c82a35d3a314fbecf98ee226e66c6f4e5b3176e149f1f8d7"
   },
   "api_version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "maintainer": "team@daedalusys.io"
 }
