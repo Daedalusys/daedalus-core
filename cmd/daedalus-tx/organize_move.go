@@ -35,7 +35,7 @@ import (
 
 // organizeMoveArgs 是步骤 args 的线上形态(v1 单层 schema, 未知键拒绝)。
 type organizeMoveArgs struct {
-	PlanID string             `json:"plan_id"`
+	PlanID string              `json:"plan_id"`
 	Moves  []organizeMoveEntry `json:"moves"`
 }
 

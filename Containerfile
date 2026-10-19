@@ -10,7 +10,11 @@ FROM quay.io/almalinuxorg/almalinux-bootc:10@sha256:d8679e022ff2b9f9873becf262e4
 
 ARG IMAGE_NAME=daedalus-os
 ARG IMAGE_REGISTRY=localhost
-ARG VARIANT=kde
+# VARIANT=headless 唯一支持;kde 已废弃(2026-10-17 fleet 改造)。
+# 镜像默认无图形登录链(sddm/plasma/kwin 不装),daedalus-host rescue 经 RDP/VNC
+# 现场拉起(headless 默认 xrdp masked,enable-vnc 显式开)。要本地 KDE 开发请另起
+# 分支并恢复 ARG VARIANT=kde。
+ARG VARIANT=headless
 ARG TARGETARCH
 
 # ARG 只做 Dockerfile 指令里的 ${VAR} 文本替换,不会进 RUN 子进程环境。
@@ -91,10 +95,16 @@ RUN --mount=type=tmpfs,dst=/tmp \
 # 建 daedalus(wheel + 可选 xrdp 组)+ 免密 sudo + root 密码 + 开 sshd。bootc 基础
 # 镜像无账号 → 之前 SSH 连得上 sshd 却 Permission denied 就是缺这个 stage。排在 77
 # 后是因为要加进 xrdp 组(由 77 的 xrdp 包创建)。凭据见 README.md。
-# 79=sddm 自启
+# 79=sddm 自启 已删,headless 默认无图形登录链(见 79-sddm-autostart.sh 移除记录)。
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
-    /ctx/build_files/build.sh 78 79
+    /ctx/build_files/build.sh 78
+
+# T2 配合: headless 变体打标, daedalus-host rescue 可识别。
+# /etc/os-release 由 almalinux-bootc 基础镜像生成,默认无 VARIANT 字段;此处追加
+# 一行供下游 T2 (cmd/daedalus-host rescue) 识别 "headless 镜像",T3 recipe 也
+# 校验该标记(见 tests/build/headless-variant.sh)。
+RUN printf '\nVARIANT=headless\n' >> /etc/os-release
 
 # === Stage 6.6:启用 P4 controller systemd unit(80-daedalus-controller) ===
 # controller unit 是 daedalus-host-controller.service,镜像构建期 systemctl

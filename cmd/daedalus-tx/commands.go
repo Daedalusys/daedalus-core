@@ -34,6 +34,10 @@ func cmdPropose(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitUsage
 	}
+	args, policyDir, okp := extractPolicyDir(args, stdout, stderr)
+	if !okp {
+		return exitUsage
+	}
 	if len(args) != 3 {
 		fmt.Fprint(stderr, usage())
 		return exitUsage
@@ -58,7 +62,9 @@ func cmdPropose(args []string, stdout, stderr io.Writer) int {
 	if !ok3 {
 		return code
 	}
-	before, after, perr := a.Propose(withUnitDir(context.Background(), unitDir), stepArgs)
+	ctx := withUnitDir(context.Background(), unitDir)
+	ctx = withPolicyDir(ctx, policyDir)
+	before, after, perr := a.Propose(ctx, stepArgs)
 	if perr != nil {
 		stampPlain("propose", id, "error")
 		return failRuntime(stdout, stderr, fmt.Sprintf("propose 失败: %v", perr))
@@ -79,7 +85,12 @@ func cmdApply(args []string, stdout, stderr io.Writer) int {
 	if !okf {
 		return exitUsage
 	}
+	args, policyDir, okp := extractPolicyDir(args, stdout, stderr)
+	if !okp {
+		return exitUsage
+	}
 	ctx := withUnitDir(context.Background(), unitDir)
+	ctx = withPolicyDir(ctx, policyDir)
 	id, code, ok := wantIDArgs(args, stdout, stderr)
 	if !ok {
 		return code
@@ -137,7 +148,12 @@ func cmdRollback(args []string, stdout, stderr io.Writer) int {
 	if !okf {
 		return exitUsage
 	}
+	args, policyDir, okp := extractPolicyDir(args, stdout, stderr)
+	if !okp {
+		return exitUsage
+	}
 	ctx := withUnitDir(context.Background(), unitDir)
+	ctx = withPolicyDir(ctx, policyDir)
 	id, code, ok := wantIDArgs(args, stdout, stderr)
 	if !ok {
 		return code
@@ -279,27 +295,40 @@ func rollbackStep(ctx context.Context, step tx.Step) tx.OpResult {
 	return a.Rollback(ctx, step)
 }
 
-// extractUnitDir 从 propose/apply/rollback 的位置参数里摘出 `--unit-dir <path>`
-// 旗标: 至多一次、必须携带非空跟随值, 否则报用法错误(exit 2)。
-// 返回 (其余位置参数, 覆写目录(未给则 ""))。ok=false 时已打印错误文档。
-func extractUnitDir(args []string, stdout, stderr io.Writer) ([]string, string, bool) {
+// extractFlag 从 propose/apply/rollback 的位置参数里摘出 `--<flag> <value>`
+// 旗标:至多一次、必须携带非空跟随值,否则报用法错误(exit 2)。
+// 返回(其余位置参数, 覆写值(未给则 ""))。ok=false 时已打印错误文档。
+// name 是旗标名(含 -- 前缀,用于错误消息);missingMsg 是 missing value 时的错误消息。
+func extractFlag(args []string, name, missingMsg string, stdout, stderr io.Writer) ([]string, string, bool) {
 	rest := make([]string, 0, len(args))
-	dir := ""
+	val := ""
 	for i := 0; i < len(args); i++ {
-		if args[i] != "--unit-dir" {
+		if args[i] != name {
 			rest = append(rest, args[i])
 			continue
 		}
-		if dir != "" {
-			failUsage(stdout, stderr, "--unit-dir 至多出现一次")
+		if val != "" {
+			failUsage(stdout, stderr, name+" 至多出现一次")
 			return nil, "", false
 		}
 		if i+1 >= len(args) || args[i+1] == "" {
-			failUsage(stdout, stderr, `--unit-dir 需要跟随非空 <path> 参数`)
+			failUsage(stdout, stderr, missingMsg)
 			return nil, "", false
 		}
-		dir = args[i+1]
+		val = args[i+1]
 		i++
 	}
-	return rest, dir, true
+	return rest, val, true
+}
+
+// extractUnitDir 从 propose/apply/rollback 的位置参数里摘出 `--unit-dir <path>`
+// 旗标(service.set 解析目录覆写;其它适配器忽略)。
+func extractUnitDir(args []string, stdout, stderr io.Writer) ([]string, string, bool) {
+	return extractFlag(args, "--unit-dir", "--unit-dir 需要跟随非空 <path> 参数", stdout, stderr)
+}
+
+// extractPolicyDir 从 propose/apply/rollback 的位置参数里摘出 `--policy-dir <path>`
+// 旗标(policy.set 解析目录覆写;其它适配器忽略)。
+func extractPolicyDir(args []string, stdout, stderr io.Writer) ([]string, string, bool) {
+	return extractFlag(args, "--policy-dir", "--policy-dir 需要跟随非空 <path> 参数", stdout, stderr)
 }

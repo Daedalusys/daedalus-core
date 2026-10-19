@@ -89,6 +89,10 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		return cmdOwnership(stdout, stderr, args)
 	case "controller":
 		return cmdController(stdout, stderr, args)
+	case "rescue":
+		code := cmdRescue(stdout, stderr, args)
+		hostAudit("host_rescue_vnc", pluginDir, "", code)
+		return code
 	case "inspect", "verify", "run-plugin", "render-unit":
 		id, tail, err := parseIDArgs(args)
 		if err != nil {

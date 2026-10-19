@@ -7,7 +7,10 @@
 
 ## Overview
 
-Daedalus 是一台 immutable、atomic、AI-native 的桌面操作系统底座,跑在 AlmaLinux Bootc(KDE 变体)之上。
+Daedalus 是一套 fleet 控制面底座 + 自维护 Atomic 节点 + 异构被控 daedalus-agent 入境券,
+跑在 AlmaLinux Bootc headless 变体之上(default VARIANT=headless;默认无桌面,xrdp
+保留作为救砖工具由 `daedalus-host rescue enable-vnc` 显式开)。产品定位与拓扑详见
+VISION.md §1 (2026-10-17 重写)。
 它不把裸 shell 交给 AI agent,而是给 agent 类型化资源、有边界的通道与可验证的保证。
 核心命题一句话:平台首推路径 = 类型化资源的标准操作 = 有日志事务 = 哈希链审计 = 可回滚;
 保证附着于通道,其余通道在硬边界内存在,平台不背书(VISION.md §1)。
@@ -52,7 +55,7 @@ Daedalus 是一台 immutable、atomic、AI-native 的桌面操作系统底座,�
 | --- | --- |
 | `daedalus-host` | 插件宿主:`list` / `inspect` / `verify` / `run-plugin` / `render-unit`;只打印启动命令,绝不 spawn、绝不做 MCP 父进程(决策 16),执行者是 systemd |
 | `daedalus-audit` | 哈希链审计 CLI(`--identity/--tool/--args/--outcome/--log-path` + `verify` 子命令);内部落 SDK `audit.LogAudit`,是给 copilot 这类跨进程写入方用的进程边界封装,不是唯一写入口 |
-| `daedalus-tx` | 事务通道 CLI:`begin`→`propose`→`apply`→`rollback`,service/package 适配器,带 euid 守门与回滚 sidecar |
+| `daedalus-tx` | 事务通道 CLI:`begin`→`propose`→`apply`→`rollback`,service/package/task/container/policy 适配器,带 euid 守门与回滚 sidecar |
 | `daedalus-smoke` | 镜像内端到端 smoke 断言,构建机补跑 |
 | `daedalus-plugin-pack` | 插件 zip 打包器:checksums 注入 + manifest 规范化自摘要 + zip-slip 九道防线 |
 
@@ -94,7 +97,7 @@ Copilot 自身从不直接执行 shell,执行模型如下:
   同时钉了 `ReconcileFunc`、`AdmissionFunc` 等契约缝:签名先落码,运行时零调用,接入时不改协议。
 - `internal/tx/`:事务状态机 `begin`→`propose`→`apply`→`rollback`,适配器注册表与 `tx.Step`
   六键线上契约。journal 全程落盘,`tx.List()` 按 `created_at↑, id↑` 回放;
-  只有事务性资源(现役 service / package)可发起序列,其余被策略网关与注册表拒绝。
+  只有事务性资源(现役 service / package / task)可发起序列,其余被策略网关与注册表拒绝。
 - `internal/desiredview/`:期望态投影。journal → Current Desired View 纯函数全量 replay,零副作用;
   `applied` 是唯一提交点,封闭映射 fail-closed;`Entry.source_tx` 是后续 generation 比较的前置。
 
@@ -136,7 +139,7 @@ Spec(资源声明) → Tx(事务五步) → Observe(state 缓存) → Audit(哈�
    不是执行破坏性命令。
 2. **Tx(执行面)**:`daedalus-tx` 走 `begin`→`propose`→`apply`(`rollback` 兜底),
    每步带 before/after 快照与逆序回滚计划并落 journal;适配器执行真实副作用,
-   现役 `service.set`(user-scope-only)与 `package.set`(要求 euid=0)。
+   现役 `service.set`(user-scope-only)、`package.set`(要求 euid=0)、`task.set`(user-scope-only)、`container.set`(rootless-only,euid==0 拒;podman domain — issue #1 container 第二刀)、`policy.set`(manager-only,euid==0 要求;`content_ref` 写 `/opt/daedalus/shared/policy.toml`;`absent` 写 `policy.DisabledSentinel` 触发 `policy.Load` fail-closed,可逆 — issue #1 第三刀)。
    package 的 Apply 以捕获 dnf history id 并落 sidecar 为成功必要条件,fail-closed。
 3. **Observe(观测面)**:只读查询(`service.query` / `service.list` 等)写 `state.jsonl`
    追加式缓存,行形 `StateEntry{kind, name, observed_at, payload}`;派生缓存与证据层分离。

@@ -15,11 +15,10 @@ package main
 // SDK audit 包的 flock 内播种(LogAudit: TxID!=""&&TxPrevHash=="" → lastNonTxRecord)。
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"strconv"
+	"io"
 
 	"github.com/Daedalusys/daedalus-sdk/audit"
 )
@@ -78,44 +77,32 @@ type txTail struct {
 	maxStep  int
 }
 
-// scanTxTail 扫描审计日志(默认路径), 返回该 tx-id 已盖章记录的**最大 step** 及其 entry_hash。
-// 无匹配(或日志不存在)→ 返回零值 txTail(prevHash 空, maxStep 0), 调用方据此把下一条
-// 当作 step-1 起算且创世留空(由 LogAudit 播种)。逐行前向扫, 取 step 最大者(追加序=升序,
-// 等价"最后一条"), 不依赖 tx_step 一定连续(失败步也可能已盖章)。
+// scanTxTail 扫描审计日志(**跨活跃 + 归档段**, newest-first), 返回该 tx-id
+// 已盖章记录的**最大 step** 及其 entry_hash。用 OpenLog(NewestFirst) 先看活跃与
+// 最新段, 正常事务在最新段即命中短路。
+// 无匹配(或日志不存在)→ 返回零值 txTail(prevHash 空, maxStep 0), 调用方据此把
+// 下一条当作 step-1 起算且创世留空(由 LogAudit 播种)。非 EOF 读错宽容跳过(与
+// 既有“尽力而为”姿态一致)。
 func scanTxTail(txID string) txTail {
-	path := audit.DefaultLogPath()
-	f, err := os.Open(path)
+	r, err := audit.OpenLog(audit.DefaultLogPath(), audit.NewestFirst)
 	if err != nil {
 		return txTail{}
 	}
-	defer f.Close()
+	defer r.Close()
 	tail := txTail{maxStep: 0}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
+	for {
+		rec, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
 			continue
 		}
-		v, perr := audit.ParseValue(string(line))
-		if perr != nil || !v.IsObject() {
+		if rec.TxID != txID {
 			continue
 		}
-		if tid, ok := v.LookupString("tx_id"); !ok || tid != txID {
-			continue
-		}
-		eh, ok := v.LookupString("entry_hash")
-		if !ok {
-			continue
-		}
-		step := 0
-		if sv, ok := v.Lookup("tx_step"); ok && sv != nil {
-			if n, e := strconv.Atoi(sv.ArgsString()); e == nil {
-				step = n
-			}
-		}
-		if step >= tail.maxStep {
-			tail.maxStep, tail.prevHash = step, eh
+		if rec.TxStep >= tail.maxStep {
+			tail.maxStep, tail.prevHash = rec.TxStep, rec.EntryHash
 		}
 	}
 	return tail
