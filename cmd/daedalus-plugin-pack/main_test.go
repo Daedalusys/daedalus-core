@@ -30,7 +30,7 @@ func buildSmokePluginDir(t *testing.T) string {
 		Executable: "bin/main",
 		Tools:      []string{"ping"},
 		APIVersion: "0.1.0",
-		License:    "Apache-2.0",
+		License: "MIT",
 		Maintainer: "team@daedalusys.io",
 	}
 	data, err := json.MarshalIndent(&m, "", "  ")

@@ -58,6 +58,6 @@
     "policy.ts": "sha256:d726906475f3ed166d623aa38a97673a2798d23f7d167677fb9cee17c12300ec"
   },
   "api_version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "maintainer": "team@daedalusys.io"
 }

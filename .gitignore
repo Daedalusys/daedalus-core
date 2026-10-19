@@ -20,11 +20,5 @@ files/system/usr/local/bin/daedalus-*
 # OhMyOpenCode 编排状态(不入库)
 .omo/
 
-# 调研草稿与对外答疑 FAQ(本次不入库 —— 调研归研究渠道,FAQ 等正式化后再考虑)
-docs/research/
-docs/superpowers/*
-
-# 顶层 go build / go test -c 产物(daedalus-{tx,trace,...} 二进制;go 命令默认写入 CWD,
-# 可能被 root 误触或被外部 Go 工具落盘;不污染仓库)。
-/daedalus-*
-
+# superpowers 设计稿 / 实施计划 / 自检材料(本地协作产物,不入库)
+docs/superpowers/

@@ -35,3 +35,4 @@ go build ./...               # 经 go.work 解析 SDK 与 17 插件模块
 请在新仓开 issue。本 issue tracker **仅服务本仓代码**：
 - 跨仓问题（如同时影响 SDK 与 plugins）请先开在本仓，影响面大者会在评论里 cross-link 到其他仓。
 - 老仓 `Daedalusys/Daedalusys` 已于 2026-09-21 archived，历史 issue 保留可读；新 issue 一律开在本仓。
+# CI trigger for headless verification (2026-10-11T04:57:27Z)
