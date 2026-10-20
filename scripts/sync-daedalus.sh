@@ -43,6 +43,28 @@ if [ -f "${KDE_PATCH_TARGET}" ] && grep -q 'systemctl enable sddm' "${KDE_PATCH_
     fi
 fi
 
+# Daedalus headless 变体:完全跳过 KDE/sddm/plasma/xrdp 的安装。
+# upstream 20-desktop.sh 来自 AlmaLinux/atomic-desktop (KDE 上游),无条件装 KDE。
+# build.sh orchestrator 按 prefix 匹配脚本,无法靠 VARIANT env 拦截。
+# 解法:headless 时把 20-desktop.sh 改名成 .disabled,find 匹配不到就跳过。
+# 这样镜像里就不会有 plasma/kwin/sddm,daedalus-core T7 的 77-xrdp.sh / 79-sddm-autostart.sh
+# guard 在 headless 时是多余的(已经没 sddm 装了),但保留作为防御(plan 2026-10-20 T7)。
+#
+# 默认仍打 kde 镜像(本机 KVM 开发依赖);显式 DAEDALUS_VARIANT=headless 才短路。
+DAEDALUS_VARIANT="${DAEDALUS_VARIANT:-kde}"
+if [ "${DAEDALUS_VARIANT}" = "headless" ]; then
+    if [ -f "${KDE_PATCH_TARGET}" ]; then
+        echo "=== Headless variant: disabling 20-desktop.sh (KDE install) ==="
+        mv "${KDE_PATCH_TARGET}" "${KDE_PATCH_TARGET}.headless-disabled"
+        echo "  renamed: 20-desktop.sh -> 20-desktop.sh.headless-disabled"
+        echo "  build.sh 20 will not find it, KDE/plasma/kwin/sddm/xrdp will NOT install"
+    else
+        echo "  20-desktop.sh not present (already disabled or atomic-desktop lacks it)"
+    fi
+else
+    echo "  variant=${DAEDALUS_VARIANT}: 20-desktop.sh active (kde branch will run)"
+fi
+
 # rsync 源一律用仓根相对路径:调用契约是 cwd = daedalus-core 仓根(justfile `sync:`)。
 rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" files/system/ base_image/files/system/
 rsync -a ${DRY_RUN_FLAG} "${EXCLUDES[@]}" files/scripts/ base_image/files/scripts/

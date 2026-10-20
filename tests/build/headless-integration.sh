@@ -89,6 +89,23 @@ else
   fail_count=$((fail_count + 1))
 fi
 
+# Check 8: sync-daedalus.sh has headless branch that disables 20-desktop.sh
+sync_script="${REPO_ROOT}/scripts/sync-daedalus.sh"
+if [[ -f "$sync_script" ]] && grep -q 'DAEDALUS_VARIANT.*headless.*headless-disabled\|headless-disabled' "$sync_script"; then
+  echo "OK: sync-daedalus.sh has headless branch (disables 20-desktop.sh)"
+else
+  echo "FAIL: sync-daedalus.sh missing headless branch (KDE would still install)"
+  fail_count=$((fail_count + 1))
+fi
+
+# Check 9: justfile sync recipe passes DAEDALUS_VARIANT to sync-daedalus.sh
+if grep -q "DAEDALUS_VARIANT" "$justfile"; then
+  echo "OK: justfile passes DAEDALUS_VARIANT to sync"
+else
+  echo "FAIL: justfile does not pass DAEDALUS_VARIANT (sync-daedalus.sh would default to kde)"
+  fail_count=$((fail_count + 1))
+fi
+
 # Summary
 if [[ $fail_count -gt 0 ]]; then
   echo "==> RESULT: FAIL (${fail_count} violations)"
