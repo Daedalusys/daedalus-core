@@ -2,6 +2,13 @@
 
 set -xeuo pipefail
 
+# Skip on headless variant — the headless base image has no xrdp packages.
+# Rescue path is sshd + serial console only (see tests/rescue-path.sh in fork).
+if [[ "${VARIANT:-kde}" == "headless" ]]; then
+    echo "77-xrdp.sh: VARIANT=headless; skip xrdp install"
+    exit 0
+fi
+
 # Daedalus 扩展:为 headless KVM guest 装真正的 RDP server —— xrdp(B1 方案)。
 #
 # 为什么 xrdp 而不是 gnome-remote-desktop:

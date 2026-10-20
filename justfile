@@ -78,7 +78,7 @@ fetch-plugins:
 # 依赖顺序:fetch-plugins(拉插件 zip 解压到安装态)→ copilot-plugin(从
 # plugin/copilot/ 源码再生 copilot 安装态,防入库产物与源码漂移)→ sync(安装态同步进 base_image)→ podman build
 build: fetch-plugins copilot-plugin sync
-    podman build --jobs=$(nproc) --network=host --env HTTP_PROXY --env HTTPS_PROXY --env DAEDALUS_DEV_USER="{{ env_var_or_default('DAEDALUS_DEV_USER', '') }}" --env DAEDALUS_DEV_PASS="{{ env_var_or_default('DAEDALUS_DEV_PASS', '') }}" --platform=linux/amd64 --security-opt=label=disable --cap-add=all --device /dev/fuse --build-arg IMAGE_NAME=daedalus-os --build-arg IMAGE_REGISTRY=localhost --build-arg VARIANT=headless -t localhost/daedalus-os:latest -f Containerfile .
+    podman build --jobs=$(nproc) --network=host --env HTTP_PROXY --env HTTPS_PROXY --env DAEDALUS_DEV_USER="{{ env_var_or_default('DAEDALUS_DEV_USER', '') }}" --env DAEDALUS_DEV_PASS="{{ env_var_or_default('DAEDALUS_DEV_PASS', '') }}" --platform=linux/amd64 --security-opt=label=disable --cap-add=all --device /dev/fuse --build-arg IMAGE_NAME=daedalus-os --build-arg IMAGE_REGISTRY=localhost --build-arg HEADLESS_BASE_IMAGE="{{ env_var_or_default('HEADLESS_BASE_IMAGE', 'ghcr.io/daedalusys/almalinux-bootc:10-kitten') }}" --build-arg VARIANT=headless -t localhost/daedalus-os:latest -f Containerfile .
     # tag alias: 镜像也以 :headless 形态就位(spec §3 A6 + brief T1 明确要求产出 :headless);
     # 保留 :latest 是历史惯例(iso / qemu / ghcr.io 推送都以 :latest 为源),:headless 是
     # verifier 默认 IMAGE 形态。两条 tag 共指同一镜像 ID,零额外空间成本。
@@ -91,7 +91,7 @@ build: fetch-plugins copilot-plugin sync
 # 凭据透传:DAEDALUS_DEV_USER/PASS 从环境或 .env 取,空值时 78 脚本走公开构建模式(不注入账号)
 # 依赖顺序同 build:fetch-plugins → copilot-plugin → sync → podman build
 build-nocache: fetch-plugins copilot-plugin sync
-    podman build --no-cache --jobs=$(nproc) --network=host --env HTTP_PROXY --env HTTPS_PROXY --env DAEDALUS_DEV_USER="{{ env_var_or_default('DAEDALUS_DEV_USER', '') }}" --env DAEDALUS_DEV_PASS="{{ env_var_or_default('DAEDALUS_DEV_PASS', '') }}" --platform=linux/amd64 --security-opt=label=disable --cap-add=all --device /dev/fuse --build-arg IMAGE_NAME=daedalus-os --build-arg IMAGE_REGISTRY=localhost --build-arg VARIANT=headless -t localhost/daedalus-os:latest -f Containerfile .
+    podman build --no-cache --jobs=$(nproc) --network=host --env HTTP_PROXY --env HTTPS_PROXY --env DAEDALUS_DEV_USER="{{ env_var_or_default('DAEDALUS_DEV_USER', '') }}" --env DAEDALUS_DEV_PASS="{{ env_var_or_default('DAEDALUS_DEV_PASS', '') }}" --platform=linux/amd64 --security-opt=label=disable --cap-add=all --device /dev/fuse --build-arg IMAGE_NAME=daedalus-os --build-arg IMAGE_REGISTRY=localhost --build-arg HEADLESS_BASE_IMAGE="{{ env_var_or_default('HEADLESS_BASE_IMAGE', 'ghcr.io/daedalusys/almalinux-bootc:10-kitten') }}" --build-arg VARIANT=headless -t localhost/daedalus-os:latest -f Containerfile .
     # tag alias: 与 build recipe 同款:同步产出 :headless tag 让 verifier 默认 IMAGE 命中
     # (tests/build/headless-variant.sh 末尾的 image-tag 校验要求 tag 含 "headless")。
     podman tag localhost/daedalus-os:latest localhost/daedalus-os:headless

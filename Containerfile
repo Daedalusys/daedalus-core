@@ -5,8 +5,12 @@ COPY base_image/files/system /system_files/
 COPY base_image/files/scripts /build_files/
 COPY base_image/*.pub /keys/
 
-# Base Image
-FROM quay.io/almalinuxorg/almalinux-bootc:10@sha256:d8679e022ff2b9f9873becf262e4447beb5b0551a8dc83c146e2e6f27bd5183f
+# Base Image — headless fork of almalinux-bootc (kitten variant + sshd/NetworkManager).
+# See https://github.com/Daedalusys/almalinux-bootc (plan 2026-10-20).
+# Fork ships ONLY the 10-kitten variant; the upstream full :10 base is no longer used.
+# Override via --build-arg HEADLESS_BASE_IMAGE=... for testing local builds.
+ARG HEADLESS_BASE_IMAGE=ghcr.io/daedalusys/almalinux-bootc:10-kitten
+FROM ${HEADLESS_BASE_IMAGE}
 
 ARG IMAGE_NAME=daedalus-os
 ARG IMAGE_REGISTRY=localhost
