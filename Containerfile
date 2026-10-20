@@ -9,7 +9,11 @@ COPY base_image/*.pub /keys/
 # See https://github.com/Daedalusys/almalinux-bootc (plan 2026-10-20).
 # Fork ships ONLY the 10-kitten variant; the upstream full :10 base is no longer used.
 # Override via --build-arg HEADLESS_BASE_IMAGE=... for testing local builds.
-ARG HEADLESS_BASE_IMAGE=ghcr.io/daedalusys/almalinux-bootc:10-kitten
+# Default pins the digest from the first successful fork CI build (2026-10-20):
+#   ghcr.io/daedalusys/almalinux-bootc:10-kitten
+#   digest sha256:a4bff88738b674c666277de8ffbc64c8e59deedfcc9a054b55d785428f877040
+# Pin digest for reproducibility; bump digest + retest when upstream ships new fork release.
+ARG HEADLESS_BASE_IMAGE=ghcr.io/daedalusys/almalinux-bootc@sha256:a4bff88738b674c666277de8ffbc64c8e59deedfcc9a054b55d785428f877040
 FROM ${HEADLESS_BASE_IMAGE}
 
 ARG IMAGE_NAME=daedalus-os
