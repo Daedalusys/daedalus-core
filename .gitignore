@@ -17,6 +17,17 @@ bin/
 !files/system/usr/local/bin/
 files/system/usr/local/bin/daedalus-*
 
+# copilot 安装态是 just copilot-plugin (pack-copilot-plugin.sh) 的构建产物,
+# 从 plugin/copilot/ 源码再生。CI 调 just copilot-plugin 重新生成 + 幂等验证
+# (跑两次 sha256 一致 → 产物可重现)。本机开发者跑 just copilot-plugin 后
+# 无需 commit 安装态,绕过 12-factor 「构建产物不入库」违背。
+#
+# 为何只忽略 daedalus.copilot 一个:它是仓内唯一靠 pack 脚本生成的安装态;其它
+# 插件(daedalus.fs / .pkg / .sysinfo 等)的 files/system/opt/.../ 是 sync 进来
+# 的源码本体,不在这条规则覆盖范围(若改这些源码需要走 plugin-pack + fetch-plugins
+# 流水线,不是本地 just copilot-plugin)。
+files/system/opt/daedalus/plugins/daedalus.copilot/
+
 # OhMyOpenCode 编排状态(不入库)
 .omo/
 

@@ -183,22 +183,37 @@ jobs:
         working-directory: daedalus-core
         run: bash tests/deno/i18n_keys.test.sh
 
-      - name: copilot install-state drift gate
-        # 入库的 copilot 安装态(files/system/opt/daedalus/plugins/daedalus.copilot/)
-        # 是 `just copilot-plugin` 的构建产物:从 plugin/copilot/ 源码再生后
-        # 工作树必须零变化,否则说明源码改动未同步再生,镜像会带过期 copilot 出厂。
-        # 判据用 status --porcelain -uall 而非 git diff --exit-code:源码新增 .ts
-        # 但忘了 commit 时,安装态会多出一个**未跟踪**文件,git diff 看不见它。
+      - name: copilot install-state reproducibility gate
+        # 安装态 files/system/opt/daedalus/plugins/daedalus.copilot/ 已
+        # 加进 .gitignore,本地开发者无需 commit。CI 这里验证 pack 脚本
+        # **幂等性** —— 跑两次产出的安装态 sha256 必须一致(说明产物可
+        # 重现 + 源码状态未漏 re-pack)。原「git status 漂移」门被设计成
+        # 强制 commit 构建产物(违背 12-factor),本 gate 取代之。
         shell: bash
         working-directory: daedalus-core
         run: |
+          hash_install_state() {
+              find files/system/opt/daedalus/plugins/daedalus.copilot/ \
+                  -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null \
+                  | sha256sum
+          }
           just copilot-plugin
-          drift="$(git status --porcelain -uall -- files/system/opt/daedalus/plugins/daedalus.copilot/)"
-          if [ -n "$drift" ]; then
-            echo "ERROR: copilot 安装态与源码漂移,请跑 just copilot-plugin 并提交再生成产物"
-            printf '%s\n' "$drift"
+          FIRST="$(hash_install_state)"
+          just copilot-plugin
+          SECOND="$(hash_install_state)"
+          if [ -n "$FIRST" ] && [ "$FIRST" != "$SECOND" ]; then
+            echo "ERROR: pack-copilot-plugin.sh is not idempotent (two runs produced different sha256)"
+            echo "  run1: $FIRST"
+            echo "  run2: $SECOND"
+            echo "  → pack 脚本需保证重复跑产出一致(时间戳 / 随机数 / sort 顺序等不能进入产物)"
             exit 1
           fi
+          if [ -z "$FIRST" ]; then
+            echo "ERROR: pack-copilot-plugin.sh 没产出任何文件(files/system/opt/.../daedalus.copilot/ 为空)"
+            echo "  → pack 脚本要么跳过 (check CI 环境与源码 plugin/copilot/ 是否就位),要么写错了输出路径"
+            exit 1
+          fi
+          echo "OK: copilot install state is reproducible (sha256=$FIRST)"
 
       - name: testdata drift gate (production policy.toml ↔ SDK testdata)
         # 生产 policy.toml 与 SDK 的 testdata 副本必须
