@@ -276,7 +276,15 @@ jobs:
         working-directory: daedalus-core
         run: |
           sudo apt-get update -y || true
-          sudo apt-get install -y podman qemu-user-static just
+          # qemu-user-static 在 Ubuntu 26.04 (resolute) 后更名为
+          # qemu-user-binfmt-hwe 或 qemu-user-binfmt;原包名是 virtual package
+          # 已无 installation candidate。amd64-only build 不需要 qemu,先按
+          # 暂存在的 fallback 装以避免虚拟包报错中断。
+          sudo apt-get install -y podman just
+          sudo apt-get install -y qemu-user-binfmt-hwe || \
+            sudo apt-get install -y qemu-user-binfmt || \
+            echo "WARN: no qemu-user-binfmt available; \
+              cross-arch build unsupported"
 
       - name: Set Up Go Toolchain
         # 主仓在 daedalus-core 子目录,缓存依赖文件路径须带前缀。
