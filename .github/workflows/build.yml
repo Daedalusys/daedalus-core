@@ -10,13 +10,17 @@
 name: Build Daedalus Core
 on:
   pull_request:
-    # 主保护 required check 已钉住 Test job 名,pull_request 若再带 paths-ignore,
-    # 纯文档 PR 无 check 来源会永挂 "Expected" 卡死合并(拆仓幽灵 "test" 的同款陷阱)。
+    # 不加 paths-ignore:required status check 一旦被路径过滤掉,纯文档 PR 就没有
+    # check 来源,合并门永挂 "Expected"(daedalus-plugins #64 实测栽在这,#65 拆掉同款过滤)。
+    # core main 当前没有分支保护也没有 ruleset,这条纯属防御:哪天钉上 required check
+    # 时不必再踩一遍。
   push:
     # 触发器:任何 push(除了纯文档/模板)都至少跑 test job;镜像构建与发布
-    # (build-image job)由其自身 if: 限定到 feat/* 分支推送、任何 tag 推送、
-    # workflow_dispatch。发版:合并到 feat/<name> 后 push,或 git tag v0.2.0
-    # && git push --tags。
+    # (build-image job)由其自身 if: 限定到 main 分支推送、feat/* 分支推送、
+    # 任何 tag 推送、workflow_dispatch。发版:合并到 feat/<name> 后 push,或
+    # git tag v0.2.0 && git push --tags。
+    # 发布分档见 build-image job 末段:main / tag / dispatch(PUSH=true) 才写
+    # :latest 与 :upstream,feat/* 只写 :<sha>。
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -224,15 +228,17 @@ jobs:
           diff files/system/opt/daedalus/shared/policy.toml ../daedalus-sdk/policy/testdata/policy.toml
           echo "OK: 生产 policy.toml 与 SDK testdata 一致"
 
-  # 镜像构建与发布:仅 feat/* 分支 / 任何 tag / workflow_dispatch 才跑。
-  # 依赖 test 通过;日常 PR 与普通分支 push 不到此处,反馈快。
+  # 镜像构建与发布:main 分支 / feat/* 分支 / 任何 tag / workflow_dispatch 才跑。
+  # 依赖 test 通过;PR 与普通分支 push 不到此处,反馈快。
+  # main 纳入的意义:PR 上的绿是合并前分支头的绿,合并后的组合此前从未被真正构建成
+  # 镜像(2026-10-21 靠手动 dispatch 才验到 #48+#49 的合并态)。
   # 跨仓集成:daedalus-plugins 的 release zip 在此 job 内联下载,解压到镜像树
   # 安装态后 `just build` 构建镜像。
   build-image:
     name: Build & Publish Daedalus Image
     runs-on: ubuntu-latest
     needs: test
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/feat/') || startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feat/') || startsWith(github.ref, 'refs/tags/') }}
     # 升级 packages:write 权限(仅本 job 需要;ghcr.io 推送)。
     permissions:
       contents: read
@@ -390,9 +396,11 @@ jobs:
           podman run --rm localhost/daedalus-os:latest bootc --version || true
           echo "Daedalus bootc container verification completed successfully."
 
-      # ---- 发布:OCI 镜像 → ghcr.io (bootc 原生分发形态) ----
-      # job 级 if: 已限定到 feat/* 分支 / 任何 tag / workflow_dispatch;此处再
-      # 过滤 workflow_dispatch.PUSH=false 的纯构建(只构建+验证不推)场景。
+      # ---- 发布:OCI 镜像 → ghcr.io (bootc 原生分发形态),按 ref 分两档 ----
+      #   :<sha>          —— 每次成功构建都推(build-qcow2 按它取本 run 的镜像);
+      #   :latest/:upstream —— 只有 main / tag / dispatch(PUSH=true) 才写。
+      # job 级 if: 已限定到 main / feat/* / tag / workflow_dispatch;此处再过滤
+      # workflow_dispatch.PUSH=false 的纯构建(只构建+验证不推)场景。
       - name: Log in to ghcr.io
         # GITHUB_TOKEN 自动注入,无需手动 secret
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
@@ -411,20 +419,35 @@ jobs:
         run: |
           # repository_owner 可能含大写,ghcr 要求全小写路径
           IMAGE="ghcr.io/${OWNER_LOWER,,}/daedalus-os"
-          podman tag localhost/daedalus-os:latest "${IMAGE}:latest"
           podman tag localhost/daedalus-os:latest "${IMAGE}:${{ github.sha }}"
           # ghcr 对「同 digest 层已存在于其他不可见私有包」的 blob HEAD 复用探测会返回
           # 403(而非 404),podman 视为致命错误直接 exit 125(run 35757330443
           # attempt 4/5 在 899f820c… 层稳定复现)。用 zstd 重压缩推送 → 所有层
           # digest 全新 → HEAD 一律 404 → 正常上传。本地镜像不受影响,
           # 仅改变推送时的压缩格式。
-          podman push --compression-format zstd "${IMAGE}:latest"
           podman push --compression-format zstd "${IMAGE}:${{ github.sha }}"
+          echo "Pushed: ${IMAGE}:${{ github.sha }}"
+
+      - name: Promote image to :latest and :upstream
+        # 出货档:main 与 tag 是既成事实,dispatch 需显式 PUSH=true(input 默认 false)。
+        # feat/* 分支 push 在此判为 false → 只留 :<sha>,未合并的分支不再能改写
+        # "最新镜像"(:latest / :upstream 原先被 feat/* 每次 push 覆盖)。
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') }}
+        shell: bash
+        working-directory: daedalus-core
+        env:
+          OWNER_LOWER: ${{ github.repository_owner }}
+        run: |
+          IMAGE="ghcr.io/${OWNER_LOWER,,}/daedalus-os"
+          # 上一步已把同一镜像落成 :<sha>,这里只是给它加两个别名;层已在同仓内,
+          # 推送只补 manifest。
+          podman tag "${IMAGE}:${{ github.sha }}" "${IMAGE}:latest"
+          podman push --compression-format zstd "${IMAGE}:latest"
           # :upstream 是 bootc 原地升级 (KVM guest 上 `bootc upgrade ghcr.io/<owner>/daedalus-os:upstream`)
           # 的稳定别名,与 :latest/:sha 共存,指向同一镜像内容。
-          podman tag localhost/daedalus-os:latest "${IMAGE}:upstream"
+          podman tag "${IMAGE}:${{ github.sha }}" "${IMAGE}:upstream"
           podman push --compression-format zstd "${IMAGE}:upstream"
-          echo "Pushed: ${IMAGE}:latest (+ sha tag, + upstream tag)"
+          echo "Promoted: ${IMAGE}:latest + ${IMAGE}:upstream"
 
 
   # 独立 job:qcow2 是交付产物,不是合并门。上游 bootc-image-builder 在 2026-10 中旬
@@ -435,12 +458,10 @@ jobs:
     name: Build qcow2 disk image (bootc-image-builder)
     runs-on: ubuntu-latest
     needs: build-image
-    # 只在"确实要出货"的场景跑:手动 dispatch 且 PUSH=true,或 tag push。
+    # 只在"确实要出货"的场景跑:main push、tag push,或手动 dispatch 且 PUSH=true。
     # 排除 pull_request 与 feat/* 分支 push —— 这两种 run 会显示在同 commit 的
     # PR checks 里,把 #50 尚未修好的 qcow2 红点当成 PR 的合并门。
-    # 注:main push 不在范围内 —— build-image 的 if 不含 refs/heads/main,
-    # 该场景没有镜像可 needs,所以这里不写 main 分支条件。
-    if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true') || startsWith(github.ref, 'refs/tags/')) }}
+    if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true') || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
     continue-on-error: true
     permissions:
       contents: read
