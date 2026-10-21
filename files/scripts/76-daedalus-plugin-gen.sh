@@ -68,17 +68,20 @@ manifest_tools() {
         | tr ',' '\n' | tr -d ' "' | sed '/^$/d' | sort
 }
 
-# binary_tools <可执行文件> —— 通过 MCP stdio 握手(initialize → initialized → tools/list)
-# 取回二进制实际注册的工具名并排序。sleep 保活防 stdin 提前 EOF 掐死响应。
+# binary_tools <可执行文件> [<stderr 落点>] —— 通过 MCP stdio 握手
+# (initialize → initialized → tools/list)取回二进制实际注册的工具名并排序。
+# sleep 保活防 stdin 提前 EOF 掐死响应。
 # 服务器进程携带 DAEDALUS_POLICY_PATH(见下方策略预检),故握手成功同时证明
 # Go 解析器接受了该策略文件——损坏策略在 main() 的 applyPolicy 即 os.Exit(1)。
+# 真实拒启原因(策略未知键、缺依赖)只写在 stderr 上:丢弃它就等于把"插件二进制
+# 与 policy.toml 版本偏斜"这类故障留成只有搬运镜像+二进制到本机才能复现的哑谜。
 binary_tools() {
     { printf '%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"plugin-gen","version":"0"}}}' \
         '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
       sleep 2; } \
-        | timeout 30 "$1" 2>/dev/null \
+        | timeout 30 "$1" 2>"${2:-/dev/null}" \
         | grep -m1 '"tools":\[' \
         | grep -o '"name":"[^"]*"' | sed 's/^"name":"//; s/"$//' | sort
 }
@@ -158,6 +161,10 @@ done
 export DAEDALUS_POLICY_PATH="$POLICY"
 echo "76-daedalus-plugin-gen: policy.toml 预检通过($(echo "$POLICY_ALLOW" | wc -l) 项 shell 白名单,DynamicUser 可读,objectmodel 启用 kinds:$(echo "$OM_KINDS" | tr '\n' ' '))"
 
+# 握手 stderr 落点:每次调用由 2> 打开即截断,不残留上一个插件的输出,仅在失败分支读取。
+BIN_ERR="$(mktemp "${TMPDIR:-/tmp}/daedalus-handshake-stderr.XXXXXX")"
+trap 'rm -f "$BIN_ERR"' EXIT
+
 for cap in $CAPS; do
     id="daedalus.${cap}"
     manifest="$PLUGINS/$id/daedalus.plugin.json"
@@ -184,7 +191,11 @@ for cap in $CAPS; do
     # —— 3) manifest.tools 与二进制 tools/list 逐项比对(计数 + 集合)——
     want="$(manifest_tools "$manifest")"
     [ -n "$want" ] || fail "$id: manifest tools 为空,能力服务器必须声明工具"
-    got="$(binary_tools "$exe")" || fail "$id: 二进制未应答 tools/list(启动失败、30s 超时,或 DAEDALUS_POLICY_PATH 指向的策略被 Go 解析器拒绝): $exe"
+    got="$(binary_tools "$exe" "$BIN_ERR")" || {
+        reason="$(cat "$BIN_ERR")"
+        fail "$id: 二进制未应答 tools/list(启动失败、30s 超时,或 DAEDALUS_POLICY_PATH 指向的策略被 Go 解析器拒绝): $exe
+    二进制 stderr: ${reason:-(无输出)}"
+    }
     [ "$want" = "$got" ] || fail "$id: tools 与二进制不符 —— manifest{$(echo "$want" | tr '\n' ' ')} vs 二进制{$(echo "$got" | tr '\n' ' ')}"
 
     # —— 3b) 资源 kind 交叉核对:manifest.resources[].kind 必须
