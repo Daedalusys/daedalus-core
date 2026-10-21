@@ -461,7 +461,7 @@ jobs:
           OWNER_LOWER: ${{ github.repository_owner }}
         run: |
           IMAGE="ghcr.io/${OWNER_LOWER,,}/daedalus-os"
-          podman pull --compression-format zstd "${IMAGE}:${{ github.sha }}"
+          podman pull "${IMAGE}:${{ github.sha }}"
           podman tag "${IMAGE}:${{ github.sha }}" localhost/daedalus-os:latest
 
       - name: Export OCI archive (rootless → rootful handoff)
