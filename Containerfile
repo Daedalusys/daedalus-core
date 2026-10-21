@@ -1,10 +1,4 @@
 # Allow build scripts to be referenced without being copied into the final image
-FROM scratch AS ctx
-
-COPY base_image/files/system /system_files/
-COPY base_image/files/scripts /build_files/
-COPY base_image/*.pub /keys/
-
 # Base Image — headless fork of almalinux-bootc (kitten variant + sshd/NetworkManager).
 # See https://github.com/Daedalusys/almalinux-bootc (plan 2026-10-20).
 # Fork ships ONLY the 10-kitten variant; the upstream full :10 base is no longer used.
@@ -14,6 +8,13 @@ COPY base_image/*.pub /keys/
 #   digest sha256:a4bff88738b674c666277de8ffbc64c8e59deedfcc9a054b55d785428f877040
 # Pin digest for reproducibility; bump digest + retest when upstream ships new fork release.
 ARG HEADLESS_BASE_IMAGE=ghcr.io/daedalusys/almalinux-bootc@sha256:a4bff88738b674c666277de8ffbc64c8e59deedfcc9a054b55d785428f877040
+
+FROM scratch AS ctx
+
+COPY base_image/files/system /system_files/
+COPY base_image/files/scripts /build_files/
+COPY base_image/*.pub /keys/
+
 FROM ${HEADLESS_BASE_IMAGE}
 
 ARG IMAGE_NAME=daedalus-os
