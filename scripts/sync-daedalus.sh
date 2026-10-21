@@ -43,6 +43,19 @@ if [ -f "${KDE_PATCH_TARGET}" ] && grep -q 'systemctl enable sddm' "${KDE_PATCH_
     fi
 fi
 
+# headless fork base 的 bootc 1.16.13 新增了 runtime-deps lint(1.16.4 没有):它在 cap-std
+# 沙箱根里按 $PATH 逐个 try_exists("usr/local/bin/<bin>")。上游 cleanup.sh 建的
+# /usr/local -> /var/usrlocal 是绝对目标,cap-std 判为逃逸并报
+# "a path led outside of the filesystem",lint 以运行期错误 exit 1(与依赖是否齐全无关)。
+# 改成相对 ../var/usrlocal —— 即 bootc 自带测试里的 contained 形态。
+CLEANUP_PATCH_TARGET="base_image/files/scripts/cleanup.sh"
+if [ -f "${CLEANUP_PATCH_TARGET}" ] && grep -q '^    ln -s /var/usrlocal /usr/local$' "${CLEANUP_PATCH_TARGET}"; then
+    echo "=== Patching upstream cleanup.sh: /usr/local 软链改相对目标 ==="
+    sed -i 's|^    ln -s /var/usrlocal /usr/local$|    ln -s ../var/usrlocal /usr/local|' "${CLEANUP_PATCH_TARGET}"
+    grep -q '^    ln -s ../var/usrlocal /usr/local$' "${CLEANUP_PATCH_TARGET}" \
+        || { echo "ERROR: cleanup.sh /usr/local 软链补丁替换失败(锚点漂移?)" >&2; exit 1; }
+fi
+
 # Daedalus headless 变体:完全跳过 KDE/sddm/plasma/xrdp 的安装。
 # upstream 20-desktop.sh 来自 AlmaLinux/atomic-desktop (KDE 上游),无条件装 KDE。
 # build.sh orchestrator 按 prefix 匹配脚本,无法靠 VARIANT env 拦截。

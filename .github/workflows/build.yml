@@ -426,47 +426,75 @@ jobs:
           podman push --compression-format zstd "${IMAGE}:upstream"
           echo "Pushed: ${IMAGE}:latest (+ sha tag, + upstream tag)"
 
-      # ---- 发布:qcow2 → artifact (本地 KVM 测试用;bootc-image-builder 产出) ----
-      # 限额说明:GitHub Release 单文件硬限 2GiB,KDE qcow2 可能超;artifact 上限
-      # 10GB 更稳。若未来要挂 Release,先 gzip 或分卷。
+
+  # 独立 job:qcow2 是交付产物,不是合并门。上游 bootc-image-builder 在 2026-10-01
+  # 重写(源码迁到 osbuild/image-builder,镜像改为 CS10 image-builder RPM 封装),
+  # 本 job 跟 :latest;它挂掉只红自己,不阻断上面的镜像构建 + lint + 发布腿。
+  build-qcow2:
+    name: Build qcow2 disk image (bootc-image-builder)
+    runs-on: ubuntu-latest
+    needs: build-image
+    # 只在镜像确实推上 ghcr 的场景跑:与 build-image 的 push 门同条件。
+    if: ${{ !cancelled() && needs.build-image.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true') }}
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Set up Podman
+        shell: bash
+        run: |
+          sudo apt-get update -y || true
+          sudo apt-get install -y podman
+
+      - name: Log in to ghcr.io
+        uses: redhat-actions/podman-login@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image for this commit
+        # 按 <sha> tag 取本 run 刚推的镜像,省掉跨 job 的 OCI archive 大文件手递。
+        shell: bash
+        env:
+          OWNER_LOWER: ${{ github.repository_owner }}
+        run: |
+          IMAGE="ghcr.io/${OWNER_LOWER,,}/daedalus-os"
+          podman pull "${IMAGE}:${{ github.sha }}"
+          podman tag "${IMAGE}:${{ github.sha }}" localhost/daedalus-os:latest
+
       - name: Export OCI archive (rootless → rootful handoff)
         # bootc-image-builder 的 --local 模式硬性要求 rootful podman
         # ("this command must be run in rootful"),而 Actions 的构建在
         # rootless 存储里。用 save/load 把镜像从用户存储转交 root 存储。
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
         shell: bash
-        working-directory: daedalus-core
         run: podman save --format oci-archive -o /tmp/daedalus-os.oci.tar localhost/daedalus-os:latest
 
       - name: Build qcow2 disk image (bootc-image-builder, rootful)
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
         shell: bash
-        working-directory: daedalus-core
         run: |
           sudo podman load -i /tmp/daedalus-os.oci.tar
           mkdir -p output/qcow2
           # rootful podman 的存储在 /var/lib/containers/storage(load 已导入),
-          # builder 容器内硬编码该路径找镜像 → 同名对同名挂载(root 存储进容器)
-          # 输出目录用 workspace 绝对路径,与 working-directory(daedalus-core)对齐。
+          # builder 容器内硬编码该路径找镜像 → 同名对同名挂载(root 存储进容器)。
           sudo podman run --rm \
             --privileged \
             --security-opt label=disable \
-            -v ${{ github.workspace }}/daedalus-core/output/qcow2:/output \
+            -v "$PWD/output/qcow2:/output" \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             quay.io/centos-bootc/bootc-image-builder:latest \
             --local --type qcow2 --output /output localhost/daedalus-os:latest
           # builder 以 root 写产物,归还属主给 runner 用户(artifact 上传需要)
-          sudo chown -R $(id -u):$(id -g) output/qcow2
+          sudo chown -R "$(id -u):$(id -g)" output/qcow2
           ls -lh output/qcow2/
 
       - name: Upload qcow2 artifact
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: daedalus-os-qcow2-${{ matrix.variant }}
-          # upload-artifact 的相对路径以 workspace 根为基准(不受 run 步骤的
-          # working-directory 影响),故这里必须带 daedalus-core/ 前缀。
-          path: daedalus-core/output/qcow2/
-          # 默认保留 90 天;qcow2 预计 3-6GB,远低于 artifact 10GB 上限
+          name: daedalus-os-qcow2-headless
+          # 限额说明:GitHub Release 单文件硬限 2GiB;qcow2 预计 3-6GB,artifact 上限
+          # 10GB 更稳。若未来要挂 Release,先 gzip 或分卷。默认保留 90 天。
+          path: output/qcow2/
           if-no-files-found: error
           compression-level: 0

@@ -123,10 +123,12 @@ RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     /ctx/build_files/build.sh 80
 
-# === Stage 7:签名 + image info(90 + 91) ===
+# === Stage 7:containers 默认策略 + 签名 + image info(89 + 90 + 91) ===
+# 90-signing.sh(上游)以 jq 读现有 /etc/containers/policy.json 为输入,headless
+# fork base 不含 containers-common → 该文件缺失,90 直接 exit 2。89 先补默认策略。
 RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
-    /ctx/build_files/build.sh 90 91
+    /ctx/build_files/build.sh 89 90 91
 
 # === Stage 8:最终 cleanup(只在这一个 stage 跑) ===
 RUN --mount=type=tmpfs,dst=/tmp \
