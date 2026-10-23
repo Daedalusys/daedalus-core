@@ -456,7 +456,19 @@ jobs:
   # 它挂掉只红自己,不阻断上面的镜像构建 + lint + 发布腿。
   build-qcow2:
     name: Build qcow2 disk image (bootc-image-builder)
-    runs-on: ubuntu-latest
+    # ★ 钉死 ubuntu-24.04,不用 ubuntu-latest(见 issue #50)。
+    #
+    # 起因:`ubuntu-latest` 在 2026-10 中下旬从 24.04 漂到了 26.04(runner image
+    # 20261012.163.1),同一窗口内 osbuild 在 builder 容器里的嵌套挂载开始被拒:
+    #   RuntimeError: mount: /run/osbuild/containers/storage: permission denied (code 32)
+    # code 32 是 EPERM 而非 EACCES,配合前面那串
+    #   fchownat() of /var/log/{wtmp,btmp,lastlog} failed: Operation not permitted
+    # 全是宿主侧拦截,与 daedalus-os 镜像内容无关 —— `--privileged` 没能豁免。
+    #
+    # 用 `ubuntu-latest` 意味着 CI 行为随 GitHub 的发布节奏漂移,踩坑时无从追溯。
+    # 24.04 是 LTS,生命周期长于本项目,故钉版本而非追latest。
+    # 升级 runner 时需回归 build-qcow2 这条腿。
+    runs-on: ubuntu-24.04
     needs: build-image
     # 只在"确实要出货"的场景跑:main push、tag push,或手动 dispatch 且 PUSH=true。
     # 排除 pull_request 与 feat/* 分支 push —— 这两种 run 会显示在同 commit 的
