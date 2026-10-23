@@ -35,7 +35,7 @@ on:
       PUSH:
         description: '推送到 ghcr.io(打 :latest/:<sha>/:upstream 三个 tag);默认 false,仅构建+验证不推'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 # 并发:同一 ref 同一 workflow 同时只跑一个;新 push 自动取消旧 run。
@@ -51,7 +51,7 @@ jobs:
   # 日常 CI:任何 push / PR / dispatch 都跑(无镜像构建,反馈快)。
   test:
     name: Test (go / deno / i18n / drift)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -236,7 +236,7 @@ jobs:
   # 安装态后 `just build` 构建镜像。
   build-image:
     name: Build & Publish Daedalus Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feat/') || startsWith(github.ref, 'refs/tags/') }}
     # 升级 packages:write 权限(仅本 job 需要;ghcr.io 推送)。
@@ -403,7 +403,7 @@ jobs:
       # workflow_dispatch.PUSH=false 的纯构建(只构建+验证不推)场景。
       - name: Log in to ghcr.io
         # GITHUB_TOKEN 自动注入,无需手动 secret
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH }}
         uses: redhat-actions/podman-login@v1
         with:
           registry: ghcr.io
@@ -411,7 +411,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push OCI image to ghcr.io
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH }}
         shell: bash
         working-directory: daedalus-core
         env:
@@ -432,7 +432,7 @@ jobs:
         # 出货档:main 与 tag 是既成事实,dispatch 需显式 PUSH=true(input 默认 false)。
         # feat/* 分支 push 在此判为 false → 只留 :<sha>,未合并的分支不再能改写
         # "最新镜像"(:latest / :upstream 原先被 feat/* 每次 push 覆盖)。
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.PUSH) && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') }}
         shell: bash
         working-directory: daedalus-core
         env:
@@ -473,7 +473,7 @@ jobs:
     # 只在"确实要出货"的场景跑:main push、tag push,或手动 dispatch 且 PUSH=true。
     # 排除 pull_request 与 feat/* 分支 push —— 这两种 run 会显示在同 commit 的
     # PR checks 里,把 #50 尚未修好的 qcow2 红点当成 PR 的合并门。
-    if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true') || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
+    if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
     continue-on-error: true
     permissions:
       contents: read
