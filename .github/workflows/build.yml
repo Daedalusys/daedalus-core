@@ -35,7 +35,7 @@ on:
       PUSH:
         description: '推送到 ghcr.io(打 :latest/:<sha>/:upstream 三个 tag);默认 false,仅构建+验证不推'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 # 并发:同一 ref 同一 workflow 同时只跑一个;新 push 自动取消旧 run。
@@ -51,10 +51,10 @@ jobs:
   # 日常 CI:任何 push / PR / dispatch 都跑(无镜像构建,反馈快)。
   test:
     name: Test (go / deno / i18n / drift)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # 主仓检出到 daedalus-core 子目录:go.mod 的 replace => ../daedalus-sdk
           # 与 tests/deno 的相对引用经父目录解析到 workspace 下的兄弟仓;把主仓
@@ -84,7 +84,7 @@ jobs:
         # 与主仓 daedalus-core 子目录平级,使 go.mod 的 `replace => ../daedalus-sdk`
         # 与 tests/deno 的 `../daedalus-sdk/...` 相对引用在 CI 中可解析。
         # ref 为空(go.mod 为占位版本)时 checkout SDK 默认分支。
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
@@ -96,7 +96,7 @@ jobs:
         # workspace 根,三仓平级检出即吃满。SDK 仓自己的 CI 里 Actions 不许
         # checkout 逃出 GITHUB_WORKSPACE,那条测试在那边显式 skip,执行点在此。
         # 走默认分支:manifest 唯一事实源就是插件仓源码,镜像里的 zip 是另一回事。
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Daedalusys/daedalus-plugins
           path: daedalus-plugins
@@ -105,14 +105,14 @@ jobs:
         # go.mod pins `go 1.25.0`;runner image 可能更老,显式 pin。
         # setup-go 缓存 go.sum;vendor/ 不入库,首次构建走 module proxy。
         # 主仓在 daedalus-core 子目录,缓存依赖文件路径须带前缀。
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.26.x'
           cache-dependency-path: daedalus-core/go.sum
 
       - name: Set Up Deno Runtime
         # copilot 测试套件 (tests/deno/) 由 deno 跑。
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
         with:
           deno-version: v2.x
 
@@ -236,7 +236,7 @@ jobs:
   # 安装态后 `just build` 构建镜像。
   build-image:
     name: Build & Publish Daedalus Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feat/') || startsWith(github.ref, 'refs/tags/') }}
     # 升级 packages:write 权限(仅本 job 需要;ghcr.io 推送)。
@@ -249,7 +249,7 @@ jobs:
         variant: [headless]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # 同 test job:主仓检出到 daedalus-core 子目录,不逃出 GITHUB_WORKSPACE。
           path: daedalus-core
@@ -271,7 +271,7 @@ jobs:
       - name: Checkout daedalus-sdk (sibling, pinned tag)
         # 同 test job:SDK 检出到 workspace 下的 daedalus-sdk 子目录;ref 为空
         # (go.mod 为占位版本)时 checkout 默认分支。
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
@@ -294,7 +294,7 @@ jobs:
 
       - name: Set Up Go Toolchain
         # 主仓在 daedalus-core 子目录,缓存依赖文件路径须带前缀。
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.26.x'
           cache-dependency-path: daedalus-core/go.sum
@@ -403,15 +403,15 @@ jobs:
       # workflow_dispatch.PUSH=false 的纯构建(只构建+验证不推)场景。
       - name: Log in to ghcr.io
         # GITHUB_TOKEN 自动注入,无需手动 secret
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
-        uses: redhat-actions/podman-login@v1
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH }}
+        uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # v1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push OCI image to ghcr.io
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH }}
         shell: bash
         working-directory: daedalus-core
         env:
@@ -432,7 +432,7 @@ jobs:
         # 出货档:main 与 tag 是既成事实,dispatch 需显式 PUSH=true(input 默认 false)。
         # feat/* 分支 push 在此判为 false → 只留 :<sha>,未合并的分支不再能改写
         # "最新镜像"(:latest / :upstream 原先被 feat/* 每次 push 覆盖)。
-        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.PUSH == 'true') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.PUSH) && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') }}
         shell: bash
         working-directory: daedalus-core
         env:
@@ -473,7 +473,7 @@ jobs:
     # 只在"确实要出货"的场景跑:main push、tag push,或手动 dispatch 且 PUSH=true。
     # 排除 pull_request 与 feat/* 分支 push —— 这两种 run 会显示在同 commit 的
     # PR checks 里,把 #50 尚未修好的 qcow2 红点当成 PR 的合并门。
-    if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH == 'true') || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
+    if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
     continue-on-error: true
     permissions:
       contents: read
@@ -486,7 +486,7 @@ jobs:
           sudo apt-get install -y podman
 
       - name: Log in to ghcr.io
-        uses: redhat-actions/podman-login@v1
+        uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # v1
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -528,7 +528,7 @@ jobs:
           ls -lh output/qcow2/
 
       - name: Upload qcow2 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: daedalus-os-qcow2-headless
           # 限额说明:GitHub Release 单文件硬限 2GiB;qcow2 预计 3-6GB,artifact 上限
