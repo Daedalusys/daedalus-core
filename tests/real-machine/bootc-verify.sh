@@ -53,6 +53,20 @@ c_ok()   { printf '\033[1;32m   OK %s\033[0m\n' "$*"; }
 c_warn() { printf '\033[1;33m   !! %s\033[0m\n' "$*"; }
 c_bad()  { printf '\033[1;31m   XX %s\033[0m\n' "$*" >&2; }
 
+# EL9 的 QEMU 系统模拟器不叫 qemu-system-x86_64,而是 /usr/libexec/qemu-kvm
+# (qemu-kvm-core 提供,无 /usr/bin 软链)。Debian/Ubuntu 才是 qemu-system-x86_64。
+# 按可用性解析,不要按发行版猜。
+QEMU_BIN=""
+resolve_qemu() {
+    local c
+    for c in qemu-system-x86_64 qemu-kvm /usr/libexec/qemu-kvm; do
+        if command -v "$c" >/dev/null 2>&1; then QEMU_BIN="$(command -v "$c")"; return 0; fi
+    done
+    QEMU_BIN=""
+    return 1
+}
+
+
 usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [ $# -gt 0 ]; do
@@ -144,11 +158,11 @@ need_root
 # ---------------------------------------------------------------------------
 say "Phase 1 · 工具链"
 need_pkgs=""
-command -v podman          >/dev/null 2>&1 || need_pkgs="$need_pkgs podman"
-command -v qemu-system-x86_64 >/dev/null 2>&1 || need_pkgs="$need_pkgs qemu-kvm"
-command -v qemu-img        >/dev/null 2>&1 || need_pkgs="$need_pkgs qemu-img"
+command -v podman >/dev/null 2>&1 || need_pkgs="$need_pkgs podman"
+resolve_qemu || need_pkgs="$need_pkgs qemu-kvm"
+command -v qemu-img >/dev/null 2>&1 || need_pkgs="$need_pkgs qemu-img"
 # 注意:EL9 里没有名为 qemu-system-x86 的包(实测 dnf download 报「没有可用的软件包」),
-# 提供 qemu-system-x86_64 的是 qemu-kvm。别按包名猜。
+# 提供 QEMU 系统模拟器的是 qemu-kvm,二进制落在 /usr/libexec/qemu-kvm。
 if [ -n "$need_pkgs" ]; then
     info "需要安装:$need_pkgs"
     if command -v dnf >/dev/null 2>&1; then
@@ -158,7 +172,7 @@ if [ -n "$need_pkgs" ]; then
             exit 2
         fi
     elif command -v apt-get >/dev/null 2>&1; then
-        if ! apt-get update -y >>"$LOG" 2>&1 || ! apt-get install -y ${need_pkgs/podman/podman} qemu-system-x86 qemu-utils >>"$LOG" 2>&1; then
+        if ! apt-get update -y >>"$LOG" 2>&1 || ! apt-get install -y podman qemu-system-x86 qemu-utils >>"$LOG" 2>&1; then
             bad "apt-get install 失败,详见 $LOG"
             exit 2
         fi
@@ -167,10 +181,16 @@ if [ -n "$need_pkgs" ]; then
         exit 2
     fi
 fi
-for t in podman qemu-system-x86_64 qemu-img; do
-    command -v "$t" >/dev/null 2>&1 && ok "$t → $(command -v $t)" || { bad "缺 $t"; exit 2; }
-done
-qemu-system-x86_64 --version | head -1 | sed 's/^/   /' | tee -a "$LOG"
+command -v podman >/dev/null 2>&1 && ok "podman → $(command -v podman)" || { bad "缺 podman"; exit 2; }
+command -v qemu-img >/dev/null 2>&1 && ok "qemu-img → $(command -v qemu-img)" || { bad "缺 qemu-img"; exit 2; }
+if resolve_qemu; then
+    ok "qemu → $QEMU_BIN"
+    "$QEMU_BIN" --version | head -1 | sed 's/^/   /' | tee -a "$LOG"
+else
+    bad "装了 qemu-kvm 仍找不到系统模拟器(试过 qemu-system-x86_64 / qemu-kvm / /usr/libexec/qemu-kvm)"
+    bad "排查:rpm -ql qemu-kvm-core | grep -E 'qemu-(system|kvm)'"
+    exit 2
+fi
 
 # ---------------------------------------------------------------------------
 say "Phase 2 · 取得 qcow2"
@@ -240,7 +260,7 @@ info "机器: q35 + accel=kvm + -cpu host(必须 host,v1 CPU 会让 guest glibc 
 info "内存 ${MEM} MiB,等待 login 提示符最长 ${BOOT_TIMEOUT}s"
 : > "$SERIAL"
 
-qemu-system-x86_64 \
+"$QEMU_BIN" \
     -machine q35,accel=kvm \
     -cpu host \
     -m "$MEM" -smp 2 \
@@ -248,9 +268,10 @@ qemu-system-x86_64 \
     -drive file="$QCOW2",if=virtio,format=qcow2 \
     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
     -device virtio-net,netdev=net0 \
-    >>"$SERIAL" 2>&1 &
+    </dev/null >>"$SERIAL" 2>&1 &
 qpid=$!
-info "qemu pid=$qpid,串口日志 → $SERIAL"
+info "qemu pid=$qpid,二进制=$QEMU_BIN"
+info "串口日志 → $SERIAL"
 
 verdict=""
 elapsed=0
