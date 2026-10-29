@@ -150,7 +150,9 @@ phase_deps() {
   need_sudo
   say "Phase 1 · 安装依赖"
   local pkgs=(qemu-kvm qemu-img)
-  # distro 包名兜底:EL 系没有 meta 包 qemu-kvm,实际叫 qemu-system-x86
+  # 包名实测(AlmaLinux 9.8 / EL9):提供 /usr/bin/qemu-system-x86_64 的是 `qemu-kvm`;
+  # 并不存在名为 `qemu-system-x86` 的包(`dnf download --resolve qemu-system-x86`
+  # 报「没有可用的软件包」)。保留下面的兜底只为兼容别家发行版,不要把它当成默认。
   if dnf -q list --available qemu-system-x86 >/dev/null 2>&1; then
     pkgs=(qemu-system-x86 qemu-img)
   fi
