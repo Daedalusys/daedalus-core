@@ -1,0 +1,1 @@
+BOOT_IMAGE=(hd0,msdos1)/vmlinuz-5.14.0-687.5.3.el9_8.x86_64 root=/dev/mapper/almalinux_thinkpadtest-root ro crashkernel=1G-2G:192M,2G-64G:256M,64G-:512M resume=/dev/mapper/almalinux_thinkpadtest-swap rd.lvm.lv=almalinux_thinkpadtest/root rd.lvm.lv=almalinux_thinkpadtest/swap consoleblank=60 loglevel=3

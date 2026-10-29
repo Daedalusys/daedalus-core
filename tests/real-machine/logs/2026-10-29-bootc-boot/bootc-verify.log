@@ -1,0 +1,34 @@
+
+== Phase 0 · preflight ==
+   工作目录 : /home/lofibass/daedalus-verify
+   目标镜像 : ghcr.io/daedalusys/daedalus-os:latest
+   日志     : /home/lofibass/daedalus-verify/bootc-verify.log
+   OK CPU 支持 x86-64-v3(Intel(R) Core(TM) i7-4800MQ CPU @ 2.70GHz)
+   OK /dev/kvm 可读写(硬加速可用)
+   工作目录可用空间: 143 GB
+
+== Phase 0.1 · 宿主盘基线(用于事后证明未被写入) ==
+   OK 已记录 lsblk / cmdline / fstab 基线
+
+== Phase 1 · 工具链 ==
+   OK podman → /bin/podman
+   OK qemu-img → /bin/qemu-img
+   OK qemu → /usr/libexec/qemu-kvm
+   QEMU emulator version 10.1.0 (qemu-kvm-10.1.0-17.el9_8.5.alma.1)
+
+== Phase 2 · 取得 qcow2 ==
+   使用外部指定的 qcow2: /tmp/disk.qcow2
+   qcow2 sha256: e5ee83fcbaeffa6de1040cea76b02166ba5ccf70b35d3b29f39de36246e959ad
+
+== Phase 3 · KVM 引导 + 串口抓取 ==
+   机器: q35 + accel=kvm + -cpu host(必须 host,v1 CPU 会让 guest glibc panic)
+   内存 4096 MiB,等待 login 提示符最长 180s
+   qemu pid=688655,二进制=/usr/libexec/qemu-kvm
+   串口日志 → /home/lofibass/daedalus-verify/serial-console.log
+   OK 串口出现 login 提示符 —— 镜像可引导
+   末尾 12 行:
+
+== Phase 4 · 宿主未被写入(对照基线) ==
+   OK lsblk 与引导前一致(宿主盘未被写入)
+
+== Summary ==
