@@ -1,0 +1,11 @@
+NAME                              SIZE TYPE MOUNTPOINT
+sda                             223.6G disk 
+|-sda1                              1G part /boot
+`-sda2                          222.6G part 
+  |-almalinux_thinkpadtest-root    70G lvm  /
+  |-almalinux_thinkpadtest-swap   7.5G lvm  [SWAP]
+  `-almalinux_thinkpadtest-home   145G lvm  /home
+sdb                             465.8G disk 
+`-sdb1                          465.8G part 
+sr0                              1024M rom  
+zram0                             3.6G disk [SWAP]

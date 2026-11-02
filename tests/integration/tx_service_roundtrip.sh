@@ -34,7 +34,9 @@ set -uo pipefail
 
 # ──── 路径与常量 ────
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)   # 仓库根(脚本住在 tests/integration/ 下)
-CORE="$ROOT/daedalus/core"
+# 三仓拆分后本仓根 = Go module 根,不再是旧 Daedalusys 单仓里的 daedalus/core/ 子目录;
+# 写死子路径会让 ensure_binaries 的 go build 直接 cd 失败(Todo 5 实测)。
+CORE="$ROOT"
 BIN="$CORE/bin"
 UNIT="daedalus-itest.service"
 USER_UNIT_DIR="$HOME/.config/systemd/user"
