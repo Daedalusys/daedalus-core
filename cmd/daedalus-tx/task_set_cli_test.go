@@ -19,7 +19,7 @@ func TestTaskSet_CLI_RoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "backup.timer"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	capture := installFakeSystemctl(t, "disabled", 0)
+	capture := installFakeSystemctl(t, "disabled", 0, 0)
 
 	id := doBegin(t, rc)
 	if c, _, e := rc("propose", id, "task.set",
@@ -65,7 +65,7 @@ func TestTaskSet_CLI_InvalidDesiredFailsAtPropose(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "backup.timer"), []byte("[Timer]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	installFakeSystemctl(t, "disabled", 0)
+	installFakeSystemctl(t, "disabled", 0, 0)
 	id := doBegin(t, rc)
 	// task.set 与 service.set 的关键差异: 表外 desired_state 在 **propose 即拒**
 	// (package.set 同款,三值封闭无“先提议后拒绝”语义)。
