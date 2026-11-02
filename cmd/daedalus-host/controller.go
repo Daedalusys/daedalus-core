@@ -16,14 +16,21 @@ import (
 	"github.com/Daedalusys/daedalus-sdk/policy"
 )
 
-// cmdController 实现子命令(controller start [--foreground] [--poll-interval D])。
-func cmdController(stdout, stderr io.Writer, args []string) int {
-	if len(args) == 0 || args[0] != "start" {
-		fmt.Fprintln(stderr, "usage: daedalus-host controller start [--foreground] [--poll-interval D]")
-		return exitUsage
-	}
+// controllerFlagSet 构造 controller start 的旗标集。抽出来供单测校验
+// systemd 单元里写的 argv 与本二进制实际接受的旗标一致。
+func controllerFlagSet() (*flag.FlagSet, *time.Duration) {
 	fs := flag.NewFlagSet("controller", flag.ContinueOnError)
 	intervalF := fs.Duration("poll-interval", 2*time.Second, "informer poll interval")
+	return fs, intervalF
+}
+
+// cmdController 实现子命令(controller start [--poll-interval D])。
+func cmdController(stdout, stderr io.Writer, args []string) int {
+	if len(args) == 0 || args[0] != "start" {
+		fmt.Fprintln(stderr, "usage: daedalus-host controller start [--poll-interval D]")
+		return exitUsage
+	}
+	fs, intervalF := controllerFlagSet()
 	if err := fs.Parse(args[1:]); err != nil {
 		return exitUsage
 	}

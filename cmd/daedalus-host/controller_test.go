@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -39,5 +40,36 @@ func TestCmdController_Start_ExitsClean(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("controller start 未在 SIGTERM 后退出")
+	}
+}
+// 单元里写的 ExecStart argv 必须能被本二进制的旗标集解析。
+// 这条钉住 daedalus-host-controller.service 与 CLI 的一致性:
+// 单元路径/旗标任一漂移,本测即红。
+func TestControllerUnit_ExecStartParsesAgainstFlagSet(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "files", "system", "usr",
+		"lib", "systemd", "system", "daedalus-host-controller.service"))
+	if err != nil {
+		t.Fatalf("读单元失败: %v", err)
+	}
+	var execLine string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "ExecStart=") {
+			execLine = strings.TrimPrefix(line, "ExecStart=")
+		}
+	}
+	if execLine == "" {
+		t.Fatal("单元缺 ExecStart")
+	}
+	fields := strings.Fields(execLine)
+	if fields[0] != "/usr/local/bin/daedalus-host" {
+		t.Errorf("ExecStart 二进制应为 /usr/local/bin/daedalus-host, got %q", fields[0])
+	}
+	// fields = [bin, "controller", "start", flags...]
+	if len(fields) < 3 || fields[1] != "controller" || fields[2] != "start" {
+		t.Fatalf("ExecStart 子命令形态异常: %v", fields)
+	}
+	fs, _ := controllerFlagSet()
+	if err := fs.Parse(fields[3:]); err != nil {
+		t.Fatalf("单元 argv 被旗标集拒绝: %v", err)
 	}
 }
