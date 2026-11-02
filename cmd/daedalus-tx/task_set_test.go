@@ -22,15 +22,17 @@ import (
 
 // installFakeSystemctl 安装假 systemctl 并注入包级变量(测试结束自动还原)。
 // enabledOut 是 `is-enabled` 子命令的固定回显(如 "disabled" / "enabled");
+// enabledExit 是 `is-enabled` 的独立退出码 —— 真机上 disabled/masked 合法态
+// 返回 rc=1,必须能造出来;
 // disableExit 是 `disable` 子命令独立退出码(0=成功 / 非零用于镶试 apply 负面路径);
 // 其他子命令均返回 0。返回 capture 路径。
-func installFakeSystemctl(t *testing.T, enabledOut string, disableExit int) string {
+func installFakeSystemctl(t *testing.T, enabledOut string, enabledExit, disableExit int) string {
 	t.Helper()
 	dir := t.TempDir()
 	capture := filepath.Join(dir, "argv.txt")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + strconv.Quote(capture) + "\n"
 	script += "case \"$2\" in\n"
-	script += "  is-enabled) printf '%s\\n' " + strconv.Quote(enabledOut) + " ;;\n"
+	script += "  is-enabled) printf '%s\\n' " + strconv.Quote(enabledOut) + " ; exit " + strconv.Itoa(enabledExit) + " ;;\n"
 	script += "  disable)    exit " + strconv.Itoa(disableExit) + " ;;\n"
 	script += "esac\nexit 0\n"
 	path := filepath.Join(dir, "systemctl")
@@ -97,7 +99,7 @@ func TestTaskSet_Propose_EnabledHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	unitDir := filepath.Join(dir, "units")
 	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
-	installFakeSystemctl(t, "disabled", 0)
+	installFakeSystemctl(t, "disabled", 0, 0)
 
 	a := taskSetAdapter{}
 	before, after, err := a.Propose(unitDirCtx(unitDir),
@@ -200,7 +202,7 @@ func TestTaskSet_Propose_RejectsTrailingJSON(t *testing.T) {
 func TestTaskSet_Apply_Enabled(t *testing.T) {
 	unitDir := filepath.Join(t.TempDir(), "units")
 	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
-	capture := installFakeSystemctl(t, "disabled", 0)
+	capture := installFakeSystemctl(t, "disabled", 0, 0)
 
 	a := taskSetAdapter{}
 	res := a.Apply(unitDirCtx(unitDir), tx.Step{
@@ -219,7 +221,7 @@ func TestTaskSet_Apply_Enabled(t *testing.T) {
 func TestTaskSet_Apply_Disabled(t *testing.T) {
 	unitDir := filepath.Join(t.TempDir(), "units")
 	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
-	capture := installFakeSystemctl(t, "enabled", 0)
+	capture := installFakeSystemctl(t, "enabled", 0, 0)
 
 	a := taskSetAdapter{}
 	res := a.Apply(unitDirCtx(unitDir), tx.Step{
@@ -238,7 +240,7 @@ func TestTaskSet_Apply_Disabled(t *testing.T) {
 func TestTaskSet_Apply_Absent_DisablesRemovesReloads(t *testing.T) {
 	unitDir := filepath.Join(t.TempDir(), "units")
 	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
-	capture := installFakeSystemctl(t, "enabled", 0)
+	capture := installFakeSystemctl(t, "enabled", 0, 0)
 
 	a := taskSetAdapter{}
 	res := a.Apply(unitDirCtx(unitDir), tx.Step{
@@ -264,7 +266,7 @@ func TestTaskSet_Apply_Absent_DisablesRemovesReloads(t *testing.T) {
 func TestTaskSet_Apply_Absent_DisableFails_DoesNotRemove(t *testing.T) {
 	unitDir := filepath.Join(t.TempDir(), "units")
 	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
-	_ = installFakeSystemctl(t, "enabled", 1) // disable 返回非零
+	_ = installFakeSystemctl(t, "enabled", 0, 1) // disable 返回非零
 
 	a := taskSetAdapter{}
 	res := a.Apply(unitDirCtx(unitDir), tx.Step{
@@ -287,7 +289,7 @@ func TestTaskSet_Rollback_RestoresFileContent(t *testing.T) {
 		t.Fatalf("建 unitDir 失败: %v", err)
 	}
 	// file 不存在(已 absent 删除)
-	capture := installFakeSystemctl(t, "disabled", 0)
+	capture := installFakeSystemctl(t, "disabled", 0, 0)
 
 	a := taskSetAdapter{}
 	res := a.Rollback(unitDirCtx(unitDir), tx.Step{
@@ -313,7 +315,7 @@ func TestTaskSet_Rollback_RestoresFileContent(t *testing.T) {
 func TestTaskSet_Rollback_RestoresEnabledState(t *testing.T) {
 	unitDir := filepath.Join(t.TempDir(), "units")
 	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
-	capture := installFakeSystemctl(t, "disabled", 0)
+	capture := installFakeSystemctl(t, "disabled", 0, 0)
 
 	a := taskSetAdapter{}
 	res := a.Rollback(unitDirCtx(unitDir), tx.Step{
@@ -335,7 +337,7 @@ func TestTaskSet_Rollback_DoesNotDeleteUnmanagedFile(t *testing.T) {
 		t.Fatalf("建 unitDir 失败: %v", err)
 	}
 	writeTimerFile(t, unitDir, "backup.timer", "UNRELATED")
-	capture := installFakeSystemctl(t, "static", 0) // is-enabled 返回 static(表外)→ 不发动词
+	capture := installFakeSystemctl(t, "static", 0, 0) // is-enabled 返回 static(表外)→ 不发动词
 
 	a := taskSetAdapter{}
 	res := a.Rollback(unitDirCtx(unitDir), tx.Step{
@@ -360,7 +362,7 @@ func TestTaskSet_Rollback_DoesNotDeleteUnmanagedFile(t *testing.T) {
 func TestTaskSet_Rollback_SkipsUnknownEnabledState(t *testing.T) {
 	unitDir := filepath.Join(t.TempDir(), "units")
 	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
-	capture := installFakeSystemctl(t, "static", 0) // is-enabled 返回静态
+	capture := installFakeSystemctl(t, "static", 0, 0) // is-enabled 返回静态
 
 	a := taskSetAdapter{}
 	res := a.Rollback(unitDirCtx(unitDir), tx.Step{
@@ -375,5 +377,43 @@ func TestTaskSet_Rollback_SkipsUnknownEnabledState(t *testing.T) {
 	}
 	if calls := readCaptured(t, capture); calls != nil {
 		t.Errorf("static 不应发动词, got 调用序列 %v", calls)
+	}
+}
+
+// 真机语义:`is-enabled` 对 disabled 的 timer 回 stdout="disabled" 且 rc=1。
+// Propose 必须把它当合法观测,而不是错误 —— 这正是「把它启用」的场景。
+func TestTaskSet_Propose_DisabledTimerRc1IsValidObservation(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
+	installFakeSystemctl(t, "disabled", 1, 0) // enabledOut=disabled, enabledExit=1
+
+	before, _, err := (taskSetAdapter{}).Propose(unitDirCtx(unitDir),
+		json.RawMessage(`{"name":"backup","desired_state":"enabled"}`))
+	if err != nil {
+		t.Fatalf("rc=1 + stdout=disabled 应视为合法观测, got error: %v", err)
+	}
+	var b taskSetBefore
+	if err := json.Unmarshal(before, &b); err != nil {
+		t.Fatalf("before_state 非法 JSON(%v): %s", err, before)
+	}
+	if b.EnabledState != "disabled" {
+		t.Errorf("enabled_state got %q want %q", b.EnabledState, "disabled")
+	}
+}
+
+// unit 不存在:`is-enabled` 的 stdout 为空、stderr 有字、rc=1。
+// 必须 fail-closed 报错,不能当成某个表态。
+func TestTaskSet_Propose_MissingUnitIsError(t *testing.T) {
+	unitDir := filepath.Join(t.TempDir(), "units")
+	writeTimerFile(t, unitDir, "backup.timer", "[Timer]\n")
+	installFakeSystemctl(t, "", 1, 0) // stdout 空
+
+	_, _, err := (taskSetAdapter{}).Propose(unitDirCtx(unitDir),
+		json.RawMessage(`{"name":"backup","desired_state":"enabled"}`))
+	if err == nil {
+		t.Fatal("stdout 为空时必须报错(fail-closed)")
+	}
+	if !strings.Contains(err.Error(), "is-enabled 观测失败") {
+		t.Errorf("报错未点名 is-enabled 观测失败: %s", err.Error())
 	}
 }

@@ -9,7 +9,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -28,15 +27,14 @@ func normalizeTimerName(name string) (string, error) {
 }
 
 // observeTimerEnabledState argv 直发 `systemctl --user is-enabled <unit>`, 解析首行输出。
-// 失败或输出空 → error(Propose 据此 exit 1, 与 service.set observeActiveState 同款语义)。
+//
+// rc **不是**判据:`is-enabled` 对 disabled/masked 等合法态返回 rc=1 且 stdout
+// 有单行值。只有拿不到 stdout(unit 不存在 / 进程无法启动 / 超时)才算观测失败。
 func observeTimerEnabledState(ctx context.Context, unit string) (string, error) {
 	res := systemctlUser(ctx, "is-enabled", unit)
-	if res.Returncode != 0 || res.Error != "" {
-		return "", fmt.Errorf("is-enabled 观测失败: %s", firstNonEmpty(res.Error, res.Stderr))
-	}
 	s := strings.TrimSpace(res.Stdout)
 	if s == "" {
-		return "", errors.New("is-enabled 观测失败: systemctl 输出为空")
+		return "", fmt.Errorf("is-enabled 观测失败: %s", firstNonEmpty(res.Error, res.Stderr))
 	}
 	// `is-enabled` 单行输出, 截首行去掉尾随空白。
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
