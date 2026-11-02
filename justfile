@@ -145,6 +145,11 @@ verify-image:
 verify-headless:
     ./tests/build/headless-variant.sh
 
+# systemd 单元静态门禁:解析级错误(seccomp 语法 / 键放错节)即拒。
+# 不需要镜像,CI test job 与本机都能跑。
+verify-units:
+    ./tests/build/systemd-units.sh
+
 # 3 仓平级布局守门:检查 daedalus-sdk / daedalus-plugins 兄弟仓
 # 是否以平级目录形态就位(go.work 本地 dev 桥的前置);缺哪个报哪个,exit 1。
 verify-dev-layout:

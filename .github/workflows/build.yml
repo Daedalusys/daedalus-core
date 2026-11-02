@@ -142,6 +142,13 @@ jobs:
         working-directory: daedalus-core
         run: just go-test
 
+      - name: systemd unit static gate
+        # 单元从未被真实 systemd 解析是所有接线漂移的共因。本门禁零成本:
+        # 不构建镜像,只跑 systemd-analyze 的解析级检查(见脚本头注释)。
+        shell: bash
+        working-directory: daedalus-core
+        run: just verify-units
+
       - name: Official manifest cross-repo gate
         # SDK 的 TestValidate_OfficialPluginManifests 在 SDK 仓 CI 里因缺兄弟仓
         # 显式 skip,这里是它唯一的真实执行点:校验 9 个能力插件与 copilot 共

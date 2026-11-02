@@ -1,7 +1,5 @@
 [Unit]
 Description=Daedalus host controller runtime (P4 reconcile skeleton)
-After=daedalus-host.service
-Wants=daedalus-host.service
 
 [Service]
 Type=simple
