@@ -146,8 +146,9 @@ verify-headless:
     ./tests/build/headless-variant.sh
 
 # systemd 单元静态门禁:解析级错误(seccomp 语法 / 键放错节)即拒。
-# 不需要镜像,CI test job 与本机都能跑。
+# 先跑 --selftest 自证门禁没变瞎,再校验仓库单元。不需要镜像,CI test job 与本机都能跑。
 verify-units:
+    ./tests/build/systemd-units.sh --selftest
     ./tests/build/systemd-units.sh
 
 # 3 仓平级布局守门:检查 daedalus-sdk / daedalus-plugins 兄弟仓
