@@ -16,7 +16,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CAPS_SRC="$ROOT/files/scripts/76-daedalus-plugin-gen.sh"
 # 第四份来源:兄弟仓 plugins 的 release 工作流供料名单。兄弟仓缺失(如插件仓自身的
 # CI 里只有 core 一个仓)时降级为 NOTE,不失败 —— 前三份仍是硬门禁。
-PLUGINS_RELEASE_YML="$ROOT/../daedalus-plugins/.github/workflows/release.yml"
+# 环境变量可覆盖:仅供 --selftest 指向一份「存在但解析不出名单」的构造文件,
+# 验证正式流程 fail-closed;生产路径恒为兄弟仓的 release 工作流。
+PLUGINS_RELEASE_YML="${DAEDALUS_PLUGINS_RELEASE_YML:-$ROOT/../daedalus-plugins/.github/workflows/release.yml}"
 
 # caps_from_76 —— 从 76 脚本读 CAPS(单一事实源,不另维护一份名单)。
 caps_from_76() {
@@ -105,6 +107,15 @@ if [ "${1:-}" = "--selftest" ]; then
     st 1 "$(rc inventory_check "$good" "$good" "$extra" "$good")" "多出一个 manifest → 判不等"
     st 1 "$(rc inventory_check "$short" "$good" "$good" "$good")" "CAPS 少一个 → 判不等"
 
+    # 5) 第四份来源「存在但解析不出名单」→ 正式流程必须 fail-closed(exit 1),
+    #    不得静默跳过(跳过会让第四份核对凭空消失,门禁却仍报 OK)。
+    doctored="$(mktemp)"
+    printf 'name: daedalus-plugins\non: push\n' > "$doctored"
+    rc=0
+    DAEDALUS_PLUGINS_RELEASE_YML="$doctored" bash "$0" >/dev/null 2>&1 || rc=$?
+    st 1 "$rc" "release.yml 存在但无 'for cap in' 行 → 正式流程 exit 1(fail-closed)"
+    rm -f "$doctored"
+
     if [ "$fail_n" -eq 0 ]; then echo "RESULT: SELFTEST PASS"; exit 0; fi
     echo "RESULT: SELFTEST FAIL ($fail_n)"; exit 1
 fi
@@ -121,6 +132,12 @@ fi
 release=""
 if [ -f "$PLUGINS_RELEASE_YML" ]; then
     release="$(release_caps "$PLUGINS_RELEASE_YML")"
+    # 文件在、却解析不出名单 = 该来源已不可用(格式漂移)。此时**不得**当作「跳过」:
+    # 静默跳过会让第四份核对凭空消失而门禁仍报 OK —— fail-closed,直接拒。
+    [ -n "$release" ] || {
+        echo "plugin-inventory: release 工作流存在但解析不出 cap 集合(格式漂移?): $PLUGINS_RELEASE_YML" >&2
+        exit 1
+    }
 else
     echo "NOTE: 兄弟仓 plugins 的 release.yml 不存在($PLUGINS_RELEASE_YML),跳过第四份(release 供料)核对" >&2
 fi
