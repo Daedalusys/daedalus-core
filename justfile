@@ -153,9 +153,12 @@ verify-units:
 
 # 插件清单集合相等门禁:76 CAPS / 插件单元 / 插件 manifest / plugins release 供料 四份必须一致。
 # 先跑 --selftest 自证门禁没变瞎,再比对真实仓库。不需要镜像,CI test job 与本机都能跑。
+# 末行是「镜像内插件清单断言」的解析自检(同样不需要 podman/镜像,但把 list 输出解析
+# 这一处历史易错点钉在每次 PR 上)。
 verify-inventory:
     ./tests/build/plugin-inventory.sh --selftest
     ./tests/build/plugin-inventory.sh
+    ./tests/build/plugin-inventory-image.sh --selftest
 
 # 3 仓平级布局守门:检查 daedalus-sdk / daedalus-plugins 兄弟仓
 # 是否以平级目录形态就位(go.work 本地 dev 桥的前置);缺哪个报哪个,exit 1。
@@ -313,15 +316,24 @@ dev-install prefix='': blueprint-embed
     # 三个 CLI 二进制进 <prefix>/bin(copilot audit.ts/exec.ts 与 host 的生产同名路径)
     ${sudo} install -Dm0755 bin/daedalus-host "${prefix}/bin/daedalus-host"
     ${sudo} install -Dm0755 bin/daedalus-audit "${prefix}/bin/daedalus-audit"
-    ${sudo} install -Dm0755 bin/daedalus-shell "${prefix}/bin/daedalus-shell"
-    # 逐插件解压安装态;zip 缺失只 WARN 跳过,不让整个 recipe 失败
-    for id in daedalus.fs daedalus.shell daedalus.pkg daedalus.sysinfo daedalus.copilot; do
-        zip="bin/${id}.plugin.zip"
+    # shell 能力二进制不在本仓 bin/(能力仓库迁出后由 just plugin-pack 现构后落到镜像树
+    # 布局位),从那里取;缺失即 fail-closed,而不是装出一个不存在的文件。
+    shell_src="files/system/usr/local/bin/daedalus-shell"
+    [ -f "${shell_src}" ] || {
+        echo "错误: 缺少 ${shell_src};先跑 just plugin-pack(能力二进制由插件仓现构后落位到镜像树)" >&2
+        exit 1
+    }
+    ${sudo} install -Dm0755 "${shell_src}" "${prefix}/bin/daedalus-shell"
+    # 逐插件解压安装态:遍历 bin/ 下**现存**的 *.plugin.zip,不写死 cap 名单
+    # (名单的事实源是打包产物本身);一个都没有只 WARN,不让整个 recipe 失败。
+    shopt -s nullglob
+    zips=(bin/*.plugin.zip)
+    if [ "${#zips[@]}" -eq 0 ]; then
+        echo "WARN: bin/ 下没有 *.plugin.zip,无插件可装(先跑 just plugin-pack / just copilot-plugin 再重试)" >&2
+    fi
+    for zip in "${zips[@]}"; do
+        id="$(basename "${zip}" .plugin.zip)"
         dest="${plugins_root}/${id}"
-        if [ ! -f "${zip}" ]; then
-            echo "WARN: ${zip} 不存在,跳过 ${id}(先跑 just plugin-pack / just copilot-plugin 再重试)" >&2
-            continue
-        fi
         ${sudo} install -d "${dest}"
         # 解压器要求空目录(O_EXCL 不覆盖既有文件);本机权限面禁 rm,一律 find -delete 清空后再装
         if [ -n "${sudo}" ]; then
