@@ -104,10 +104,28 @@ if [ -z "${ZIP_DIR}" ]; then
 fi
 
 # 逐个解压 release 里的每个 *.plugin.zip(解压即校验:任一 checksum 不符拒绝安装,fail-closed)。
-# 不写死 cap 名单 —— 名单的唯一事实源是 daedalus-plugins 的 release 资产集。
+# 名单的唯一事实源是 daedalus-plugins 的 release 资产集(不写死 cap 名)。
 shopt -s nullglob
 zips=("${ZIP_DIR}"/*.plugin.zip)
 [ "${#zips[@]}" -gt 0 ] || { echo "错误: ${ZIP_DIR} 下没有任何 *.plugin.zip" >&2; exit 1; }
+
+# 通配的反面:目录里**不该有**的东西必须显式拦下。历史 cap 的 zip 残留在复用的
+# --local-zip-dir 里被一并解进镜像,正是「有 manifest 没二进制」那类漂移的镜像侧变体。
+# 允许集合的唯一事实源 = 76 构建脚本的 CAPS(镜像接线面);copilot 是预置的非能力插件
+# (type=copilot,无 systemd 单元),允许一并供料。
+CAPS_SRC="${CORE_ROOT}/files/scripts/76-daedalus-plugin-gen.sh"
+[ -f "${CAPS_SRC}" ] || { echo "错误: 找不到 ${CAPS_SRC}(镜像接线面 cap 名单的事实源),拒绝继续" >&2; exit 1; }
+allowed="$(sed -n 's/^CAPS="\(.*\)"$/\1/p' "${CAPS_SRC}" | head -n 1) copilot"
+[ -n "${allowed}" ] || { echo "错误: 无法从 ${CAPS_SRC} 解析 CAPS" >&2; exit 1; }
+for zip in "${zips[@]}"; do
+    cap="$(basename "$zip" .plugin.zip)"
+    cap="${cap#daedalus.}"
+    case " ${allowed} " in
+        *" ${cap} "*) ;;
+        *) echo "错误: $(basename "$zip") 不在镜像接线面名单(CAPS + copilot)内 —— ${ZIP_DIR} 可能混入了历史 cap 的 zip;已从镜像移除的插件不得解进去" >&2; exit 1 ;;
+    esac
+done
+
 for zip in "${zips[@]}"; do
     id="$(basename "$zip" .plugin.zip)"
     dest="${DEST}/${id}"
