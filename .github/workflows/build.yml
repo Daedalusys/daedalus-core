@@ -332,8 +332,8 @@ jobs:
 
       - name: Download plugin zips from daedalus-plugins release
         # 镜像构建 job 内联 plugin zip 下载(跨仓集成)。
-        # daedalus-plugins 仓 release 出 7 个 *.plugin.zip(fs/shell/pkg/sysinfo/
-        # service/blueprint/dupe);gh 在 runner 预装且
+        # daedalus-plugins 仓 release 出 11 个 *.plugin.zip(fs/shell/pkg/sysinfo/
+        # service/blueprint/dupe/diskclean/organize/trace/proc);gh 在 runner 预装且
         # 经 GITHUB_TOKEN 认证。fetch-plugins.sh 只做本地等价兜底,
         # 不重复描述本 workflow 步骤。下载目录用绝对路径 /tmp,不受 cwd 影响。
         shell: bash
