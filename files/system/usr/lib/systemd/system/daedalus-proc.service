@@ -7,16 +7,17 @@ Type=simple
 # 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
 # 策略消费约定:只读观测面,不注入 Environment=ALLOW_COMMANDS(REPLACE 覆盖语义)。
 #
-# ProtectProc=no 是**有意为之**:本服务的本职是读 /proc 下**他人**进程
-# (proc_list / proc_tree / proc_fds / proc_cgroup / proc_listen)。DynamicUser=yes
-# 使进程以非 root 身份运行,而 ProtectProc 的默认值对非 root 单元等价于 hidden ——
-# 那会让本服务在 /proc 里只看得见自己,直接废掉除「看自己」以外的全部工具能力。
-# 显式 no = 完整 /proc 可见。切勿改成 ProtectProc=invisible(连自己的进程都会隐藏)。
+# /proc 可见性**保持默认(不声明 ProtectProc)**:本服务的本职是读 /proc 下他人进程
+# (proc_list / proc_tree / proc_fds / proc_cgroup / proc_listen),所以绝不能设
+# ProtectProc=invisible / noaccess —— 那会把他人进程隐藏或拒绝访问,直接废掉除
+# 「看自己」以外的全部工具能力。systemd 的 ProtectProc 默认值 "default" 即「不施加任何
+# /proc 访问或可见性限制」,故本单元不声明该键。
+# (合法取值只有 noaccess/invisible/ptraceable/default;不存在 `no`/`hidden` 这类拼写 ——
+#  写成 `no` 会被 systemd 丢弃并告警,意图落空。)
 ExecStart=/opt/daedalus/plugins/daedalus.proc/bin/daedalus-proc
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ProtectProc=no
 StateDirectory=daedalus
 NoNewPrivileges=yes
 CPUQuota=50%

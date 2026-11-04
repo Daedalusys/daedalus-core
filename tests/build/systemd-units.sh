@@ -4,6 +4,8 @@
 # 解析级 = systemd 认不出键名或值,例如:
 #   - SystemCallFilter 的取反前缀放在列表中间 → "Failed to parse system call, ignoring"
 #   - 键写错节(如 ConditionPathExists 写进 [Service]) → "Unknown key name ... in section"
+#   - 枚举键取值非法(如 ProtectProc=no,合法值只有 noaccess/invisible/ptraceable/default)
+#     → "Failed to parse /proc/ protection mode, ignoring: no"
 #
 # 故意不检 "Command ... is not executable":源码树里插件二进制本就不存在,
 # CI 上该告警对每个单元恒真、零信号。ExecStart 路径/旗标的正确性由构建期
@@ -44,9 +46,13 @@ collect_units() {
 #   systemd 255: "System call ~@privileged is not known, ignoring."
 # 两类都是"配置项被丢弃"(ignoring),都必须算错。--selftest 是这条匹配的守门:
 # 若将来某版本再换措辞,selftest 会先红,而不是门禁静默失明。
+#
+# 键名拼对、但**枚举取值非法**是同一类病(systemd 报 "Failed to parse <键>, ignoring: <值>",
+# 该指令被静默丢弃):实例是 daedalus-proc 单元一度写了 ProtectProc=no —— systemd 忽略了它,
+# 而本门禁当时是绿的。匹配词 "Failed to parse" 覆盖这一族(它同时包含 seccomp 那条)。
 parse_errors() {
     printf '%s\n' "$2" \
-        | grep -E 'Failed to parse system call|is not known, ignoring|Unknown key name' \
+        | grep -E 'Failed to parse|is not known, ignoring|Unknown key name' \
         | grep -F "$1" || true
 }
 
@@ -102,6 +108,13 @@ if [ "${1:-}" = "--selftest" ]; then
     # 4) 新单元类型(.target)必须被纳入检查范围。
     printf '[Unit]\nDescription=x\n[Install]\nWantedBy=multi-user.target\n' > "$s/zz-newtype.target"
     st 1 "$(collect_units "$s" | grep -c 'zz-newtype.target')" ".target 类型必须纳入检查范围"
+
+    # 5) 取值非法(枚举键写错)必须被抓:systemd 报 "Failed to parse <键> ..., ignoring: <值>"。
+    #    实例:ProtectProc 的合法取值是 noaccess/invisible/ptraceable/default,写成 `no` 会被
+    #    systemd 静默忽略该指令(配置意图落空)。这类错误与键名拼错同级,门禁不得漏。
+    printf '[Unit]\nDescription=x\n[Service]\nExecStart=/bin/true\nProtectProc=no\n' \
+        > "$s/zz-badvalue.service"
+    st 1 "$(verify_units "$s" | grep -c 'zz-badvalue')" "非法枚举取值(ProtectProc=no)必须被抓"
 
     if [ "$fail_n" -eq 0 ]; then echo "RESULT: SELFTEST PASS"; exit 0; fi
     echo "RESULT: SELFTEST FAIL ($fail_n)"; exit 1
