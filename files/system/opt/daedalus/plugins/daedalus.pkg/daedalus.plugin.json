@@ -30,8 +30,8 @@
     }
   ],
   "checksums": {
-    "bin/daedalus-pkg": "sha256:7e6527fd2dd24e515247d06f625485f0b0cb09fe1a77a3d8043262c17b59f938",
-    "daedalus.plugin.json": "sha256:7b5f66d0e25a4ed551e574405d61ea50ca875ca9516155aafad9994f1c2fd115"
+    "bin/daedalus-pkg": "sha256:1a254926220e7198878e301f9b55a847b48e3437ad5f70efbe3a1399e64f56c1",
+    "daedalus.plugin.json": "sha256:5adc64423256c2a942e93d153a2d5416aca2de1f16abd4a8214fbb09d7421c40"
   },
   "api_version": "0.1.0",
   "license": "MIT",

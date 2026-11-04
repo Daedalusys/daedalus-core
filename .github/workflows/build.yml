@@ -149,6 +149,13 @@ jobs:
         working-directory: daedalus-core
         run: just verify-units
 
+      - name: plugin inventory gate
+        # 四份插件清单(76 CAPS / 插件单元 / 插件 manifest / plugins release 供料)必须相等。
+        # 缺一份就等于「有 manifest 没二进制」的插件会随镜像交付(core#53)。
+        shell: bash
+        working-directory: daedalus-core
+        run: just verify-inventory
+
       - name: Official manifest cross-repo gate
         # SDK 的 TestValidate_OfficialPluginManifests 在 SDK 仓 CI 里因缺兄弟仓
         # 显式 skip,这里是它唯一的真实执行点:校验 9 个能力插件与 copilot 共
@@ -386,6 +393,22 @@ jobs:
         env:
           DAEDALUS_FETCH_ZIP_DIR: /tmp/plugins-release
         run: just build
+
+      - name: Verify plugin inventory in image
+        # 镜像里的插件清单必须与 CAPS 一致且无 degraded —— 「有 manifest 没二进制」
+        # 的插件在这一步暴露(core#53 的原始形态)。
+        # daedalus-host list 输出:首行表头 + 每个插件一行(列由 tabwriter 以空格对齐,
+        # 末列为状态 ok|degraded);degraded 时表后另附缩进 2 空格的 `  <id>: <原因>` 明细行。
+        # 故按「行首」而非制表符判定:插件行以 `daedalus.` 起头,明细行以空格缩进。
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          out="$(podman run --rm localhost/daedalus-os:latest /usr/local/bin/daedalus-host list)"
+          printf '%s\n' "$out"
+          n="$(printf '%s\n' "$out" | awk '$0 ~ /^daedalus\./ {c++} END {print c+0}')"
+          [ "$n" -eq 12 ] || { echo "ERROR: 镜像内插件数应为 12(copilot + 11),实际 $n"; exit 1; }
+          d="$(printf '%s\n' "$out" | awk '$0 ~ /^daedalus\./ && $NF == "degraded" {c++} END {print c+0}')"
+          [ "$d" -eq 0 ] || { echo "ERROR: 镜像内有 $d 个 degraded 插件"; exit 1; }
 
       - name: Verify Image Zero-Residue
         # 断言镜像 /opt 内无 Python 源码/字节码、__pycache__、Deno 测试文件、

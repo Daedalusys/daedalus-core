@@ -29,10 +29,10 @@
     "zh_CN"
   ],
   "checksums": {
-    "bin/daedalus-organize": "sha256:8c7901968a68c81650089861c92ed7d31d79c1bbe2774d159a31367f9677bb6a",
-    "daedalus.plugin.json": "sha256:68999b42e46ac05a58958f3bd253276be1297ab39df96fca5ae47187520e3a3b"
+    "bin/daedalus-organize": "sha256:d4a1a501e4d8936e324e4dbee1db91a10ac4cdf56b9ea3513338eced61306865",
+    "daedalus.plugin.json": "sha256:e3767c7242652a82f3bad4c8c4b34871a287e2e8b1f8f8960268023fe4115b88"
   },
   "api_version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "maintainer": "team@daedalusys.io"
 }

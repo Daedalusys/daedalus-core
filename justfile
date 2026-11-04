@@ -151,6 +151,12 @@ verify-units:
     ./tests/build/systemd-units.sh --selftest
     ./tests/build/systemd-units.sh
 
+# 插件清单集合相等门禁:76 CAPS / 插件单元 / 插件 manifest / plugins release 供料 四份必须一致。
+# 先跑 --selftest 自证门禁没变瞎,再比对真实仓库。不需要镜像,CI test job 与本机都能跑。
+verify-inventory:
+    ./tests/build/plugin-inventory.sh --selftest
+    ./tests/build/plugin-inventory.sh
+
 # 3 仓平级布局守门:检查 daedalus-sdk / daedalus-plugins 兄弟仓
 # 是否以平级目录形态就位(go.work 本地 dev 桥的前置);缺哪个报哪个,exit 1。
 verify-dev-layout:
@@ -162,7 +168,7 @@ verify-dev-layout:
     cd "$root/daedalus-core"
     bash scripts/verify-dev-layout.sh
 
-# 打包 17 个能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/trace/proc/hwmon/journal/triage/integrity/avc/gpu/smart/search)为 daedalus-plugin
+# 打包 11 个能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc)为 daedalus-plugin
 # (构建镜像前执行)
 # 同时安装带外 CLI 到 /usr/local/bin: host/audit/tx(本仓现构)+ shell/service
 # (插件仓现构;3 仓拆分后能力二进制出厂源已从 core 迁至 daedalus-plugins)
@@ -243,23 +249,13 @@ plugin-pack: blueprint-embed
         cp -f "${src}/${exe}" "${stage}/${exe}"
         chmod 0755 "${stage}/${exe}"
         "./bin/daedalus-plugin-pack" -in "${stage}" -out "bin/${id}.plugin.zip"
-        if [ "${cap}" = "dupe" ] || [ "${cap}" = "trace" ] || [ "${cap}" = "proc" ]; then
-            # dupe/trace/proc 仅 TMPDIR 解包校验、不进 files/system,理由(zip 照常产出到 core bin/):
-            #   1) CI 镜像供料腿 fetch-plugins.sh 只解 6 个 zip、不含 dupe/trace/proc,
-            #      写进 files/system 也不进镜像,只是净新增本地残留(安装态整体不入库);
-            #   2) 校验语义不降级:zip 仍经 -verify --keep 解压到临时空目录,解压即完整校验、
-            #      fail-closed。供料腿纳入这三个 zip 时删掉此分支即可。
-            vdir="${TMPDIR:-/tmp}/daedalus-plugin-pack-verify/${id}"
-            mkdir -p "${vdir}"
-            find "${vdir}" -mindepth 1 -delete 2>/dev/null || true
-            "./bin/daedalus-plugin-pack" -verify "bin/${id}.plugin.zip" --keep "${vdir}"
-        else
-            dest="$root/daedalus-core/files/system/opt/daedalus/plugins/${id}"
-            mkdir -p "${dest}"
-            # 解压器要求空目录(O_EXCL 不覆盖既有文件);本机权限面禁 rm,用 find -delete 清空。
-            find "${dest}" -mindepth 1 -delete
-            "./bin/daedalus-plugin-pack" -verify "bin/${id}.plugin.zip" --keep "${dest}"
-        fi
+        # dupe/trace/proc 已接进镜像:与其余 cap 同构,统一解包进镜像树安装态(它们与 CAPS
+        # 集合相等,镜像接线面不得再对这三个 cap 特判)。zip 仍带 checksums,解压即完整校验。
+        dest="$root/daedalus-core/files/system/opt/daedalus/plugins/${id}"
+        mkdir -p "${dest}"
+        # 解压器要求空目录(O_EXCL 不覆盖既有文件);本机权限面禁 rm,用 find -delete 清空。
+        find "${dest}" -mindepth 1 -delete
+        "./bin/daedalus-plugin-pack" -verify "bin/${id}.plugin.zip" --keep "${dest}"
     done
     # 宿主自身进镜像树 /usr/local/bin:构建期 76-daedalus-plugin-gen.sh 与 copilot wrapper(任务 8)都依赖它。
     install -Dm0755 "bin/daedalus-host" "$root/daedalus-core/files/system/usr/local/bin/daedalus-host"
@@ -280,7 +276,7 @@ plugin-pack: blueprint-embed
     #   render/handshake 环路)——与 audit 同款仅落 /usr/local/bin,服务 copilot spawn
     #   与用户直接 CLI(v1 执行模型 = 调用者进程)。
     install -Dm0755 "bin/daedalus-tx" "$root/daedalus-core/files/system/usr/local/bin/daedalus-tx"
-    echo "plugin-pack: 17 个能力插件 zip(fs/shell/pkg/sysinfo/service/blueprint/dupe/trace/proc/hwmon/journal/triage/integrity/avc/gpu/smart/search)-> daedalus-core/bin/;14 个已解包校验安装 -> daedalus-core/files/system/opt/daedalus/plugins/(dupe/trace/proc 仅 TMPDIR 解包校验,理由见循环内注释);host/audit/tx(core 现构)+ shell/service(插件仓现构)-> daedalus-core/files/system/usr/local/bin/"
+    echo "plugin-pack: 11 个能力插件 zip(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc)-> daedalus-core/bin/;11 个已解包校验安装 -> daedalus-core/files/system/opt/daedalus/plugins/;host/audit/tx(core 现构)+ shell/service(插件仓现构)-> daedalus-core/files/system/usr/local/bin/"
 
 # 开发态本地安装:把 dev 产物装进用户前缀,免镜像即可使用全套 CLI。
 # 用法: just dev-install [前缀] (亦兼容 --prefix=X 形式);默认前缀 = $HOME/.local。

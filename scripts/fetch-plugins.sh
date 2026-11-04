@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # fetch-plugins.sh: 跨仓 release 流水线的插件拉取腿。
 #
-# 从 daedalus-plugins 仓的 GitHub release 拉 6 个能力插件 zip
-# (daedalus.{fs,shell,pkg,sysinfo,service,blueprint}.plugin.zip),经
+# 从 daedalus-plugins 仓的 GitHub release 拉**全部** *.plugin.zip,经
 # daedalus-plugin-pack -verify 解压(解压即校验,任一 checksum 不符拒绝安装,
 # fail-closed)到镜像树安装态 daedalus-core/files/system/opt/daedalus/plugins/,
 # 供 just build 的 sync 腿同步进镜像 /opt/daedalus/plugins。
 #
-# 本机无 gh / 无网络时用 --local-zip-dir 指向本地已有 6 个 zip 的目录兜底
+# 不写死 cap 名单 —— 名单的唯一事实源是 daedalus-plugins release 的资产集。
+# (写死名单正是「release 出 11 个、镜像只解 6 个」这类漂移的成因。)
+#
+# 本机无 gh / 无网络时用 --local-zip-dir 指向本地已有全部 zip 的目录兜底
 # (本地等价全链见 scripts/local-cross-repo-test.sh)。
 #
 # 用法:
 #   fetch-plugins.sh [--local-zip-dir <dir>] [--dest <dir>] [--help]
 #
 # 选项:
-#   --local-zip-dir <dir>  目录内已有 6 个 *.plugin.zip 时直接解压,跳过
+#   --local-zip-dir <dir>  目录内已有全部 *.plugin.zip 时直接解压,跳过
 #                          gh release download(本地兜底;V3 构建机/CI 默认走 gh)
 #   --dest <dir>           解压目标目录(默认 = 镜像树安装态
 #                          daedalus-core/files/system/opt/daedalus/plugins/)
@@ -40,11 +42,11 @@ usage() {
     cat <<'EOF'
 用法: fetch-plugins.sh [--local-zip-dir <dir>] [--dest <dir>] [--help]
 
-从 daedalus-plugins 仓 GitHub release 拉 6 个能力插件 zip 并解压(校验)到
+从 daedalus-plugins 仓 GitHub release 拉全部 *.plugin.zip 并解压(校验)到
 镜像树安装态;本机无 gh/无网络时用 --local-zip-dir 指向本地 zip 目录兜底。
 
 选项:
-  --local-zip-dir <dir>  目录内已有 6 个 *.plugin.zip 时直接解压,跳过
+  --local-zip-dir <dir>  目录内已有全部 *.plugin.zip 时直接解压,跳过
                          gh release download(本地兜底)
   --dest <dir>           解压目标目录(默认 = 镜像树安装态
                          daedalus-core/files/system/opt/daedalus/plugins/)
@@ -93,7 +95,7 @@ fi
 if [ -z "${ZIP_DIR}" ]; then
     ZIP_DIR="/tmp/plugins-release"
     if ! command -v gh >/dev/null 2>&1; then
-        echo "错误: 本机无 gh,无法 gh release download;请用 --local-zip-dir <dir> 指向本地已有 6 个 *.plugin.zip 的目录(本地等价全链见 scripts/local-cross-repo-test.sh)" >&2
+        echo "错误: 本机无 gh,无法 gh release download;请用 --local-zip-dir <dir> 指向本地已有全部 *.plugin.zip 的目录(本地等价全链见 scripts/local-cross-repo-test.sh)" >&2
         exit 1
     fi
     mkdir -p "${ZIP_DIR}"
@@ -101,19 +103,18 @@ if [ -z "${ZIP_DIR}" ]; then
     gh release download --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --dir "${ZIP_DIR}/"
 fi
 
-# 6 个能力插件逐一解压(解压即校验:任一 checksum 不符拒绝安装,fail-closed)
-for cap in fs shell pkg sysinfo service blueprint; do
-    id="daedalus.${cap}"
-    zip="${ZIP_DIR}/${id}.plugin.zip"
-    if [ ! -f "${zip}" ]; then
-        echo "错误: 缺少 ${zip}(期望 6 个能力插件 zip 齐全)" >&2
-        exit 1
-    fi
+# 逐个解压 release 里的每个 *.plugin.zip(解压即校验:任一 checksum 不符拒绝安装,fail-closed)。
+# 不写死 cap 名单 —— 名单的唯一事实源是 daedalus-plugins 的 release 资产集。
+shopt -s nullglob
+zips=("${ZIP_DIR}"/*.plugin.zip)
+[ "${#zips[@]}" -gt 0 ] || { echo "错误: ${ZIP_DIR} 下没有任何 *.plugin.zip" >&2; exit 1; }
+for zip in "${zips[@]}"; do
+    id="$(basename "$zip" .plugin.zip)"
     dest="${DEST}/${id}"
-    mkdir -p "${dest}"
+    mkdir -p "$dest"
     # 解压器要求空目录(O_EXCL 不覆盖既有文件);本机权限面禁 rm,用 find -delete 清空
-    find "${dest}" -mindepth 1 -delete
-    "${PACK_BIN}" -verify "${zip}" --keep "${dest}"
+    find "$dest" -mindepth 1 -delete
+    "${PACK_BIN}" -verify "$zip" --keep "$dest"
     echo "已安装: ${id} <- ${zip}"
 done
-echo "fetch-plugins: 6 个能力插件已解压(校验通过) -> ${DEST}"
+echo "fetch-plugins: ${#zips[@]} 个能力插件已解压(校验通过) -> ${DEST}"

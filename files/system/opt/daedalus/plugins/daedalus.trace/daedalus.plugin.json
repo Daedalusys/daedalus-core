@@ -1,0 +1,31 @@
+{
+  "id": "daedalus.trace",
+  "name": "Daedalus Audit Trace Viewer",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-trace",
+  "permissions": {
+    "read": [
+      "/var/log/daedalus",
+      "/home"
+    ],
+    "write": [],
+    "run": []
+  },
+  "tools": [
+    "trace_session",
+    "trace_tool",
+    "trace_tx",
+    "trace_summary"
+  ],
+  "checksums": {
+    "bin/daedalus-trace": "sha256:9f723bcd55e8b64bd7ce37419f5f950319f572533095dbb1f2fd1972979b17f2",
+    "daedalus.plugin.json": "sha256:8dc8ba9855ecdc72fb911fa3b0b3338b46925001138b76c86ae259967175e621"
+  },
+  "api_version": "0.1.0",
+  "license": "MIT",
+  "maintainer": "team@daedalusys.io"
+}
