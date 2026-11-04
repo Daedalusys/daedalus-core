@@ -1,0 +1,30 @@
+{
+  "id": "daedalus.dupe",
+  "name": "Daedalus Large \u0026 Duplicate File Scanner",
+  "version": "0.1.0",
+  "type": "capability",
+  "runtime": {
+    "name": "native"
+  },
+  "executable": "bin/daedalus-dupe",
+  "permissions": {
+    "read": [
+      "/home",
+      "/var/log",
+      "/tmp"
+    ],
+    "write": [],
+    "run": null
+  },
+  "tools": [
+    "scan_large",
+    "scan_dupes"
+  ],
+  "checksums": {
+    "bin/daedalus-dupe": "sha256:249e9504ae7ec66496f2c18e18eb44aa0868e21636eb52dd85481e0ce080a75d",
+    "daedalus.plugin.json": "sha256:25770c8d1680bfb82222951a2d5f3e449d91f234a33cbba7260bb36a37e294d5"
+  },
+  "api_version": "0.1.0",
+  "license": "MIT",
+  "maintainer": "team@daedalusys.io"
+}

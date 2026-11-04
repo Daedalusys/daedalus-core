@@ -1,11 +1,12 @@
 [Unit]
-Description=Daedalus Hardware Sensors MCP Sandbox Profile
+Description=Daedalus Audit Trace Viewer MCP Sandbox Profile
 
 [Service]
 Type=simple
-# ExecStart 内容由插件 manifest(daedalus.hwmon)派生:构建期 76-daedalus-plugin-gen.sh
+# ExecStart 内容由插件 manifest(daedalus.trace)派生:构建期 76-daedalus-plugin-gen.sh
 # 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
-ExecStart=/opt/daedalus/plugins/daedalus.hwmon/bin/daedalus-hwmon
+# 策略消费约定:只读观测面,不注入 Environment=ALLOW_COMMANDS(REPLACE 覆盖语义)。
+ExecStart=/opt/daedalus/plugins/daedalus.trace/bin/daedalus-trace
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=read-only

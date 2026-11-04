@@ -39,10 +39,10 @@
     "zh_CN"
   ],
   "checksums": {
-    "bin/daedalus-diskclean": "sha256:10d94bc6aff416686a37467666e08acb525b4761e7902a3742a9720ef4ba0816",
-    "daedalus.plugin.json": "sha256:75022b423f0a12b07f598ace9ea0912fc180f2fca1de950d65cb15ff09512cf2"
+    "bin/daedalus-diskclean": "sha256:bb661fc951d3a2cd3c85316364472e82aebd62282d7757badbedbc0e5e114e8c",
+    "daedalus.plugin.json": "sha256:75d5319a0623dfe17318e56f1e3e566acecf3822f02a0cb5d8ee14215541df6b"
   },
   "api_version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "maintainer": "team@daedalusys.io"
 }

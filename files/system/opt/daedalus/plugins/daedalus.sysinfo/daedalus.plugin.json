@@ -25,8 +25,8 @@
     "network_status"
   ],
   "checksums": {
-    "bin/daedalus-sysinfo": "sha256:7fa440b923ab56c7573252b4cd81800a6cfa9597b156f934ba64a30f0733d9ce",
-    "daedalus.plugin.json": "sha256:c386f8d3375fdc76f533783579f3a274a2c1264d8719071b5bb9770d4dbd518b"
+    "bin/daedalus-sysinfo": "sha256:88d41aee70a431b9a8454d4c23c04a1d07b954cc967461a38e87bc68d8d4ca9f",
+    "daedalus.plugin.json": "sha256:2263b7442cacaf47db0240ff31489c967aaae6ef4b2ea5f70adba890357c7b4c"
   },
   "api_version": "0.1.0",
   "license": "MIT",

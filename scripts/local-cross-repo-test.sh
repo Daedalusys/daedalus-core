@@ -2,9 +2,9 @@
 # local-cross-repo-test.sh: 本地等价全链集成测试(无 gh / 无网络兜底)。
 #
 # 与 V3 构建机/CI 的跨仓 release 流水线等价,全链 4 步:
-#   1) 本地构建 6 插件二进制 + daedalus-plugin-pack 打 6 个 zip;
+#   1) 本地构建 cap 名单里的每个能力插件二进制 + daedalus-plugin-pack 逐 cap 打 zip;
 #   2) fetch-plugins.sh --local-zip-dir 解压(校验)到临时目录(不污染镜像树安装态);
-#   3) daedalus-host -dir list 期望 6 插件全 ok(含 checksums 完整性);
+#   3) daedalus-host -dir list 期望 cap 名单全 ok(含 checksums 完整性);
 #   4) daedalus-plugin-pack -verify 正向全过 + 篡改检测(篡改 zip 必须报
 #      checksum 不匹配,检测失效即 exit 1)。
 #
@@ -29,9 +29,15 @@ fi
 # 插件仓 = core 仓的平级兄弟(mono-repo 与 post-split 两种布局下均成立)
 PLUGINS_ROOT="${CORE_ROOT}/../daedalus-plugins"
 if [ ! -d "${PLUGINS_ROOT}/fs" ]; then
-    echo "错误: 找不到插件仓 ${PLUGINS_ROOT}(期望 6 个 sub-module 平级就位)" >&2
+    echo "错误: 找不到插件仓 ${PLUGINS_ROOT}(期望各能力插件 sub-module 平级就位)" >&2
     exit 1
 fi
+
+# cap 名单唯一事实源 = 76 构建脚本的 CAPS(不另维护副本,避免与 fetch-plugins 的通配腿漂移)。
+CAPS_SRC="${CORE_ROOT}/files/scripts/76-daedalus-plugin-gen.sh"
+CAPS="$(sed -n 's/^CAPS="\(.*\)"$/\1/p' "$CAPS_SRC" | head -n 1)"
+[ -n "${CAPS}" ] || { echo "错误: 无法从 ${CAPS_SRC} 解析 CAPS" >&2; exit 1; }
+EXPECTED_N="$(printf '%s\n' ${CAPS} | grep -c .)"
 
 # go 多源兜底(SSH 远端非交互 shell 不 source rc,asdf 用户的 go 不在 PATH)
 if ! command -v go >/dev/null 2>&1; then
@@ -62,10 +68,10 @@ mkdir -p "${ZIP_DIR}" "${DEST}"
 find "${ZIP_DIR}" -mindepth 1 -delete
 find "${DEST}" -mindepth 1 -delete
 
-# 1) 本地生成 6 zip:构建二进制 + 打包。打包 -in . 要求插件源目录 bin/ 有与
+# 1) 本地逐 cap 生成 zip:构建二进制 + 打包。打包 -in . 要求插件源目录 bin/ 有与
 #    manifest executable 匹配的二进制;把新构建的二进制拷入,保证 zip 内容
 #    新鲜且脚本在全新 clone(无 bin/)下自洽。
-for cap in fs shell pkg sysinfo service blueprint dupe diskclean organize trace proc; do
+for cap in ${CAPS}; do
     echo "== 构建 + 打包 ${cap}"
     (cd "${PLUGINS_ROOT}/${cap}" && go build -trimpath -o "${ZIP_DIR}/daedalus-${cap}" "./cmd/daedalus-${cap}")
     cp -f "${ZIP_DIR}/daedalus-${cap}" "${PLUGINS_ROOT}/${cap}/bin/daedalus-${cap}"
@@ -77,19 +83,19 @@ done
 echo "== fetch-plugins.sh --local-zip-dir ${ZIP_DIR} --dest ${DEST}"
 bash "${SCRIPT_DIR}/fetch-plugins.sh" --local-zip-dir "${ZIP_DIR}" --dest "${DEST}"
 
-# 3) daedalus-host -dir list:期望 6 插件全 ok(含 checksums 完整性)
+# 3) daedalus-host -dir list:期望 cap 名单全 ok(含 checksums 完整性)
 echo "== daedalus-host -dir ${DEST} list"
 list_out="$("${CORE_BIN}/daedalus-host" -dir "${DEST}" list)"
 echo "${list_out}"
 ok_count="$(echo "${list_out}" | awk 'NR>1 {print $NF}' | grep -c '^ok$' || true)"
 deg_count="$(echo "${list_out}" | awk 'NR>1 {print $NF}' | grep -c '^degraded$' || true)"
-if [ "${ok_count}" -ne 6 ] || [ "${deg_count}" -ne 0 ]; then
-    echo "错误: 期望 6 插件全 ok,实际 ok=${ok_count} degraded=${deg_count}" >&2
+if [ "${ok_count}" -ne "${EXPECTED_N}" ] || [ "${deg_count}" -ne 0 ]; then
+    echo "错误: 期望 ${EXPECTED_N} 插件全 ok,实际 ok=${ok_count} degraded=${deg_count}" >&2
     exit 1
 fi
 
-# 4a) 正向校验:6 zip 逐一 -verify 必须全过(任一 checksum 不匹配 → exit 1)
-echo "== 正向校验:6 zip 逐一 -verify"
+# 4a) 正向校验:全部 zip 逐一 -verify 必须全过(任一 checksum 不匹配 → exit 1)
+echo "== 正向校验:全部 zip 逐一 -verify"
 for zip in "${ZIP_DIR}"/*.plugin.zip; do
     echo "verify: $(basename "${zip}")"
     "${CORE_BIN}/daedalus-plugin-pack" -verify "${zip}" >/dev/null
@@ -123,4 +129,4 @@ fi
 echo "篡改检测通过: $(cat /tmp/test-zips/tamper.out)"
 
 echo ""
-echo "PASS: 本地跨仓全链测试通过(6 zip 生成 + fetch 解压校验 + host list 6 ok + checksum 校验/篡改检测)"
+echo "PASS: 本地跨仓全链测试通过(${EXPECTED_N} zip 生成 + fetch 解压校验 + host list ${EXPECTED_N} ok + checksum 校验/篡改检测)"

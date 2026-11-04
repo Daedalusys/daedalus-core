@@ -21,8 +21,9 @@
 #      不拦截读取;DynamicUser 能否读到 policy.toml 取决于文件 o+r 位与祖先目录 o+x 位,
 #      逐项验证即可,**无需**任何 BindReadOnlyPaths/ReadWritePaths 放宽(放宽反而破坏
 #      "整盘只读 + 单点策略"的沙箱语义)。不满足即构建失败,防止服务器开机 fail-closed。
-#   8. 对象模型资源门禁:CAPS 扩至 5 能力(fs/shell/pkg/sysinfo/service,
-#      daedalus.service 单元同样经 render-unit 渲染回写并幂等自校验);策略预检额外断言
+#   8. 对象模型资源门禁:CAPS 覆盖全部 11 个能力插件(fs/shell/pkg/sysinfo/service/
+#      blueprint/dupe/diskclean/organize/trace/proc,daedalus.service 单元同样经 render-unit
+#      渲染回写并幂等自校验);策略预检额外断言
 #      [objectmodel].enabled_kinds 非空且包含 service(service 资源的唯一授权来源,
 #      缺失/剔除即 fail-closed 拒构建);逐插件交叉核对 manifest.resources[].kind ⊆
 #      enabled_kinds(jq 解析安装态清单;无 resources 字段视为空集恒过 —— 现有 4 能力即此形态);
@@ -50,7 +51,9 @@ POLICY="${ROOT%/}/opt/daedalus/shared/policy.toml"
 # tools/list 交叉核对 + landlock/credentials drop-in 沙箱语义防回归。blueprint 的
 # ReadWritePaths 输出目录由单元自带(76 脚本第 7 条只禁 shell/fs 的 /opt 遮蔽/重绑定,
 # ReadWritePaths 不拦 policy 读取,保留放行合法)。
-CAPS="fs shell pkg sysinfo service blueprint dupe diskclean organize"
+CAPS="fs shell pkg sysinfo service blueprint dupe diskclean organize trace proc"
+# core 自身的 4 个 systemd 单元不是能力插件(不经插件 manifest 渲染),反向集合比对时排除。
+CORE_UNITS="audit audit-rotate env host-controller"
 
 fail() { echo "76-daedalus-plugin-gen: 错误: $*" >&2; exit 1; }
 
@@ -164,6 +167,26 @@ echo "76-daedalus-plugin-gen: policy.toml 预检通过($(echo "$POLICY_ALLOW" | 
 # 握手 stderr 落点:每次调用由 2> 打开即截断,不残留上一个插件的输出,仅在失败分支读取。
 BIN_ERR="$(mktemp "${TMPDIR:-/tmp}/daedalus-handshake-stderr.XXXXXX")"
 trap 'rm -f "$BIN_ERR"' EXIT
+
+# —— 插件清单集合相等(反向)——
+# 下方循环已保证「CAPS 里的每个 cap 都有 manifest 与单元」;这里保证反方向:
+# 镜像里**不存在** CAPS 之外的插件单元。两边不等即拒构建 —— 漂移不得静默存活
+# (历史形态:8 个「有 manifest 无二进制」的设备插件单元曾随镜像交付而无人报错)。
+# core 自身的 4 个单元不是插件,比对时排除。
+plugin_units=""
+for u in "$UNIT_DIR"/daedalus-*.service; do
+    [ -e "$u" ] || continue
+    base="$(basename "$u" .service)"
+    cap="${base#daedalus-}"
+    skip=0
+    for cu in $CORE_UNITS; do
+        if [ "$cap" = "$cu" ]; then skip=1; fi
+    done
+    if [ "$skip" -eq 1 ]; then continue; fi
+    plugin_units="${plugin_units} ${cap}"
+done
+[ "$(echo $plugin_units | tr ' ' '\n' | sort | tr '\n' ' ')" = "$(echo $CAPS | tr ' ' '\n' | sort | tr '\n' ' ')" ] \
+    || fail "插件单元集合与 CAPS 不等: 单元={$plugin_units} CAPS={$CAPS}"
 
 for cap in $CAPS; do
     id="daedalus.${cap}"

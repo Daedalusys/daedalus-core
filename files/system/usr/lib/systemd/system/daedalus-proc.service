@@ -1,0 +1,33 @@
+[Unit]
+Description=Daedalus Process Reconnaissance MCP Sandbox Profile
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.proc)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
+# 策略消费约定:只读观测面,不注入 Environment=ALLOW_COMMANDS(REPLACE 覆盖语义)。
+#
+# /proc 可见性**保持默认(不声明 ProtectProc)**:本服务的本职是读 /proc 下他人进程
+# (proc_list / proc_tree / proc_fds / proc_cgroup / proc_listen),所以绝不能设
+# ProtectProc=invisible / noaccess —— 那会把他人进程隐藏或拒绝访问,直接废掉除
+# 「看自己」以外的全部工具能力。systemd 的 ProtectProc 默认值 "default" 即「不施加任何
+# /proc 访问或可见性限制」,故本单元不声明该键。
+# (合法取值只有 noaccess/invisible/ptraceable/default;不存在 `no`/`hidden` 这类拼写 ——
+#  写成 `no` 会被 systemd 丢弃并告警,意图落空。)
+ExecStart=/opt/daedalus/plugins/daedalus.proc/bin/daedalus-proc
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

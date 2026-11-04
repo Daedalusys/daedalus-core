@@ -27,8 +27,8 @@
     "move_file"
   ],
   "checksums": {
-    "bin/daedalus-fs": "sha256:a090b2f4d77f3de67c1297bc05da799e01077e724bf9433a68c1560ff3ff2b65",
-    "daedalus.plugin.json": "sha256:b4c0b11518586c38713dafd994ac6c2196f31cebc0b874620d48410b4a76480c"
+    "bin/daedalus-fs": "sha256:9dbe7bf8c7d27c5bcc4793cc4e1b14b1a1d4f6a2b96982172d1e7dd3443ef8d7",
+    "daedalus.plugin.json": "sha256:03b1f953ac23843e968ae03f6fbff5ce1758842c39d319ec9810c49effa08780"
   },
   "api_version": "0.1.0",
   "license": "MIT",
