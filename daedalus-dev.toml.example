@@ -4,8 +4,12 @@
 # 缺此文件 demo 二进制拒绝启动 (exit 2),绝不静默退化为 prod 行为。
 
 # dev 树里"镜像布局"的根目录;entrypoint 里的 /opt/daedalus 改写为
-# {prefix}/opt/daedalus,/usr/local/bin 同理。从仓库根跑就用默认。
-prefix = "./daedalus-core/files/system"
+# {prefix}/opt/daedalus,/usr/local/bin 同理。
+# prefix 会**按调用者的 cwd 解析**,故要么写绝对路径,要么确保 cwd 就是
+# daedalus-core/(此时默认的 "./files/system" 正确)。
+# 注:just dev-copilot / just cli-copilot 走 scripts/copilot-prep.sh 时,会另生成
+# 一份绝对 prefix 的临时配置(经 DAEDALUS_DEV_PATHS 指过去),不依赖本文件。
+prefix = "./files/system"
 
 # Deno 二进制绝对路径;留空走 $PATH (exec.LookPath)。deno 必须能解析到,
 # 否则 demo 二进制也拒启。

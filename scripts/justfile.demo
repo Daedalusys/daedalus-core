@@ -21,7 +21,7 @@
 go-build-demo: blueprint-embed
     #!/usr/bin/env bash
     set -euo pipefail
-    cd daedalus-core
+    cd "{{justfile_directory()}}"
     {{go_path_fallback}}
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -tags demo -trimpath -o bin/ ./cmd/...
 
@@ -47,7 +47,7 @@ dev-copilot *args:
         exit 1
     fi
     # 共享准备:重建 demo 二进制 + 安装布局位 + 解包插件 + export 环境变量。
-    source scripts/copilot-prep.sh
+    source "{{justfile_directory()}}/scripts/copilot-prep.sh"
     prep_copilot
     # todo 16(v1 执行模型钉死):state/tx 根经 internal/dirs 的 env→system→$HOME
     # 链解析;demo 态 parity 由下面两个 env 导出提供(paths_demo.go 重写清单
@@ -56,9 +56,9 @@ dev-copilot *args:
     # NotFound→静默(无 writer 跑过);仓库在 $HOME 之外的边缘情形是
     # PermissionDenied→可见-继续(todo 28)——两者皆良性;tx 往返完全可用,
     # 因为 daedalus-tx 是 Go 二进制,不受 Deno 权限授予约束。
-    export DAEDALUS_STATE_PATH="$PWD/daedalus-core/files/system/var/lib/daedalus/state.jsonl"
-    export DAEDALUS_TX_DIR="$PWD/daedalus-core/files/system/var/lib/daedalus/tx"
-    argv=$(daedalus-core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
+    export DAEDALUS_STATE_PATH="$DAEDALUS_REPO_ROOT/files/system/var/lib/daedalus/state.jsonl"
+    export DAEDALUS_TX_DIR="$DAEDALUS_REPO_ROOT/files/system/var/lib/daedalus/tx"
+    argv=$("$DAEDALUS_REPO_ROOT/bin/daedalus-host" -dir "$DAEDALUS_PLUGDIR" \
            run-plugin daedalus.copilot -- {{args}})
     # 镜像 wrapper(`/usr/local/bin/daedalus`)用 `eval "set -- $argv"` 展开
     # $HOME;dev 模式不经 wrapper,这里手工把字面 $HOME 替换为 HOME
@@ -86,11 +86,11 @@ cli-copilot *args:
     #!/usr/bin/env bash
     set -euo pipefail
     # 共享准备:重建 demo 二进制 + 安装布局位 + 解包插件 + export 环境变量。
-    source scripts/copilot-prep.sh
+    source "{{justfile_directory()}}/scripts/copilot-prep.sh"
     prep_copilot
     # 无参时不带 `--` 尾巴 → 空 query → copilot main.ts 进 REPL;有参则透传。
     if [ -z "{{args}}" ]; then
-        argv=$(daedalus-core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
+        argv=$("$DAEDALUS_REPO_ROOT/bin/daedalus-host" -dir "$DAEDALUS_PLUGDIR" \
                run-plugin daedalus.copilot)
     else
         argv=$(daedalus-core/bin/daedalus-host -dir "$DAEDALUS_PLUGDIR" \
