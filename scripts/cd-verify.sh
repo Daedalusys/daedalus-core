@@ -16,7 +16,7 @@
 #   scripts/cd-verify.sh preflight      # 只体检(gh 登录/git 状态/分支)
 #   scripts/cd-verify.sh push           # 推分支 + 开 PR
 #   scripts/cd-verify.sh watch [run-id] # 盯 CI run,汇总各 job 结论(有 job 红则退出 1)
-#   scripts/cd-verify.sh runner         # 在靶机上装自托管 runner(需交互输 sudo 密码)
+#   scripts/cd-verify.sh runner [--dry] # 在靶机上装自托管 runner(需交互输 sudo 密码;--dry 只体检)
 #   scripts/cd-verify.sh p1             # 触发出货档 workflow_dispatch(真 KVM 引导)
 #   scripts/cd-verify.sh evidence       # 下载最近一次 P1 证据 artifact
 #   scripts/cd-verify.sh all            # preflight → push → watch → (视情况)runner/p1
@@ -189,16 +189,27 @@ cmd_watch() {
 
 # ------------------------------------------------------------------- runner ---
 cmd_runner() {
-    say "在靶机 $TARGET 上装自托管 runner"
+    local dry=0
+    [ "${1:-}" = "--dry" ] && dry=1
+    say "在靶机 $TARGET 上装自托管 runner${dry:+（干跑:只体检宿主能力）}"
     assert_auth
-    info "取一次性注册 token"
-    local token
-    token="$(gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token)"
-    [ -n "$token" ] || die "取 token 失败"
 
     info "传安装脚本到靶机 /tmp/"
     scp -q "$ROOT/scripts/cd-runner-setup.sh" "$TARGET:/tmp/cd-runner-setup.sh" \
         || die "scp 失败(靶机可达?ssh 免密?)"
+
+    if [ "$dry" = 1 ]; then
+        # 干跑:不需要 token、不需要 sudo,先把宿主能力验一遍
+        ssh "$TARGET" 'bash /tmp/cd-runner-setup.sh --preflight-only' \
+            || die "靶机体检未通过(见上方输出)"
+        ok "靶机体检通过;去掉 --dry 重跑即可正式安装"
+        return 0
+    fi
+
+    info "取一次性注册 token"
+    local token
+    token="$(gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token)"
+    [ -n "$token" ] || die "取 token 失败"
 
     # token 走文件而非命令行参数,避免出现在远端 ps 里
     printf '%s' "$token" | ssh "$TARGET" 'umask 077; cat > /tmp/.daedalus-runner-token' \

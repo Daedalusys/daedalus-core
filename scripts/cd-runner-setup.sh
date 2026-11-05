@@ -14,7 +14,8 @@
 # 也可单独在靶机上跑。sudo 需要交互输密码 —— 故请用 `ssh -t` 方式执行。
 #
 # 用法(在靶机上)
-#   sudo -v                                  # 先缓存 sudo 凭据,后续步骤不必反复输
+#   bash cd-runner-setup.sh --preflight-only   # 只体检宿主能力,不装任何东西、不需 sudo
+#   sudo -v                                    # 先缓存 sudo 凭据,后续步骤不必反复输
 #   DAEDALUS_RUNNER_TOKEN=<token> bash cd-runner-setup.sh
 #   # 或从文件读(推荐,避免 token 出现在 ps 里)
 #   bash cd-runner-setup.sh --token-file /tmp/.daedalus-runner-token
@@ -51,20 +52,23 @@ warn() { printf '\033[1;33m   !! %s\033[0m\n' "$*"; }
 bad()  { printf '\033[1;31m   XX %s\033[0m\n' "$*" >&2; }
 
 TOKEN=""
+PREFLIGHT_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --token-file) TOKEN_FILE="${2:-}"; shift 2 ;;
         --token)      TOKEN="${2:-}"; shift 2 ;;
+        --preflight-only) PREFLIGHT_ONLY=1; shift ;;
         -h|--help)    sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "未知参数: $1" >&2; exit 2 ;;
     esac
 done
+# token 先读进来但不立刻判空:靶机体检 / sudo / 装包都不需要它,
+# 干跑(不带 token)应当先把宿主能力验完,而不是第一步就报「缺 token」。
 if [ -z "$TOKEN" ] && [ -r "$TOKEN_FILE" ]; then
     TOKEN="$(cat "$TOKEN_FILE")"
     # token 是一次性的,读完即焚
     shred -u "$TOKEN_FILE" 2>/dev/null || rm -f "$TOKEN_FILE"
 fi
-[ -n "$TOKEN" ] || { bad "缺注册 token(用 --token-file 或 DAEDALUS_RUNNER_TOKEN 提供)"; exit 2; }
 
 # --------------------------------------------------------------- 前置体检 ---
 say "Phase 0 · 靶机体检"
@@ -83,6 +87,11 @@ ok "CPU 支持 x86-64-v3($(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | 
 avail_gb="$(df -BG --output=avail "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')"
 [ "${avail_gb:-0}" -ge 40 ] || { bad "家目录可用空间 ${avail_gb:-?} GB < 40 GB(qcow2 + podman 解包不够)"; exit 2; }
 ok "家目录可用 ${avail_gb} GB"
+
+if [ "$PREFLIGHT_ONLY" = 1 ]; then
+    say "只体检模式,停止(不装任何东西、不需要 sudo)"
+    exit 0
+fi
 
 # --------------------------------------------------------------- sudo 凭据 ---
 say "Phase 1 · sudo 与免密"
@@ -121,6 +130,7 @@ command -v bootc >/dev/null 2>&1 && ok "bootc 就位(P2 的 bootc 换部署验�
 
 # ------------------------------------------------------------------ runner ---
 say "Phase 3 · 安装 runner"
+[ -n "$TOKEN" ] || { bad "缺注册 token(用 --token-file 或 --token 提供);前置体检已通过,补 token 后重跑即可"; exit 2; }
 if [ -x "$RUNNER_DIR/config.sh" ]; then
     ok "复用已存在的 runner 安装目录 $RUNNER_DIR"
 else
