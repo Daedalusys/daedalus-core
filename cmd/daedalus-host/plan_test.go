@@ -254,3 +254,77 @@ func TestPlanRunPersistenceRoundTrip(t *testing.T) {
 		t.Errorf("落盘/读回不一致:\n submitted %+v\n from disk %+v", submitted, fromDisk)
 	}
 }
+
+// TestPlanAdvance_RotationTolerantPending 钉住 node_id 轮换后的续跑判定:
+// 结果的 node_id 可能已经被 re-register 换成新值,认机器必须看 intent_id 里的
+// machine_id;否则已成功的机器会被当成待跑而被重跑,并因旧 node_id 已从 registry
+// 摘掉而整个 advance 失败(退出 1)。
+func TestPlanAdvance_RotationTolerantPending(t *testing.T) {
+	root := setupFleetCLI(t)
+	// 待跑的那台必须在 registry 里(真实流程里登记过);轮换过的 n1 已不在。
+	seedNode(t, testNodeRow("n2", objectmodel.SupportLevelSupported))
+	plan := testPlan(t, "p-8", []objectmodel.Machine{testMachine("n1"), testMachine("n2")},
+		[]objectmodel.Intent{lowIntent()}, 1)
+	seedPlanRecord(t, root, planRecord{Plan: plan, Run: planStatusOutput{
+		PlanID: "p-8", Status: string(objectmodel.PlanStatusDirty), MaxRisk: string(objectmodel.RiskClassLow),
+		Results: []planResult{
+			// n1 已成功,但 node_id 是轮换后的新值。
+			{NodeID: "n1-new", IntentID: "p-8/n1/0", Outcome: "success", Result: "success", TxID: "tx-1"},
+			// n2 从未成功 → 待跑(测试环境无可连 agent,必然失败)。
+			{NodeID: "n2", IntentID: "p-8/n2/0", Outcome: "persistent", Result: "persistent_failure", Message: "boom"},
+		},
+	}})
+
+	code, out, errOut := runCapture(t, "plan", "advance", "p-8", "--force")
+	if code != exitOK {
+		t.Fatalf("退出码 = %d, want 0(stderr=%s)", code, errOut)
+	}
+	got := decodePlanStatus(t, out)
+	seen := 0
+	for _, r := range got.Results {
+		if strings.HasSuffix(r.IntentID, "/n1/0") {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Errorf("n1 的结果数 = %d, want 1(轮换后不得被当成待跑而重跑)", seen)
+	}
+}
+
+// TestPlanAdvance_DoesNotRerunPartiallySucceededMachine 钉住"不重复应用":
+// 一台机部分成功时不整机重跑(objectmodel.Plan 的 intents 作用于所有目标机,
+// 整机重跑会把已成功的 intent 再应用一遍并产生重复 intent_id);它保持 dirty,
+// 等人在控制面显式 skip 或本地 rollback。
+func TestPlanAdvance_DoesNotRerunPartiallySucceededMachine(t *testing.T) {
+	root := setupFleetCLI(t)
+	intents := []objectmodel.Intent{
+		lowIntent(),
+		{Kind: objectmodel.KindService, Target: "nginx.service", RiskClass: objectmodel.RiskClassLow},
+	}
+	plan := testPlan(t, "p-9", []objectmodel.Machine{testMachine("n1")}, intents, 1)
+	seedPlanRecord(t, root, planRecord{Plan: plan, Run: planStatusOutput{
+		PlanID: "p-9", Status: string(objectmodel.PlanStatusDirty), MaxRisk: string(objectmodel.RiskClassLow),
+		Results: []planResult{
+			{NodeID: "n1", IntentID: "p-9/n1/0", Outcome: "success", Result: "success", TxID: "tx-a"},
+			{NodeID: "n1", IntentID: "p-9/n1/1", Outcome: "persistent", Result: "persistent_failure", Message: "boom"},
+		},
+	}})
+
+	code, out, errOut := runCapture(t, "plan", "advance", "p-9", "--force")
+	if code != exitOK {
+		t.Fatalf("退出码 = %d, want 0(stderr=%s)", code, errOut)
+	}
+	got := decodePlanStatus(t, out)
+	first := 0
+	for _, r := range got.Results {
+		if r.IntentID == "p-9/n1/0" {
+			first++
+		}
+	}
+	if first != 1 {
+		t.Errorf("p-9/n1/0 的结果数 = %d, want 1(已成功的 intent 不得被再应用一次)", first)
+	}
+	if got.Status != string(objectmodel.PlanStatusDirty) {
+		t.Errorf("status = %q, want dirty(半成功未被接受,不能报 complete)", got.Status)
+	}
+}

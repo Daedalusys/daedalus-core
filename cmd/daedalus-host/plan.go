@@ -284,7 +284,6 @@ func cmdPlanAdvance(stdout, stderr io.Writer, args []string) int {
 			fmt.Fprintf(stderr, "daedalus-host plan advance: --skip %s 不在该 Plan 的目标机里\n", skip)
 			return exitUsage
 		}
-		markSkipped(&merged, skip)
 	}
 	merged.Results = markSkippedResults(merged.Results, skip)
 
@@ -294,7 +293,9 @@ func cmdPlanAdvance(stdout, stderr io.Writer, args []string) int {
 	}
 
 	if len(pending) == 0 {
-		merged.Status = string(objectmodel.PlanStatusComplete)
+		if planAllSettled(prev.Plan, merged.Results) {
+			merged.Status = string(objectmodel.PlanStatusComplete)
+		}
 		merged.Batches = []fleet.Batch{}
 		merged.Recovery = recoveryFor(merged.Status, merged.Results)
 	} else {
@@ -320,7 +321,12 @@ func cmdPlanAdvance(stdout, stderr io.Writer, args []string) int {
 			return exitRuntime
 		}
 		nextOut := renderRun(run)
-		merged.Status = nextOut.Status
+		// 子跑干净且整张 Plan 都收尾了才算 complete;仍有半成功/未跑的机器就还是 dirty。
+		if nextOut.Status == string(objectmodel.PlanStatusComplete) && planAllSettled(prev.Plan, append(merged.Results, nextOut.Results...)) {
+			merged.Status = string(objectmodel.PlanStatusComplete)
+		} else {
+			merged.Status = string(objectmodel.PlanStatusDirty)
+		}
 		merged.Batches = nextOut.Batches
 		merged.Results = append(merged.Results, nextOut.Results...)
 		merged.Recovery = recoveryFor(merged.Status, merged.Results)
@@ -330,6 +336,8 @@ func cmdPlanAdvance(stdout, stderr io.Writer, args []string) int {
 		fmt.Fprintln(stderr, "plan advance: 落运行记录失败:", err)
 		return exitRuntime
 	}
+	merged.Recovery = recoveryFor(merged.Status, merged.Results)
+	merged.normalize()
 	fmt.Fprintln(stdout, mustJSON(merged))
 	controlPlaneAudit("host_plan_advance", map[string]string{"plan_id": planID, "status": merged.Status}, exitOK)
 	return exitOK
@@ -415,26 +423,59 @@ func markSkippedResults(results []planResult, nodeID string) []planResult {
 	return out
 }
 
-// markSkipped 是 markSkippedResults 的就地版本(作用于整个运行记录)。
-func markSkipped(out *planStatusOutput, nodeID string) {
-	out.Results = markSkippedResults(out.Results, nodeID)
+// machineOfIntentID 取 intent_id(<plan_id>/<machine_id>/<intent 下标>)里的机器段。
+// 用 intent_id 而非结果的 node_id 认机器:node_id 会在 re-register 后轮换,
+// 而 intent_id 里的 machine_id 恒为 Plan 里的原值。
+func machineOfIntentID(intentID string) string {
+	parts := strings.Split(intentID, "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[len(parts)-2]
 }
 
-// planPendingMachines 返回还没有全部成功的目标机(保持 Plan 里的原顺序)。
+// planPendingMachines 返回**还没有任何成功落地**的目标机(保持 Plan 原顺序)。
+//
+// 已经部分成功的机器**不进**待跑集:objectmodel.Plan 的 intents 作用于所有目标机,
+// 无法只重跑其中一条,整机重跑会把已成功的 intent 再应用一遍(重复副作用 +
+// 重复 intent_id)。这类机器要由人显式 skip 或本地 rollback 收尾。
 func planPendingMachines(plan objectmodel.Plan, results []planResult) []objectmodel.Machine {
 	successBy := make(map[string]int, len(plan.Machines))
 	for _, r := range results {
 		if r.Outcome == fleet.OutcomeN1.String() {
-			successBy[r.NodeID]++
+			successBy[machineOfIntentID(r.IntentID)]++
 		}
 	}
 	out := []objectmodel.Machine{}
 	for _, m := range plan.Machines {
-		if successBy[m.MachineID] < len(plan.Intents) {
+		if successBy[m.MachineID] == 0 {
 			out = append(out, m)
 		}
 	}
 	return out
+}
+
+// planAllSettled 报告每台目标机都"已收尾":全部 intent 成功,或该机的结果已被
+// 人显式接受(skipped-by-human)。有任何一台既没跑完也没被接受 → 还没收尾。
+func planAllSettled(plan objectmodel.Plan, results []planResult) bool {
+	successes := make(map[string]int, len(plan.Machines))
+	accepted := make(map[string]bool, len(plan.Machines))
+	for _, r := range results {
+		machine := machineOfIntentID(r.IntentID)
+		if r.Outcome == fleet.OutcomeN1.String() {
+			successes[machine]++
+		}
+		if strings.HasPrefix(r.Message, "skipped-by-human:") {
+			accepted[machine] = true
+		}
+	}
+	for _, m := range plan.Machines {
+		if successes[m.MachineID] >= len(plan.Intents) || accepted[m.MachineID] {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // removeMachine 从机器列表里摘掉一台(不存在则原样返回)。

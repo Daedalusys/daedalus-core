@@ -112,3 +112,33 @@ func TestRegisterNode_RejectsBadKind(t *testing.T) {
 		t.Fatal("空 agent_id 必须被拒")
 	}
 }
+
+// TestRegisterNode_NormalizesUnspecifiedSnapshotCapability 钉住 proto 的显式约定:
+// Register 响应没带 snapshot 能力(UNSPECIFIED)时按 NONE 落库——留成 UNSPECIFIED
+// 会让调度器的 RF1 前置拒绝失效("没探测到"被当成"有回滚点")。
+func TestRegisterNode_NormalizesUnspecifiedSnapshotCapability(t *testing.T) {
+	pki := newTestPKI(t)
+	lis := bufconn.Listen(1024 * 1024)
+	defer lis.Close()
+	// 零值 = UNSPECIFIED:agent 没有填这个字段。
+	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsServerConfig(pki, certPoolForTest(t, pki.caPath)))))
+	agentv1.RegisterAgentServiceServer(srv, registerStub{nodeID: "n1"})
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	defer overrideDialForBufconn(t, lis)()
+
+	node, err := RegisterNode(context.Background(), DialConfig{
+		Addr:       "passthrough:///bufnet",
+		ServerName: pki.serverName,
+		CAPath:     pki.caPath,
+		CertPath:   pki.clientCertPath,
+		KeyPath:    pki.clientKeyPath,
+	}, RegisterOptions{AgentID: "a1", Kind: objectmodel.MachineKindAgent})
+	if err != nil {
+		t.Fatalf("RegisterNode: %v", err)
+	}
+	if node.SnapshotCap != "SNAPSHOT_CAPABILITY_NONE" {
+		t.Errorf("SnapshotCap = %q, want SNAPSHOT_CAPABILITY_NONE(proto 要求 UNSPECIFIED 按 none 处理)", node.SnapshotCap)
+	}
+}

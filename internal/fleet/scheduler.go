@@ -31,7 +31,30 @@ const (
 	defaultCallTimeout = 60 * time.Second
 	// snapshotCapNone 是 proto 的"无回滚点"枚举名(节点行里以字符串存放)。
 	snapshotCapNone = "SNAPSHOT_CAPABILITY_NONE"
+	// snapshotCapUnspecified 是 proto3 零值。proto 明确要求接收方按 NONE 处理
+	// ("不应该被发出;收到时按 UNSPECIFIED 视为 none")。
+	snapshotCapUnspecified = "SNAPSHOT_CAPABILITY_UNSPECIFIED"
 )
+
+// nodeHasRollbackPoint 报告节点是否**确证**有回滚点。只有明确的枚举值才算;空值 /
+// UNSPECIFIED / NONE 一律视为没有 —— "不知道有没有回滚点"必须按"没有"处理,
+// 否则 RF1 的前置拒绝会被"信息缺失"绕过(fail-closed 的反面)。
+func nodeHasRollbackPoint(n Node) bool {
+	switch n.SnapshotCap {
+	case "", snapshotCapNone, snapshotCapUnspecified:
+		return false
+	}
+	return true
+}
+
+// normalizeSnapshotCap 把 proto 枚举归一成控制面使用的字符串:UNSPECIFIED 按
+// NONE 落库(proto 的显式要求),避免"没探测到"被当成"有回滚点"。
+func normalizeSnapshotCap(cap agentv1.SnapshotCapability) string {
+	if cap == agentv1.SnapshotCapability_SNAPSHOT_CAPABILITY_UNSPECIFIED {
+		return snapshotCapNone
+	}
+	return cap.String()
+}
 
 // Outcome 是单次 intent 落地的结局分桶:N1 成功 / N2 瞬时失败 / N3 持久失败。
 type Outcome int
@@ -234,13 +257,13 @@ func (s *Scheduler) Run(ctx context.Context, plan objectmodel.Plan) (*PlanRun, e
 func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
 	risk := s.effectiveRisk(t.Intent)
 
-	// 高危 intent 打到没有回滚点的节点:连 RPC 都不发。
-	if risk == objectmodel.RiskClassHigh && t.Node.SnapshotCap == snapshotCapNone {
+	// 高危 intent 打到没有(或未确证有)回滚点的节点:连 RPC 都不发。
+	if risk == objectmodel.RiskClassHigh && !nodeHasRollbackPoint(t.Node) {
 		return s.fill(t, StepResult{
 			Outcome: OutcomeN3,
 			Result:  agentv1.ApplyIntentResult_APPLY_INTENT_RESULT_REFUSED_SNAPSHOT_CAPABILITY_NONE,
-			Message: fmt.Sprintf("节点 %s 无回滚点(snapshot capability=%s):high-risk intent 拒绝下发——无回滚点 ≠ 可继续",
-				t.Node.NodeID, snapshotCapNone),
+			Message: fmt.Sprintf("节点 %s 无回滚点(snapshot capability=%s/%q):high-risk intent 拒绝下发——无回滚点 ≠ 可继续",
+				t.Node.NodeID, snapshotCapNone, t.Node.SnapshotCap),
 		})
 	}
 
@@ -435,9 +458,8 @@ func (s *Scheduler) dialRegister(ctx context.Context, t DispatchTarget) (Node, e
 
 	fresh := t.Node
 	fresh.NodeID = resp.GetNodeId()
-	if cap := resp.GetSnapshotCapability(); cap != agentv1.SnapshotCapability_SNAPSHOT_CAPABILITY_UNSPECIFIED {
-		fresh.SnapshotCap = cap.String()
-	}
+	// 能力以**本次**响应为准(不给旧值留乐观残留):响应没带 → UNSPECIFIED → 按 NONE 落库。
+	fresh.SnapshotCap = normalizeSnapshotCap(resp.GetSnapshotCapability())
 	return fresh, nil
 }
 

@@ -22,6 +22,8 @@ import (
 const (
 	snapBtrfs = "SNAPSHOT_CAPABILITY_BTRFS_SUBVOLUME"
 	snapNone  = "SNAPSHOT_CAPABILITY_NONE"
+	// snapUnspecifiedForTest 是 proto3 零值(agent 没探测到 / 没填)的枚举名。
+	snapUnspecifiedForTest = "SNAPSHOT_CAPABILITY_UNSPECIFIED"
 )
 
 // fakeDispatcher 按脚本回应 Dispatch,并记录每次调用的目标;fake.reply 的 n
@@ -456,5 +458,50 @@ func TestScheduler_MarksSeenAroundDispatch(t *testing.T) {
 	}
 	if n.LastSeenUnix != 1700000123 {
 		t.Errorf("LastSeenUnix = %d, want 1700000123", n.LastSeenUnix)
+	}
+}
+
+// TestScheduler_RefusesHighRiskWhenSnapshotCapabilityUnknown 钉住 RF1 的 fail-closed
+// 边界:节点没有**确证**有回滚点时(空值 / proto 零值 UNSPECIFIED / NONE),高危
+// intent 一律不发 RPC —— "不知道有没有回滚点"必须按"没有"处理。
+func TestScheduler_RefusesHighRiskWhenSnapshotCapabilityUnknown(t *testing.T) {
+	for _, cap := range []string{"", snapUnspecifiedForTest, snapNone} {
+		t.Run("cap="+cap, func(t *testing.T) {
+			r := newRegistryWithNodes(t, nodeWithSnapshot("n1", cap))
+			plan := planOf(t, []objectmodel.Intent{highIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+			fake := &fakeDispatcher{}
+			s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+
+			run, err := s.Run(context.Background(), plan)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(fake.calls) != 0 {
+				t.Errorf("回滚点未确证不得发 RPC,Dispatch 被调 %d 次", len(fake.calls))
+			}
+			if run.Status != objectmodel.PlanStatusDirty {
+				t.Errorf("Status = %q, want dirty", run.Status)
+			}
+		})
+	}
+}
+
+// TestScheduler_LowRiskStillRunsOnUnknownSnapshotCapability 是上面那条的反面控制组:
+// 能力未知只挡高危,不该把低危也一起挡死(否则整张 Plan 无法推进)。
+func TestScheduler_LowRiskStillRunsOnUnknownSnapshotCapability(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapUnspecifiedForTest))
+	plan := planOf(t, []objectmodel.Intent{lowIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fake.calls) != 1 {
+		t.Errorf("低危 intent 应正常下发,Dispatch 次数 = %d, want 1", len(fake.calls))
+	}
+	if run.Status != objectmodel.PlanStatusComplete {
+		t.Errorf("Status = %q, want complete", run.Status)
 	}
 }

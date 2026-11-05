@@ -121,8 +121,6 @@ func (r *Registry) List() ([]Node, error) {
 	return all, nil
 }
 
-// Delete 摘掉一个节点的行(node_id 轮换后旧的行必须消失,否则同一台机会在
-// registry 里挂两条)。节点不存在时报错——静默成功会掩盖轮换的 bug。
 // Delete 摘掉一个节点的行(node_id 轮换后旧行必须消失,否则同一台机会在
 // registry 里留下两条)。节点不存在时报错——静默成功会掩盖轮换的 bug。
 func (r *Registry) Delete(nodeID string) error {

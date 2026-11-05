@@ -69,7 +69,7 @@ func RegisterNode(ctx context.Context, cfg DialConfig, opts RegisterOptions) (No
 		Distro:           opts.Distro,
 		DistroVersion:    opts.DistroVersion,
 		Hostname:         opts.Hostname,
-		SnapshotCap:      resp.GetSnapshotCapability().String(),
+		SnapshotCap:      normalizeSnapshotCap(resp.GetSnapshotCapability()),
 		SupportLevel:     level,
 		RegisteredAtUnix: now,
 		LastSeenUnix:     now,
