@@ -121,6 +121,30 @@ func (r *Registry) List() ([]Node, error) {
 	return all, nil
 }
 
+// Delete 摘掉一个节点的行(node_id 轮换后旧的行必须消失,否则同一台机会在
+// registry 里挂两条)。节点不存在时报错——静默成功会掩盖轮换的 bug。
+// Delete 摘掉一个节点的行(node_id 轮换后旧行必须消失,否则同一台机会在
+// registry 里留下两条)。节点不存在时报错——静默成功会掩盖轮换的 bug。
+func (r *Registry) Delete(nodeID string) error {
+	all, err := r.load()
+	if err != nil {
+		return err
+	}
+	out := make([]Node, 0, len(all))
+	found := false
+	for _, n := range all {
+		if n.NodeID == nodeID {
+			found = true
+			continue
+		}
+		out = append(out, n)
+	}
+	if !found {
+		return fmt.Errorf("fleet: 节点 %s 不存在,无法删除", nodeID)
+	}
+	return r.store(out)
+}
+
 // MarkSeen 更新节点的 last_seen_unix;节点未注册时报错(不凭空造行)。
 func (r *Registry) MarkSeen(nodeID string, unix int64) error {
 	all, err := r.load()
