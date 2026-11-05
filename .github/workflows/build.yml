@@ -56,6 +56,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # 不把 GITHUB_TOKEN 持久化进工作区的 .git/config:本 workflow 没有任何
+          # 一步靠 .git/config 的 http.extraheader 取凭据(gh / podman-login /
+          # goreleaser 都从 env 显式取 token),默认的 persist-credentials=true
+          # 只是徒留一份在整个 job 生命周期内存活的凭据。本文件其余 checkout 同此。
+          persist-credentials: false
           # 主仓检出到 daedalus-core 子目录:go.mod 的 replace => ../daedalus-sdk
           # 与 tests/deno 的相对引用经父目录解析到 workspace 下的兄弟仓;把主仓
           # 检出到子目录是唯一不逃出 GITHUB_WORKSPACE 的合法布局。
@@ -86,6 +91,7 @@ jobs:
         # ref 为空(go.mod 为占位版本)时 checkout SDK 默认分支。
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
           ref: ${{ steps.sdk-version.outputs.sdk_version != '' && format('v{0}', steps.sdk-version.outputs.sdk_version) || '' }}
@@ -98,6 +104,7 @@ jobs:
         # 走默认分支:manifest 唯一事实源就是插件仓源码,镜像里的 zip 是另一回事。
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: Daedalusys/daedalus-plugins
           path: daedalus-plugins
 
@@ -108,6 +115,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
+          # 本 job 由 pull_request 触发 → 显式关掉 module cache。cache 按分支
+          # 作用域共享:基础分支能读到 PR 分支写入的条目(实测本仓已存在
+          # refs/pull/64/merge 写入的 setup-go 条目),那正是 cache 投毒的读侧。
+          cache: false
           cache-dependency-path: daedalus-core/go.sum
 
       - name: Set Up Deno Runtime
@@ -272,6 +283,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # 同 test job:主仓检出到 daedalus-core 子目录,不逃出 GITHUB_WORKSPACE。
           path: daedalus-core
 
@@ -294,6 +306,7 @@ jobs:
         # (go.mod 为占位版本)时 checkout 默认分支。
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
           ref: ${{ steps.sdk-version.outputs.sdk_version != '' && format('v{0}', steps.sdk-version.outputs.sdk_version) || '' }}
@@ -318,6 +331,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
+          # 同 test job:本文件的 workflow 由 pull_request 触发,故文件内所有
+          # setup-go 一律 cache: false(见 test job 处的说明)。
+          cache: false
           cache-dependency-path: daedalus-core/go.sum
 
       - name: Prepare justfile.local (gitignored stub for import)
