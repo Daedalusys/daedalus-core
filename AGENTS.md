@@ -380,6 +380,12 @@ podman run --rm localhost/daedalus-os:latest /usr/local/bin/daedalus-host list  
 podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release
 ```
 
+# CI 门禁(本地等价入口;CI 里跑在 core test job)
+# workflow 凭据与缓存不变式由 tests/ci/workflow-hygiene.sh 在 core test job 集中守门(四仓 workflow 文件)
+bash tests/ci/workflow-hygiene.sh          # 显式 persist-credentials / 显式 cache / uses 钉 40 位 SHA / 无 pull_request_target
+bash tests/ci/credential-surface-check.sh  # 凭据留存面取证(发布产物的 .git/ 与 token 字样、Actions cache 条目形状)
+bash tests/build/image-lint.sh             # 镜像最终态断言(bootc lint + VARIANT + 宿主 CLI + daedalus-smoke;需 podman + 已构建镜像)
+
 ## NOTES
 - 本仓(`daedalus-core`)、`../daedalus-sdk/`、`../daedalus-plugins/` 平级 clone 是 dev 桥的唯一拓扑;`go.work` 不入库,模板 `go.work.example` 入库 — clone 后 `cp go.work.example go.work`,跑 `just verify-dev-layout` 守门。
 - 模板除 `use` 全部 cap 外,还对 SDK 的 `v0.0.0` 与 `v0.0.0-00010101000000-000000000000` 各钉一行 `replace => ../daedalus-sdk`:workspace 级 replace 覆盖各 cap `go.mod` 里面向插件仓 CI 的 `../daedalus-sdk`,否则 `just go-test` 撞 "conflicting replacements"。本地跑插件测试走该 workspace(`go test github.com/Daedalusys/daedalus-plugins/<cap>/...`),不需要符号链接桥。
