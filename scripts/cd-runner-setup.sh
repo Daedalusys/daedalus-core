@@ -154,9 +154,14 @@ say "Phase 3 · 安装 runner"
 # 旧装法(Fedora SELinux Enforcing)会把 svc 打成 203/EXEC:systemd 无法执行
 # ~ 里的文件。所以目录固定在 /opt,并在解包后 restorecon 把标签摆正。
 UNIT_NAME="actions.runner.${REPO//\//-}.${RUNNER_NAME}.service"
-if systemctl list-unit-files "$UNIT_NAME" --no-legend 2>/dev/null | grep -q .; then
-    info "存在旧的服务单元 $UNIT_NAME,先停掉"
+UNIT_PATH="/etc/systemd/system/$UNIT_NAME"
+# 上一轮失败会在 /etc/systemd/system 留下 unit 文件,而 svc.sh install 拒绝覆盖
+# 已存在的文件(Failed: error: exists ...)。只 disable 不够,必须删掉文件再 daemon-reload。
+if [ -e "$UNIT_PATH" ] || systemctl list-unit-files "$UNIT_NAME" --no-legend 2>/dev/null | grep -q .; then
+    info "存在旧的服务单元 $UNIT_NAME,先停用并删除"
     sudo systemctl disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
+    sudo rm -f "$UNIT_PATH"
+    sudo systemctl daemon-reload 2>/dev/null || true
 fi
 
 if [ ! -x "$RUNNER_DIR/config.sh" ]; then
@@ -206,7 +211,13 @@ cd "$RUNNER_DIR"
 ok "runner 已注册: $RUNNER_NAME(标签 $RUNNER_LABELS)"
 
 say "Phase 4 · 装成 systemd 服务"
-sudo ./svc.sh install "$(id -un)" || { bad "svc.sh install 失败"; exit 2; }
+if ! sudo ./svc.sh install "$(id -un)"; then
+    # 再兜一层:svc.sh 对已存在的 unit 文件是硬失败,清掉再来一次
+    warn "svc.sh install 失败,清掉旧 unit 文件后重试"
+    sudo rm -f "$UNIT_PATH"
+    sudo systemctl daemon-reload 2>/dev/null || true
+    sudo ./svc.sh install "$(id -un)" || { bad "svc.sh install 失败"; exit 2; }
+fi
 sudo ./svc.sh start   || { bad "svc.sh start 失败"; exit 2; }
 sleep 3
 # 不能只看 svc.sh 的退出码:它在服务实际 failed 时也可能返回 0(本轮就踩到过,
