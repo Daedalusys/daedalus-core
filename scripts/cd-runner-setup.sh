@@ -192,24 +192,33 @@ if [ ! -x "$RUNNER_DIR/config.sh" ]; then
     [ "$got" = 1 ] || { bad "runner 下载失败(所有源都不通);可试 RUNNER_MIRROR=<你的镜像> 重跑"; exit 2; }
     tar -xzf "$tarball" -C "$RUNNER_DIR" || { bad "解压 runner 失败"; exit 2; }
     rm -f "$tarball"
-    # 解出来的文件会带默认标签;显式 restorecon 一次,避免 203/EXEC。
-    sudo restorecon -R "$RUNNER_DIR" 2>/dev/null || warn "restorecon 不可用,若 svc 仍 203/EXEC 需手工处理标签"
     ok "runner v${RUNNER_VER} 已解压到 $RUNNER_DIR"
 else
     ok "复用已存在的 runner 安装目录 $RUNNER_DIR"
 fi
+# 新旧目录都 restorecon 一次:复用旧目录时标签可能仍是 home 类,SELinux 下会
+# 让 svc 以 203/EXEC 失败(本脚本第一版就栽在这)。restorecon 幂等,代价可忽略。
+sudo restorecon -R "$RUNNER_DIR" 2>/dev/null || warn "restorecon 不可用,若 svc 仍 203/EXEC 需手工处理标签"
 
 cd "$RUNNER_DIR"
-./config.sh \
-    --url "https://github.com/$REPO" \
-    --token "$TOKEN" \
-    --name "$RUNNER_NAME" \
-    --labels "$RUNNER_LABELS" \
-    --unattended \
-    --replace \
-    --work _work \
-    || { bad "runner 注册失败(标签重复?token 过期?)"; exit 2; }
-ok "runner 已注册: $RUNNER_NAME(标签 $RUNNER_LABELS)"
+# 已经配置过(.runner 存在)就跳过注册:重跑 config.sh 会硬失败
+# "Cannot configure the runner because it is already configured"。想重注册请先
+# 手动 ./config.sh remove。/opt 目录跨轮次复用,这一步让重跑变成幂等。
+if [ -f .runner ]; then
+    ok "runner 已配置(.runner 存在),跳过注册;如需换名/换标签请先 ./config.sh remove"
+else
+    [ -n "$TOKEN" ] || { bad "缺注册 token(用 --token-file 或 --token 提供);本轮未配置过 runner,必须给"; exit 2; }
+    ./config.sh \
+        --url "https://github.com/$REPO" \
+        --token "$TOKEN" \
+        --name "$RUNNER_NAME" \
+        --labels "$RUNNER_LABELS" \
+        --unattended \
+        --replace \
+        --work _work \
+        || { bad "runner 注册失败(标签重复?token 过期?)"; exit 2; }
+    ok "runner 已注册: $RUNNER_NAME(标签 $RUNNER_LABELS)"
+fi
 
 say "Phase 4 · 装成 systemd 服务"
 if ! sudo ./svc.sh install "$(id -un)"; then
