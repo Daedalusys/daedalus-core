@@ -35,7 +35,8 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 │   └── daedalus-plugin-pack/   #   zip 打包器 (checksums 注入 + manifest 规范化自摘要 + zip-slip 防线)
 ├── internal/                  # ★ 契约包 (核心 runtime 共享;其余安全包已迁 daedalus-sdk)
 │   ├── controller/             #   controller 共享包 (决策 25 契约缝锁定)
-│   └── tx/                     #   tx 共享包 (D-1 裁决的 ctx 侧路透传;适配器注册表)
+│   ├── tx/                     #   tx 共享包 (D-1 裁决的 ctx 侧路透传;适配器注册表)
+│   └── fleet/                  #   控制面 fleet 客户端 / node registry / 失败分桶调度器
 ├── plugin/                    # ★ 官方预置插件层 (源码侧; 仅 copilot 留本仓)
 │   ├── copilot/                #   Deno 源码 + daedalus.plugin.json (命令顾问 CLI)
 │   └── fs/ shell/ pkg/ sysinfo/ service/ blueprint/ dupe/   # ★ 迁移期残留占位 (主源在 ../daedalus-plugins/<cap>/)
@@ -96,7 +97,7 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 | `audit` | Go pkg | `../daedalus-sdk/audit/` | 哈希链审计库, Python 金样字节级兼容 (三种序列化模式) |
 | `objectmodel` | Go pkg | `../daedalus-sdk/objectmodel/` | 对象模型 schema 单一事实源;Kind 封闭枚举 7 类 + spec/status 信封 `Object` |
 | `cmd/daedalus-{fs,shell,pkg,sysinfo,service,blueprint,dupe,diskclean,organize,trace,proc}` | Go binaries | `../daedalus-plugins/{fs,shell,pkg,sysinfo,service,blueprint,dupe,diskclean,organize,trace,proc}/cmd/` | 11 个 MCP stdio 能力服务器 (镜像态 = 插件内 `bin/`) |
-| `policy.toml` | TOML | `files/system/opt/daedalus/shared/policy.toml` | 安全策略单一事实源 ([shell]/[fs]/[audit]/[objectmodel]/[blueprints]/[confirmation]/[diskclean]) |
+| `policy.toml` | TOML | `files/system/opt/daedalus/shared/policy.toml` | 安全策略单一事实源 ([shell]/[fs]/[audit]/[objectmodel]/[blueprints]/[confirmation]/[diskclean]/[ownership]/[fleet]) |
 | `daedalus.plugin.json` | manifest | `plugin/copilot/` + `../daedalus-plugins/<cap>/` | 插件声明 (id/type/runtime/executable/entrypoint/permissions/tools/resources/i18n) |
 | `policy.ts` | TS module | `plugin/copilot/policy.ts` | Proposal schema validation & frozen shellpolicy copy |
 | `audit.ts` | TS module | `plugin/copilot/audit.ts` | Hash-chained audit logging via daedalus-audit Go CLI |
