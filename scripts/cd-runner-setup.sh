@@ -115,20 +115,21 @@ fi
 # --------------------------------------------------------------- sudo 凭据 ---
 say "Phase 1 · sudo 与免密"
 sudo -v || { bad "sudo 不可用(本脚本需要 sudo 装包与装 systemd 服务)"; exit 2; }
-if sudo -n true 2>/dev/null; then
-    ok "sudo 已免密"
+if [ "$GRANT_NOPASSWD" = "1" ]; then
+    SUDOERS_FILE="/etc/sudoers.d/daedalus-runner"
+    # 无条件写入(幂等),**不能**用 `sudo -n true` 判断「是否已免密」:
+    # 上一行 sudo -v 刚把凭据缓存进本会话,那次 sudo -n 会假成功,
+    # 于是永远判定成「已免密」而从不写 drop-in —— 结果 CD job 里的非交互 sudo 失败。
+    warn "写入 $SUDOERS_FILE:$(id -un) ALL=(ALL) NOPASSWD: ALL(撤销:rm -f $SUDOERS_FILE)"
+    printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$(id -un)" | sudo tee "$SUDOERS_FILE" >/dev/null
+    sudo chmod 440 "$SUDOERS_FILE"
+    sudo -n true || { bad "免密 sudo 写入后仍不可用"; exit 2; }
+    ok "已为 $(id -un) 配置免密 sudo"
 else
-    if [ "$GRANT_NOPASSWD" = "1" ]; then
-        SUDOERS_FILE="/etc/sudoers.d/daedalus-runner"
-        warn "当前用户 $(id -un) 的 sudo 需要密码;CD job 里的 sudo 是非交互的,必须免密。"
-        warn "将写入 $SUDOERS_FILE:$(id -un) ALL=(ALL) NOPASSWD: ALL"
-        warn "撤销:rm -f $SUDOERS_FILE"
-        printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$(id -un)" | sudo tee "$SUDOERS_FILE" >/dev/null
-        sudo chmod 440 "$SUDOERS_FILE"
-        sudo -n true || { bad "免密 sudo 写入后仍不可用"; exit 2; }
-        ok "已为 $(id -un) 配置免密 sudo"
+    if sudo -n true 2>/dev/null; then
+        ok "sudo 已免密"
     else
-        warn "GRANT_NOPASSWD=0,未配置免密 sudo —— deploy-verify-kvm job 里的 sudo 会失败"
+        warn "GRANT_NOPASSWD=0 且 sudo 需密码 —— deploy-verify-kvm job 里的 sudo 会失败"
     fi
 fi
 
