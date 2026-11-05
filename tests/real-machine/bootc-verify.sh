@@ -16,6 +16,7 @@
 #   sudo ./bootc-verify.sh                     # 全流程
 #   sudo ./bootc-verify.sh --qcow2 /path/disk.qcow2    # 用已有的 qcow2,跳过下载/构建
 #   sudo ./bootc-verify.sh --only-preflight    # 只体检,不装包不动磁盘
+#   ./bootc-verify.sh --only-preflight --no-kvm   # CI 用:无 /dev/kvm 的 runner 只验架构 + v3
 #   ./bootc-verify.sh --help
 #
 # 环境变量
@@ -46,6 +47,7 @@ MEM="${VERIFY_MEM:-4096}"
 BOOT_TIMEOUT="${VERIFY_BOOT_TIMEOUT:-180}"
 QCOW2=""
 ONLY_PREFLIGHT=0
+NO_KVM=0
 
 c_say()  { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 c_info() { printf '   %s\n' "$*"; }
@@ -74,6 +76,7 @@ while [ $# -gt 0 ]; do
         --qcow2)          QCOW2="${2:-}"; shift 2 ;;
         --qcow2=*)        QCOW2="${1#*=}"; shift ;;
         --only-preflight) ONLY_PREFLIGHT=1; shift ;;
+        --no-kvm)         NO_KVM=1; shift ;;
         -h|--help)        usage ;;
         *) echo "未知参数: $1(用 --help)" >&2; exit 2 ;;
     esac
@@ -98,6 +101,13 @@ info(){ c_info "$*"; log "   $*"; }
 ok()  { c_ok "$*"; log "   OK $*"; }
 warn(){ c_warn "$*"; log "   !! $*"; }
 bad() { c_bad "$*"; log "   XX $*"; }
+
+# --no-kvm 只与 --only-preflight 组合有效:引导腿没有 /dev/kvm 必失败,若允许它被
+# 用来"绕过"引导检查,就等于给假绿开口子(本 plan 要消灭的形态)。
+if [ "$NO_KVM" = 1 ] && [ "$ONLY_PREFLIGHT" != 1 ]; then
+    bad "--no-kvm 只与 --only-preflight 组合有效(引导腿无 KVM 必失败)"
+    exit 2
+fi
 
 need_root() {
     [ "$(id -u)" -eq 0 ] && return 0
@@ -130,6 +140,10 @@ ok "CPU 支持 x86-64-v3($(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | 
 
 if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
     ok "/dev/kvm 可读写(硬加速可用)"
+elif [ "$NO_KVM" = 1 ]; then
+    # 显式降级:只放弃 KVM 一项,架构与 x86-64-v3 两项照验(那才是 AlmaLinux 10 的
+    # 硬要求)。引导验证腿仍需在真机上跑(本脚本无参数模式)。
+    warn "/dev/kvm 不可用(--no-kvm 显式降级):引导腿需在真机跑,本模式只验 CPU/架构"
 else
     bad "/dev/kvm 不可用;无 KVM 时 -cpu host 不可用,引导会失败"
     exit 2

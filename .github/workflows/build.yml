@@ -56,6 +56,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # 不把 GITHUB_TOKEN 持久化进工作区的 .git/config:本 workflow 没有任何
+          # 一步靠 .git/config 的 http.extraheader 取凭据(gh / podman-login /
+          # goreleaser 都从 env 显式取 token),默认的 persist-credentials=true
+          # 只是徒留一份在整个 job 生命周期内存活的凭据。本文件其余 checkout 同此。
+          persist-credentials: false
           # 主仓检出到 daedalus-core 子目录:go.mod 的 replace => ../daedalus-sdk
           # 与 tests/deno 的相对引用经父目录解析到 workspace 下的兄弟仓;把主仓
           # 检出到子目录是唯一不逃出 GITHUB_WORKSPACE 的合法布局。
@@ -86,6 +91,7 @@ jobs:
         # ref 为空(go.mod 为占位版本)时 checkout SDK 默认分支。
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
           ref: ${{ steps.sdk-version.outputs.sdk_version != '' && format('v{0}', steps.sdk-version.outputs.sdk_version) || '' }}
@@ -98,6 +104,7 @@ jobs:
         # 走默认分支:manifest 唯一事实源就是插件仓源码,镜像里的 zip 是另一回事。
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: Daedalusys/daedalus-plugins
           path: daedalus-plugins
 
@@ -108,6 +115,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
+          # 本 job 由 pull_request 触发 → 显式关掉 module cache。cache 按分支
+          # 作用域共享:基础分支能读到 PR 分支写入的条目(实测本仓已存在
+          # refs/pull/64/merge 写入的 setup-go 条目),那正是 cache 投毒的读侧。
+          cache: false
           cache-dependency-path: daedalus-core/go.sum
 
       - name: Set Up Deno Runtime
@@ -242,6 +253,44 @@ jobs:
           diff files/system/opt/daedalus/shared/policy.toml ../daedalus-sdk/policy/testdata/policy.toml
           echo "OK: 生产 policy.toml 与 SDK testdata 一致"
 
+      - name: Real-machine verifier preflight
+        # 钉住 runner 仍满足 x86-64-v3(AlmaLinux 10 glibc 硬要求)。GitHub 标准 runner 无
+        # /dev/kvm,故只降级 KVM 一项;引导验证腿仍在真机跑(bootc-verify.sh 无参数模式)。
+        shell: bash
+        working-directory: daedalus-core
+        run: bash tests/real-machine/bootc-verify.sh --only-preflight --no-kvm
+
+      - name: Checkout daedalus-agent (sibling)
+        # 第四个兄弟仓:仅下方的 workflow 凭据不变式守门需要它(该守门要读四仓的
+        # workflow 文件,而只有本 job 同时检出四个仓 —— 同 policy.toml drift 守门的选址理由)。
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: Daedalusys/daedalus-agent
+          path: daedalus-agent
+
+      - name: CI gate selftests (script self-checks)
+        # 门禁脚本自身的逻辑也要被验证:否则「改断言」这一步不可验证,脚本退化
+        # (少跑一条断言、判定函数变瞎)不会被任何东西发现。
+        # workflow-hygiene.sh 的 selftest 在它自己的步骤里跑(与真实扫描同处)。
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/build/image-lint.sh --selftest
+          bash tests/ci/credential-surface-check.sh --selftest
+
+      - name: Workflow hygiene gate (cross-repo credential invariants)
+        # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
+        # 只有本 job 同时检出四个兄弟仓(同 policy.toml drift 守门的选址理由)。
+        # 注意 SDK 的检出 ref:go.mod 是占位版本(v0.0.0)时为空 → 扫 SDK 默认分支;
+        # 一旦 go.mod 钉了真实 SDK 版本,本门禁扫的就是**那个 tag 的** workflow 内容,
+        # 即"绿"意味着"该 tag 合规"而非"SDK main 合规"。
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/ci/workflow-hygiene.sh --selftest
+          bash tests/ci/workflow-hygiene.sh
+
   # 镜像构建与发布:main 分支 / feat/* 分支 / 任何 tag / workflow_dispatch 才跑。
   # 依赖 test 通过;PR 与普通分支 push 不到此处,反馈快。
   # main 纳入的意义:PR 上的绿是合并前分支头的绿,合并后的组合此前从未被真正构建成
@@ -265,6 +314,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # 同 test job:主仓检出到 daedalus-core 子目录,不逃出 GITHUB_WORKSPACE。
           path: daedalus-core
 
@@ -287,6 +337,7 @@ jobs:
         # (go.mod 为占位版本)时 checkout 默认分支。
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
           ref: ${{ steps.sdk-version.outputs.sdk_version != '' && format('v{0}', steps.sdk-version.outputs.sdk_version) || '' }}
@@ -311,6 +362,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.x'
+          # 同 test job:本文件的 workflow 由 pull_request 触发,故文件内所有
+          # setup-go 一律 cache: false(见 test job 处的说明)。
+          cache: false
           cache-dependency-path: daedalus-core/go.sum
 
       - name: Prepare justfile.local (gitignored stub for import)
@@ -360,18 +414,22 @@ jobs:
           done
 
       - name: Install core binaries to image tree
-        # files/system/usr/local/bin/ 下的 daedalus-{host,audit,tx,shell,service} 全是
-        # just plugin-pack 构建产物、不入库,故 CI 在此自行落位:host/audit/tx 取 core
-        # 新鲜构建产物;shell/service 取上方 release zip 解包态(files/system/opt/
+        # files/system/usr/local/bin/ 下的 daedalus-{host,audit,tx,smoke,shell,service}
+        # 全是 just plugin-pack 构建产物、不入库,故 CI 在此自行落位:host/audit/tx/smoke
+        # 取 core 新鲜构建产物;shell/service 取上方 release zip 解包态(files/system/opt/
         # daedalus/plugins/daedalus.{shell,service}/bin/),与插件安装态逐字节同源。
         # 76-daedalus-plugin-gen.sh 与 copilot wrapper 的 deno --allow-run 放行路径、
-        # 以及镜像内以字面路径直启的 QA 链路都依赖这两个位置,缺失即 fail-closed。
+        # 以及镜像内以字面路径直启的 QA 链路都依赖这些位置,缺失即 fail-closed。
+        #
+        # smoke 是 QA 链路专用(镜像内端到端自检),**不参与** systemd 单元渲染 ——
+        # 76-daedalus-plugin-gen.sh 只认插件 manifest 里声明的 capability 二进制。
         shell: bash
         working-directory: daedalus-core
         run: |
           install -Dm0755 bin/daedalus-host files/system/usr/local/bin/daedalus-host
           install -Dm0755 bin/daedalus-audit files/system/usr/local/bin/daedalus-audit
           install -Dm0755 bin/daedalus-tx files/system/usr/local/bin/daedalus-tx
+          install -Dm0755 bin/daedalus-smoke files/system/usr/local/bin/daedalus-smoke
           for cap in shell service; do
             src="files/system/opt/daedalus/plugins/daedalus.${cap}/bin/daedalus-${cap}"
             if [ ! -x "${src}" ]; then
@@ -410,13 +468,19 @@ jobs:
         run: |
           podman run --rm localhost/daedalus-os:latest sh -c 'test -z "$(find /opt -name "*.py" -o -name "*.pyc" -o -name "__pycache__" -o -name "*.test.ts" -o -name "go.mod" -o -type d -name vendor 2>/dev/null)"' || { echo "ERROR: residue found in image /opt"; exit 1; }
 
-      - name: Verify Image & Bootc Container Lint
+      - name: Verify Image Bootc Lint And Variant
+        # 构建期 lint 在 Containerfile 末尾(`RUN bootc container lint`);本步是最终态
+        # 复验:从「以该镜像起一个容器」的视角再跑一次 lint,并补上构建期没验的两项 ——
+        # /etc/os-release 的 VARIANT=headless 标记(daedalus-host rescue 与
+        # headless-variant.sh 共同依赖的契约)与宿主 CLI 的可执行性。
+        # 二者不重复的原因:构建期 lint 判的是**构建过程**里的镜像(它一挂,`just build`
+        # 就挂,连本步都到不了);本步判的是**CI 即将推送的那一盘**,且独立于构建腿 ——
+        # 失败时「镜像在运行时起不来」这件事归本步名下,而不是埋进 build 日志里。
+        # 此前本步是两条 `podman run … || true` + 一句 echo,恒绿且什么也没判定
+        # (core#60 假绿清单之一)。
         shell: bash
         working-directory: daedalus-core
-        run: |
-          podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release || true
-          podman run --rm localhost/daedalus-os:latest bootc --version || true
-          echo "Daedalus bootc container verification completed successfully."
+        run: ./tests/build/image-lint.sh localhost/daedalus-os:latest
 
       # ---- 发布:OCI 镜像 → ghcr.io (bootc 原生分发形态),按 ref 分两档 ----
       #   :<sha>          —— 每次成功构建都推(build-qcow2 按它取本 run 的镜像);

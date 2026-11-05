@@ -331,7 +331,7 @@ k8s 改完 spec 没有「撤销上一个变更」。Daedalus:
 10. **dupe 插件**:第七个 capability,随 plugins 仓 v0.1.1 分发。
 11. **三仓布局与制品链**:fetch-plugins / verify-dev-layout 守门;just plugin-pack 重建 zip 落镜像;无运行时联网安装。
 12. **demo 构建层 + dev 兜底**(`paths_demo.go`):build-tag 互斥;生产字面量零 dev 代码。
-13. **daedalus-smoke**(`cmd/daedalus-smoke/`):镜像内端到端,v3 构建机补跑。
+13. **daedalus-smoke**(`cmd/daedalus-smoke/`):镜像内端到端,CI 每次镜像构建后执行(`tests/build/image-lint.sh`)。
 14. **P4 controller skeleton**(2026-10-10 PR #35):reconcile 循环骨架已起;list-watch 与 reconcile 接入归 P4 + P0.5。
 15. **P3 object model**(2026-10-10):Condition / Generation / UID / ResourceVersion / OwnerReferences / Finalizers 字段 + Validate 全交付(sdk#1)。
 16. **daedalus-agent 二进制骨架**(新增,spec core#38;P0.5 端到端范围,仓 `Daedalusys/daedalus-agent`):单 Go 二进制,装在任意 Linux;RPC 接口 = `Register / Heartbeat / ApplyIntent / SnapshotRequest / ReportStatus` 五件(注:本仓库 spec 5.2 早期列的 4 件名 `ReadSystemInfo / ApplyIntent / BestEffortRollback / ReportState` 是初稿, 在 v3.1 实施时按 plan B 的 5 个 RPC 落);best-effort 回滚,显式标注「best-effort rollback, not bootc」(spec G3 字面要求)。

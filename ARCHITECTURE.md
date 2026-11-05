@@ -56,7 +56,7 @@ VISION.md §1 (2026-10-17 重写)。
 | `daedalus-host` | 插件宿主:`list` / `inspect` / `verify` / `run-plugin` / `render-unit`;只打印启动命令,绝不 spawn、绝不做 MCP 父进程(决策 16),执行者是 systemd。**控制面还管** `node list` / `node add` 与 `plan submit` / `plan status` / `plan advance`(跨机 Plan 的登记、分桶执行与人在环恢复) |
 | `daedalus-audit` | 哈希链审计 CLI(`--identity/--tool/--args/--outcome/--log-path` + `verify` 子命令);内部落 SDK `audit.LogAudit`,是给 copilot 这类跨进程写入方用的进程边界封装,不是唯一写入口 |
 | `daedalus-tx` | 事务通道 CLI:`begin`→`propose`→`apply`→`rollback`,service/package/task/container/policy 适配器,带 euid 守门与回滚 sidecar |
-| `daedalus-smoke` | 镜像内端到端 smoke 断言,构建机补跑 |
+| `daedalus-smoke` | 镜像内端到端 smoke 断言,CI 每次镜像构建后执行 |
 | `daedalus-plugin-pack` | 插件 zip 打包器:checksums 注入 + manifest 规范化自摘要 + zip-slip 九道防线 |
 
 关键约束:
