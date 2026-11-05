@@ -138,8 +138,10 @@ if [ "${1:-}" = "--selftest" ]; then
     doctored="$(mktemp)"
     printf 'name: daedalus-plugins\non: push\n' > "$doctored"
     rc=0
-    DAEDALUS_PLUGINS_RELEASE_YML="$doctored" bash "$0" >/dev/null 2>&1 || rc=$?
+    msg="$(DAEDALUS_PLUGINS_RELEASE_YML="$doctored" bash "$0" 2>&1 >/dev/null)" || rc=$?
     st 1 "$rc" "release.yml 存在但无 'for cap in' 行 → 正式流程 exit 1(fail-closed)"
+    # 诊断行必须在:fail-closed 静默退出(不打印原因)会让排障者只看到裸 rc=1。
+    st 1 "$(printf '%s' "$msg" | grep -c '解析不出 cap 集合')" "同一场景必须打印「解析不出 cap 集合」的诊断"
     rm -f "$doctored"
 
     # 6) plugins 仓自 #72 起把清单收敛为 workflow 级 `env.CAPS` 单一事实源,
@@ -183,7 +185,9 @@ fi
 
 release=""
 if [ -f "$PLUGINS_RELEASE_YML" ]; then
-    release="$(release_caps "$PLUGINS_RELEASE_YML")"
+    # `|| true`:release_caps 解析失败会返回 1,而 set -e 会在赋值处直接退出 ——
+    # 那样下面的诊断行永远打不出来,fail-closed 就只剩一个裸 rc=1。
+    release="$(release_caps "$PLUGINS_RELEASE_YML")" || true
     # 文件在、却解析不出名单 = 该来源已不可用(格式漂移)。此时**不得**当作「跳过」:
     # 静默跳过会让第四份核对凭空消失而门禁仍报 OK —— fail-closed,直接拒。
     [ -n "$release" ] || {

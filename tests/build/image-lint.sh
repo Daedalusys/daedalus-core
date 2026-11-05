@@ -88,8 +88,11 @@ EOF
     st 99 "$rc" "第 1 条断言失败 → 退出码透传(非零)"
 
     # 失败传播:最后一条(daedalus-smoke)失败 → 非零。
+    # 末尾序号从期望清单派生,不写死 —— 否则将来在 run_checks 里追加一条断言,
+    # 本用例会静默变成"测中间那条"却仍自称"最后一条"。
+    last_at="$(expected_log | grep -c .)"
     rm -f "$tmp/log"
-    if PATH="$tmp:$PATH" PODMAN_LOG="$tmp/log" PODMAN_FAIL_AT=4 bash "$SELF" test-image >/dev/null 2>&1; then rc=0; else rc=$?; fi
+    if PATH="$tmp:$PATH" PODMAN_LOG="$tmp/log" PODMAN_FAIL_AT="$last_at" bash "$SELF" test-image >/dev/null 2>&1; then rc=0; else rc=$?; fi
     st 99 "$rc" "最后一条断言失败 → 退出码透传(非零)"
 
     if [ "$fail_n" -eq 0 ]; then echo "RESULT: SELFTEST PASS"; exit 0; fi

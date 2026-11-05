@@ -269,9 +269,22 @@ jobs:
           repository: Daedalusys/daedalus-agent
           path: daedalus-agent
 
+      - name: CI gate selftests (script self-checks)
+        # 门禁脚本自身的逻辑也要被验证:否则「改断言」这一步不可验证,脚本退化
+        # (少跑一条断言、判定函数变瞎)不会被任何东西发现。
+        # workflow-hygiene.sh 的 selftest 在它自己的步骤里跑(与真实扫描同处)。
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/build/image-lint.sh --selftest
+          bash tests/ci/credential-surface-check.sh --selftest
+
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
         # 只有本 job 同时检出四个兄弟仓(同 policy.toml drift 守门的选址理由)。
+        # 注意 SDK 的检出 ref:go.mod 是占位版本(v0.0.0)时为空 → 扫 SDK 默认分支;
+        # 一旦 go.mod 钉了真实 SDK 版本,本门禁扫的就是**那个 tag 的** workflow 内容,
+        # 即"绿"意味着"该 tag 合规"而非"SDK main 合规"。
         shell: bash
         working-directory: daedalus-core
         run: |
