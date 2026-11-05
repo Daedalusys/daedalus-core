@@ -23,7 +23,7 @@
 #
 # 环境变量
 #   CD_REPO        目标仓(默认 Daedalusys/daedalus-core)
-#   CD_BRANCH      分支(默认 feat/cd-verify-pipeline)
+#   CD_BRANCH      分支(默认:当前检出的分支)
 #   CD_TARGET      靶机 ssh 别名(默认 Masterwet_Server)
 #   CD_REF         p1 的 ref 覆盖(默认:分支已并入 main 则 main,否则按需)
 #   CD_ALLOW_FEATURE_PROMOTE  设为 1 允许用未合并分支跑 P1(会把该分支镜像晋升
@@ -35,10 +35,12 @@
 set -euo pipefail
 
 REPO="${CD_REPO:-Daedalusys/daedalus-core}"
-BRANCH="${CD_BRANCH:-feat/cd-verify-pipeline}"
 TARGET="${CD_TARGET:-Masterwet_Server}"
 WORKFLOW="build.yml"
 RUNNER_LABEL="daedalus-kvm"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # daedalus-core 仓根
+# 分支默认跟随当前检出的分支 —— 写死分支名会在合并后凭空再开 PR(踩过)。
+BRANCH="${CD_BRANCH:-$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}"
 
 say()  { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
@@ -47,7 +49,6 @@ warn() { printf '\033[1;33m   !! %s\033[0m\n' "$*"; }
 bad()  { printf '\033[1;31m   XX %s\033[0m\n' "$*" >&2; }
 die()  { bad "$*"; exit 1; }
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # daedalus-core 仓根
 POLL_SECS="${POLL_SECS:-20}"
 
 # ------------------------------------------------------------------ helpers ---
