@@ -136,36 +136,14 @@ func TestDial_ServerNameFallsBackToAddrHost(t *testing.T) {
 // 自签 CA + 服务端/客户端证书,bufconn 上跑一次 Heartbeat 往返。
 func TestDial_SucceedsOverBufconnWithMutualTLS(t *testing.T) {
 	pki := newTestPKI(t)
-
-	pool := x509.NewCertPool()
-	pemBytes, err := os.ReadFile(pki.caPath)
-	if err != nil {
-		t.Fatalf("读 CA: %v", err)
-	}
-	if !pool.AppendCertsFromPEM(pemBytes) {
-		t.Fatal("CA 文件未含可用证书")
-	}
-
 	lis := bufconn.Listen(1024 * 1024)
 	defer lis.Close()
-	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{pki.serverCert},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    pool,
-		MinVersion:   tls.VersionTLS12,
-	})))
+	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsServerConfig(pki, certPoolForTest(t, pki.caPath)))))
 	agentv1.RegisterAgentServiceServer(srv, heartbeatStub{})
 	go func() { _ = srv.Serve(lis) }()
 	defer srv.Stop()
 
-	orig := dialContext
-	dialContext = func(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
-		opts = append(opts, grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return lis.DialContext(ctx)
-		}))
-		return grpc.DialContext(ctx, target, opts...)
-	}
-	defer func() { dialContext = orig }()
+	defer overrideDialForBufconn(t, lis)()
 
 	client, closer, err := Dial(context.Background(), DialConfig{
 		Addr:       "passthrough:///bufnet",
@@ -188,6 +166,43 @@ func TestDial_SucceedsOverBufconnWithMutualTLS(t *testing.T) {
 	if !resp.GetAck() {
 		t.Error("Heartbeat 应回 ack=true")
 	}
+}
+
+// certPoolForTest 把 CA 文件读成证书池。
+func certPoolForTest(t *testing.T, caPath string) *x509.CertPool {
+	t.Helper()
+	pemBytes, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatalf("读 CA: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemBytes) {
+		t.Fatal("CA 文件未含可用证书")
+	}
+	return pool
+}
+
+// tlsServerConfig 是测试用服务端 TLS 配置:要求并校验客户端证书。
+func tlsServerConfig(pki testPKI, pool *x509.CertPool) *tls.Config {
+	return &tls.Config{
+		Certificates: []tls.Certificate{pki.serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS12,
+	}
+}
+
+// overrideDialForBufconn 把建连注入缝指向内存拨号器,返回复原函数。
+func overrideDialForBufconn(t *testing.T, lis *bufconn.Listener) func() {
+	t.Helper()
+	orig := dialContext
+	dialContext = func(ctx context.Context, target string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+		opts = append(opts, grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}))
+		return grpc.DialContext(ctx, target, opts...)
+	}
+	return func() { dialContext = orig }
 }
 
 // heartbeatStub 是只实现 Heartbeat 的 agent 桩(其余 RPC 走 Unimplemented)。

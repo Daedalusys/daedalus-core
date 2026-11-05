@@ -644,3 +644,41 @@ func TestHelp_ListsAllSubcommands(t *testing.T) {
 		t.Fatalf("无参数应 exit 2 + 帮助: %d / %s", code, errOut)
 	}
 }
+
+// ------------------------------------------------------- plan / node 接线 ----
+
+// TestUsage_ListsPlanAndNodeSubcommands 钉住帮助文本列出了控制面的 plan/node
+// 子命令(命令语法在两种 locale 下同形,故本断言与当前 locale 无关)。
+func TestUsage_ListsPlanAndNodeSubcommands(t *testing.T) {
+	code, out, _ := runCapture(t, "help")
+	if code != exitOK {
+		t.Fatalf("help 退出码 = %d, want 0", code)
+	}
+	for _, want := range []string{"plan submit", "plan status", "plan advance", "node list", "node add"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("帮助缺少 %q", want)
+		}
+	}
+}
+
+// TestUnknownPlanSubcommandIsUsageError 证明 plan 的未知子命令是用法错误(2)。
+func TestUnknownPlanSubcommandIsUsageError(t *testing.T) {
+	code, _, errOut := runCapture(t, "plan", "bogus")
+	if code != exitUsage {
+		t.Errorf("退出码 = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(errOut, "bogus") {
+		t.Errorf("stderr 应点名未知子命令: %s", errOut)
+	}
+}
+
+// TestNodeListNeedsSubcommand 证明 node 缺子命令是用法错误(2)并给出用法。
+func TestNodeListNeedsSubcommand(t *testing.T) {
+	code, _, errOut := runCapture(t, "node")
+	if code != exitUsage {
+		t.Errorf("退出码 = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(errOut, "node list") {
+		t.Errorf("stderr 应给出用法: %s", errOut)
+	}
+}

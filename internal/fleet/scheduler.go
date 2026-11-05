@@ -142,15 +142,15 @@ func NewScheduler(r *Registry, pol *policy.Policy) *Scheduler {
 		CallTimeout: defaultCallTimeout,
 		Now:         time.Now,
 		Policy:      pol,
-		dial:        dialConfigFromEnv(),
+		dial:        DialConfigFromEnv(),
 	}
 	s.Dispatch = s.dialDispatch
 	s.Register = s.dialRegister
 	return s
 }
 
-// dialConfigFromEnv 装配基础 DialConfig(Addr 由每次下发按节点覆盖)。
-func dialConfigFromEnv() DialConfig {
+// DialConfigFromEnv 从环境变量装配基础 DialConfig(Addr 由调用方按节点覆盖)。
+func DialConfigFromEnv() DialConfig {
 	return DialConfig{
 		CertPath:    os.Getenv(EnvClientCert),
 		KeyPath:     os.Getenv(EnvClientKey),
