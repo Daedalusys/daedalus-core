@@ -28,6 +28,8 @@
 #
 # 安全边界
 #   - 只写 $VERIFY_WORK;不碰宿主任何块设备(不执行 bootc install,不 dd 任何盘)。
+#   - qcow2 以 snapshot=on 挂载:guest 的写落临时 overlay,交付产物字节不变,
+#     证据里的 sha256 可复现「交付产物」本身(脚本末尾会断言 digest 未变)。
 #   - 装包仅 dnf install podman qemu-kvm qemu-img(可逆)。
 #   - qemu 以 timeout + 主动 kill 收尾,不残留进程、不占宿主 22 端口(hostfwd 用 2222)。
 #   - 前后各记一次 lsblk,末段对比,证明宿主盘未被写入。
@@ -267,6 +269,9 @@ else
     fi
 fi
 info "qcow2 sha256: $(sha256sum "$QCOW2" | cut -d' ' -f1)"
+# 交付产物的基准 digest:引导前后必须一致(snapshot=on 保证 qemu 不写原文件),
+# 这条断言是证据链的锚——记下的 digest 必须能复现「交付产物」本身。
+QCOW2_SHA_BEFORE="$(sha256sum "$QCOW2" | cut -d' ' -f1)"
 
 # ---------------------------------------------------------------------------
 say "Phase 3 · KVM 引导 + 串口抓取"
@@ -274,12 +279,15 @@ info "机器: q35 + accel=kvm + -cpu host(必须 host,v1 CPU 会让 guest glibc 
 info "内存 ${MEM} MiB,等待 login 提示符最长 ${BOOT_TIMEOUT}s"
 : > "$SERIAL"
 
-"$QEMU_BIN" \
+# snapshot=on:guest 的写落到临时 overlay,不碰交付的 qcow2 本身。
+# 不加的话 guest 一启动就把镜像写脏,末尾算出的 digest 不再是交付产物的 digest,
+# 证据链断一环(TMPDIR 指到工作目录,避免临时文件落爆 /tmp)。
+TMPDIR="$WORK" "$QEMU_BIN" \
     -machine q35,accel=kvm \
     -cpu host \
     -m "$MEM" -smp 2 \
     -nographic -no-reboot \
-    -drive file="$QCOW2",if=virtio,format=qcow2 \
+    -drive file="$QCOW2",if=virtio,format=qcow2,snapshot=on \
     -netdev user,id=net0,hostfwd=tcp::2222-:22 \
     -device virtio-net,netdev=net0 \
     </dev/null >>"$SERIAL" 2>&1 &
@@ -341,11 +349,24 @@ else
     sed 's/^/         /' "$WORK/lsblk.diff" | head -20
 fi
 
+# 交付产物 integrity:qcow2 的 digest 引导前后必须一致(snapshot=on 的兑现)。
+# 不一致 = 记下的 digest 无法复现交付产物,证据链无效 → 判失败。
+QCOW2_SHA_AFTER="$(sha256sum "$QCOW2" | cut -d' ' -f1)"
+QCOW2_INTACT=yes
+if [ "$QCOW2_SHA_BEFORE" != "$QCOW2_SHA_AFTER" ]; then
+    QCOW2_INTACT=no
+    bad "qcow2 digest 在引导后变了 —— 交付产物被写脏,证据 digest 不可复现"
+    bad "  引导前: $QCOW2_SHA_BEFORE"
+    bad "  引导后: $QCOW2_SHA_AFTER"
+else
+    ok "qcow2 digest 引导前后一致(交付产物字节未变): $QCOW2_SHA_AFTER"
+fi
+
 say "Summary"
 cat <<EOF
    判定     : $verdict
    qcow2    : $QCOW2
-   sha256   : $(sha256sum "$QCOW2" | cut -d' ' -f1)
+   sha256   : $QCOW2_SHA_AFTER(引导前 $QCOW2_SHA_BEFORE,产物完整=$QCOW2_INTACT)
    串口日志 : $SERIAL
    完整日志 : $LOG
    工作目录 : $WORK
@@ -353,6 +374,11 @@ cat <<EOF
    把这个目录整个带回来(或只带 serial-console.log + bootc-verify.log + lsblk-*.txt)
    即可作为 Todo 9 的证据入库。
 EOF
+
+# 产物被写脏同样算失败:判定不是只关于「能不能引导」,也关于「证据是否可信」。
+if [ "$QCOW2_INTACT" != yes ]; then
+    exit 1
+fi
 
 case "$verdict" in
     LOGIN) exit 0 ;;
