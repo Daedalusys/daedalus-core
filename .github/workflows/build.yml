@@ -260,6 +260,24 @@ jobs:
         working-directory: daedalus-core
         run: bash tests/real-machine/bootc-verify.sh --only-preflight --no-kvm
 
+      - name: Checkout daedalus-agent (sibling)
+        # 第四个兄弟仓:仅下方的 workflow 凭据不变式守门需要它(该守门要读四仓的
+        # workflow 文件,而只有本 job 同时检出四个仓 —— 同 policy.toml drift 守门的选址理由)。
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: Daedalusys/daedalus-agent
+          path: daedalus-agent
+
+      - name: Workflow hygiene gate (cross-repo credential invariants)
+        # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
+        # 只有本 job 同时检出四个兄弟仓(同 policy.toml drift 守门的选址理由)。
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/ci/workflow-hygiene.sh --selftest
+          bash tests/ci/workflow-hygiene.sh
+
   # 镜像构建与发布:main 分支 / feat/* 分支 / 任何 tag / workflow_dispatch 才跑。
   # 依赖 test 通过;PR 与普通分支 push 不到此处,反馈快。
   # main 纳入的意义:PR 上的绿是合并前分支头的绿,合并后的组合此前从未被真正构建成
