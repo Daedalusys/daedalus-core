@@ -17,16 +17,16 @@ bin/
 !files/system/usr/local/bin/
 files/system/usr/local/bin/daedalus-*
 
-# copilot 安装态是 just copilot-plugin (pack-copilot-plugin.sh) 的构建产物,
-# 从 plugin/copilot/ 源码再生。CI 调 just copilot-plugin 重新生成 + 幂等验证
-# (跑两次 sha256 一致 → 产物可重现)。本机开发者跑 just copilot-plugin 后
-# 无需 commit 安装态,绕过 12-factor 「构建产物不入库」违背。
+# 镜像安装态整目录不入库:12 个插件目录(daedalus.copilot + 11 个能力插件)都是构建产物,
+# 分别由 `just copilot-plugin`(pack-copilot-plugin.sh)与 `just plugin-pack` /
+# `scripts/fetch-plugins.sh`(解 release zip 到该目录)生成;CI 侧另有幂等/可重现验证。
 #
-# 为何只忽略 daedalus.copilot 一个:它是仓内唯一靠 pack 脚本生成的安装态;其它
-# 插件(daedalus.fs / .pkg / .sysinfo 等)的 files/system/opt/.../ 是 sync 进来
-# 的源码本体,不在这条规则覆盖范围(若改这些源码需要走 plugin-pack + fetch-plugins
-# 流水线,不是本地 just copilot-plugin)。
-files/system/opt/daedalus/plugins/daedalus.copilot/
+# 为什么能力插件那份也必须忽略 —— 其 manifest 带 Pack 注入的**编译产物 sha256**。编译产物
+# 不可跨机器/跨提交复现:实测同一份源码在「默认旗标 / -buildvcs=false / 已入库值」三种条件下
+# 得到三个不同哈希,所以那份 manifest 一旦入库,任何一次 plugin-pack / fetch-plugins 都会把
+# 它改脏,而"改脏"又无从区分是内容漂移还是本机工具链差异。安装态按定义即构建产物(本仓
+# AGENTS「镜像安装态策略」已声明其 bin/ 不入库),manifest 与 bin/ 同源同理。
+files/system/opt/daedalus/plugins/
 
 # OhMyOpenCode 编排状态(不入库)
 .omo/

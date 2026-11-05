@@ -6,7 +6,7 @@
 # 经 daedalus-plugin-pack 注入 sha256 checksums 后产出:
 #   1) daedalus-core/bin/daedalus.copilot.plugin.zip          —— 可分发插件包(bin/ 已 gitignore,
 #      与能力插件的 <id>.plugin.zip 同一约定)
-#   2) daedalus-core/files/system/opt/daedalus/plugins/daedalus.copilot/  —— 解压安装态(入库):
+#   2) daedalus-core/files/system/opt/daedalus/plugins/daedalus.copilot/  —— 解压安装态(不入库,见 .gitignore):
 #      sync-daedalus.sh(已迁入 scripts/) → base_image → Containerfile COPY → 镜像 /opt/daedalus/plugins/
 #      宿主 daedalus-host 与 wrapper 都以该绝对路径消费它。
 #   暂存目录用 mktemp 临时目录并在退出时清理:仓库内不留构建中间产物。

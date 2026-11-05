@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# 插件清单集合相等门禁:四份清单必须严格相等 ———
-#   ① 76 脚本的 CAPS          (镜像接线面的事实源)
-#   ② 被追踪的插件 systemd 单元 (daedalus-<cap>.service,排除 core 自身 4 个)
-#   ③ 被追踪的插件安装态 manifest (files/system/opt/daedalus/plugins/daedalus.<cap>/daedalus.plugin.json)
-#   ④ plugins 仓 release 供料的 cap 集合(兄弟仓存在时校验;不存在则打印 NOTE)
+# 插件清单集合相等门禁:四份清单必须相等 ———
+#   ① 76 脚本的 CAPS          (镜像接线面的事实源,硬门禁)
+#   ② 被追踪的插件 systemd 单元 (daedalus-<cap>.service,排除 core 自身 4 个,硬门禁)
+#   ③ 兄弟仓 plugins 的作者态 manifest (daedalus-plugins/<cap>/daedalus.plugin.json)
+#   ④ 兄弟仓 plugins 的 release 供料 cap 集合(其 release 工作流的 env.CAPS)
 # 任一份多出或少一个 cap 即 exit 1 —— 「有 manifest 没二进制」的插件不得再随镜像交付。
+# ③④ 依赖兄弟仓:来源不可用(兄弟仓缺失)时各自打印 NOTE 并跳过该对(单仓 clone 场景),
+# 不得静默当作通过;core 自己的 CI 四仓平级检出,两份都在,故 CI 里恒为硬核对。
 #
 # 用法:plugin-inventory.sh [--selftest]
 set -euo pipefail
@@ -14,11 +16,12 @@ set -euo pipefail
 CORE_UNITS="audit audit-rotate env host-controller"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CAPS_SRC="$ROOT/files/scripts/76-daedalus-plugin-gen.sh"
-# 第四份来源:兄弟仓 plugins 的 release 工作流供料名单。兄弟仓缺失(如插件仓自身的
-# CI 里只有 core 一个仓)时降级为 NOTE,不失败 —— 前三份仍是硬门禁。
+# 第三/四份来源的兄弟仓根。兄弟仓缺失(如单仓 clone)时两份各自降级为 NOTE,不失败。
+PLUGINS_ROOT="${DAEDALUS_PLUGINS_ROOT:-$ROOT/../daedalus-plugins}"
+# 第四份来源:兄弟仓 plugins 的 release 工作流供料名单。
 # 环境变量可覆盖:仅供 --selftest 指向一份「存在但解析不出名单」的构造文件,
 # 验证正式流程 fail-closed;生产路径恒为兄弟仓的 release 工作流。
-PLUGINS_RELEASE_YML="${DAEDALUS_PLUGINS_RELEASE_YML:-$ROOT/../daedalus-plugins/.github/workflows/release.yml}"
+PLUGINS_RELEASE_YML="${DAEDALUS_PLUGINS_RELEASE_YML:-$PLUGINS_ROOT/.github/workflows/release.yml}"
 
 # caps_from_76 —— 从 76 脚本读 CAPS(单一事实源,不另维护一份名单)。
 caps_from_76() {
@@ -40,18 +43,23 @@ units_from_tree() {
     done | sort
 }
 
-# manifests_from_tree —— 仓里被追踪的插件 manifest(cap 名)。安装态目录 files/system/
-# opt/daedalus/plugins/ 同时容纳**被追踪**的能力插件 manifest 与 gitignore 的构建产物
-# (daedalus.copilot 的安装态),后者不属于「能力插件清单」,按 gitignore 过滤掉 ——
-# 与第 ② 份(单元)里的 CORE_UNITS 排除同理。
-manifests_from_tree() {
-    local d="$ROOT/files/system/opt/daedalus/plugins"
+# manifests_from_sibling —— 兄弟仓 plugins 里**作者态**的插件 manifest(cap 名)。
+#
+# 第③份为什么不再读本仓安装态:files/system/opt/daedalus/plugins/ 是构建产物目录
+# (just build 链的 fetch-plugins / just plugin-pack 把 release zip 解进去),其 manifest
+# 带 Pack 注入的**编译产物 sha256**。编译产物不可跨机器/跨提交复现(实测同一份源码在
+# 默认旗标 / -buildvcs=false / 入库值三种条件下三个不同哈希),那份 manifest 一旦入库,
+# 任何一次 plugin-pack 都会把它改脏且无从判断是真漂移还是本机工具链差异。故该目录整体
+# 不入库(见 .gitignore 与 AGENTS「镜像安装态策略」),第③份回到作者态事实源:插件仓里
+# 声明了 manifest 的 cap 目录。核对语义不变 —— 有 manifest 的插件必须被镜像交付。
+manifests_from_sibling() {
+    local d="$PLUGINS_ROOT"
     local f cap
-    for f in "$d"/daedalus.*/daedalus.plugin.json; do
+    [ -d "$d" ] || return 1
+    for f in "$d"/*/daedalus.plugin.json; do
         [ -e "$f" ] || continue
-        if git -C "$ROOT" check-ignore -q -- "$f" 2>/dev/null; then continue; fi
         cap="$(basename "$(dirname "$f")")"
-        echo "${cap#daedalus.}"
+        echo "$cap"
     done | sort
 }
 
@@ -102,11 +110,15 @@ compare_sets() {
 
 # inventory_check <CAPS> <单元> <manifest> [<release 供料>] —— 逐对比较四份集合。
 # 拆成独立函数是为了 --selftest 能用合成输入驱动它(不碰真实文件树)。
+# ③④ 传空集 = 该来源不可用(兄弟仓缺失),跳过该对;调用方负责打印 NOTE ——
+# 门禁静默变窄正是它要消灭的假绿,所以"跳过"必须留痕,且不得被当成"通过"。
 inventory_check() {
     local caps="$1" units="$2" manifests="$3" release="${4:-}"
     local rc=0
     compare_sets "CAPS" "$caps" "插件单元" "$units" || rc=1
-    compare_sets "CAPS" "$caps" "插件 manifest" "$manifests" || rc=1
+    if [ -n "$manifests" ]; then
+        compare_sets "CAPS" "$caps" "插件 manifest" "$manifests" || rc=1
+    fi
     if [ -n "$release" ]; then
         compare_sets "CAPS" "$caps" "plugins release 供料" "$release" || rc=1
     fi
@@ -132,6 +144,9 @@ if [ "${1:-}" = "--selftest" ]; then
     st 1 "$(rc inventory_check "$good" "$extra" "$good" "$good")" "多出一个单元 → 判不等"
     st 1 "$(rc inventory_check "$good" "$good" "$extra" "$good")" "多出一个 manifest → 判不等"
     st 1 "$(rc inventory_check "$short" "$good" "$good" "$good")" "CAPS 少一个 → 判不等"
+    # ③ 来源不可用(空集)→ 跳过该对,不得判不等;也不得把它当作"已核对"。
+    st 0 "$(rc inventory_check "$good" "$good" "" "$good")" "manifest 来源不可用(空集)→ 跳过该对"
+    st 0 "$(rc inventory_check "$good" "$good" "$good" "")" "release 来源不可用(空集)→ 跳过该对"
 
     # 5) 第四份来源「存在但解析不出名单」→ 正式流程必须 fail-closed(exit 1),
     #    不得静默跳过(跳过会让第四份核对凭空消失,门禁却仍报 OK)。
@@ -177,10 +192,15 @@ fi
 # --- 正式流程:算出四方集合,逐对比较 -----------------------------------------
 caps="$(caps_from_76)"
 units="$(units_from_tree)"
-manifests="$(manifests_from_tree)"
+# `|| true` 同 release_caps:manifests_from_sibling 在兄弟仓缺失时返回 1,
+# set -e 会在赋值处直接退出,那样下面的 NOTE 永远打不出来。
+manifests="$(manifests_from_sibling)" || true
 if [ -z "$caps" ]; then
     echo "plugin-inventory: 无法从 $CAPS_SRC 解析 CAPS(单一事实源缺失)" >&2
     exit 1
+fi
+if [ -z "$manifests" ]; then
+    echo "NOTE: 兄弟仓 plugins 的作者态 manifest 不可用($PLUGINS_ROOT),跳过第三份(manifest)核对" >&2
 fi
 
 release=""
@@ -199,7 +219,11 @@ else
 fi
 
 if inventory_check "$caps" "$units" "$manifests" "$release"; then
-    echo "OK: 插件清单四份一致($(printf '%s\n' "$caps" | grep -c .) 个)"
+    # 报"几份"如实数:③④ 不可用时只比 2 份,不能仍写"四份一致"。
+    n_src=2
+    [ -n "$manifests" ] && n_src=$((n_src + 1))
+    [ -n "$release" ] && n_src=$((n_src + 1))
+    echo "OK: 插件清单 ${n_src} 份一致($(printf '%s\n' "$caps" | grep -c .) 个 cap)"
 else
     exit 1
 fi
