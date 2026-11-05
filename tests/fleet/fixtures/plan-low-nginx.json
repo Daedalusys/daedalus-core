@@ -1,0 +1,24 @@
+{
+  "id": "0123456789abcdef",
+  "intents": [
+    {
+      "kind": "package",
+      "target": "nginx",
+      "spec": { "version": "1.24.0" },
+      "expected_diff": "- nginx 1.22.1\n+ nginx 1.24.0\n",
+      "risk_class": "low"
+    }
+  ],
+  "machines": [
+    { "machine_id": "ubuntu24-a", "kind": "agent", "support_level": "supported" },
+    { "machine_id": "debian12-a", "kind": "agent", "support_level": "supported" },
+    { "machine_id": "rhel9-a", "kind": "agent", "support_level": "supported" }
+  ],
+  "batching": { "strategy": "count", "size": 2 },
+  "blast_radius": {
+    "count": 3,
+    "kind_breakdown": { "package": 1 },
+    "max_downtime_ns": 30000000000,
+    "max_risk": "low"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "fedcba9876543210",
+  "intents": [
+    {
+      "kind": "package",
+      "target": "kernel-core",
+      "expected_diff": "- kernel-core 5.14.0\n+ kernel-core 5.14.1\n",
+      "risk_class": "high"
+    }
+  ],
+  "machines": [
+    { "machine_id": "ubuntu24-a", "kind": "agent", "support_level": "supported" },
+    { "machine_id": "legacy-no-snapshot", "kind": "agent", "support_level": "experimental" }
+  ],
+  "batching": { "strategy": "count", "size": 1 },
+  "blast_radius": {
+    "count": 2,
+    "kind_breakdown": { "package": 1 },
+    "max_downtime_ns": 30000000000,
+    "max_risk": "high"
+  }
+}
