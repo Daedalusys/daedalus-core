@@ -20,6 +20,13 @@ use (
 // 插件仓 CI 写的(GitHub Actions 不允许 checkout 逃出 GITHUB_WORKSPACE,SDK 只能
 // 检出到 daedalus-plugins/daedalus-sdk),本地平级布局下该路径不存在,且与下面
 // `use ../daedalus-sdk` 冲突 -> "conflicting replacements"。workspace 级 replace
-// 覆盖模块级,按两个 require 版本(v0.0.0 与零伪版本)各钉一行即可,无需动 go.mod。
-replace github.com/Daedalusys/daedalus-sdk v0.0.0 => ../daedalus-sdk
+// 覆盖模块级,按 workspace 内各模块实际 require 的 SDK 版本各钉一行即可,无需动
+// go.mod 的 replace。
+//
+// 两行的版本必须跟着实际 require 走:SDK 升版时,plugins 侧 11 个 cap 的 go.mod
+// require 递增,这里对应那行也要换成同一版本(否则 workspace 构建会去解析
+// daedalus-plugins/daedalus-sdk 这个不存在的路径)。无版本号的 replace 在这里
+// 不可用——Go 会报 "workspace module ... is replaced at all versions in the
+// go.work file",因为该模块同时在 `use` 列表里。
+replace github.com/Daedalusys/daedalus-sdk v0.1.1 => ../daedalus-sdk
 replace github.com/Daedalusys/daedalus-sdk v0.0.0-00010101000000-000000000000 => ../daedalus-sdk
