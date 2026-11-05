@@ -410,13 +410,19 @@ jobs:
         run: |
           podman run --rm localhost/daedalus-os:latest sh -c 'test -z "$(find /opt -name "*.py" -o -name "*.pyc" -o -name "__pycache__" -o -name "*.test.ts" -o -name "go.mod" -o -type d -name vendor 2>/dev/null)"' || { echo "ERROR: residue found in image /opt"; exit 1; }
 
-      - name: Verify Image & Bootc Container Lint
+      - name: Verify Image Bootc Lint And Variant
+        # 构建期 lint 在 Containerfile 末尾(`RUN bootc container lint`);本步是最终态
+        # 复验:从「以该镜像起一个容器」的视角再跑一次 lint,并补上构建期没验的两项 ——
+        # /etc/os-release 的 VARIANT=headless 标记(daedalus-host rescue 与
+        # headless-variant.sh 共同依赖的契约)与宿主 CLI 的可执行性。
+        # 二者不重复的原因:构建期 lint 判的是**构建过程**里的镜像(它一挂,`just build`
+        # 就挂,连本步都到不了);本步判的是**CI 即将推送的那一盘**,且独立于构建腿 ——
+        # 失败时「镜像在运行时起不来」这件事归本步名下,而不是埋进 build 日志里。
+        # 此前本步是两条 `podman run … || true` + 一句 echo,恒绿且什么也没判定
+        # (core#60 假绿清单之一)。
         shell: bash
         working-directory: daedalus-core
-        run: |
-          podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release || true
-          podman run --rm localhost/daedalus-os:latest bootc --version || true
-          echo "Daedalus bootc container verification completed successfully."
+        run: ./tests/build/image-lint.sh localhost/daedalus-os:latest
 
       # ---- 发布:OCI 镜像 → ghcr.io (bootc 原生分发形态),按 ref 分两档 ----
       #   :<sha>          —— 每次成功构建都推(build-qcow2 按它取本 run 的镜像);
