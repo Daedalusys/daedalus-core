@@ -242,6 +242,13 @@ jobs:
           diff files/system/opt/daedalus/shared/policy.toml ../daedalus-sdk/policy/testdata/policy.toml
           echo "OK: 生产 policy.toml 与 SDK testdata 一致"
 
+      - name: Real-machine verifier preflight
+        # 钉住 runner 仍满足 x86-64-v3(AlmaLinux 10 glibc 硬要求)。GitHub 标准 runner 无
+        # /dev/kvm,故只降级 KVM 一项;引导验证腿仍在真机跑(bootc-verify.sh 无参数模式)。
+        shell: bash
+        working-directory: daedalus-core
+        run: bash tests/real-machine/bootc-verify.sh --only-preflight --no-kvm
+
   # 镜像构建与发布:main 分支 / feat/* 分支 / 任何 tag / workflow_dispatch 才跑。
   # 依赖 test 通过;PR 与普通分支 push 不到此处,反馈快。
   # main 纳入的意义:PR 上的绿是合并前分支头的绿,合并后的组合此前从未被真正构建成
