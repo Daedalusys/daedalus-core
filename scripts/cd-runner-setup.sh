@@ -29,6 +29,8 @@
 #                      Fedora SELinux Enforcing 下 systemd 无法执行 ~ 里的文件,
 #                      svc 会以 203/EXEC 失败)
 #   GRANT_NOPASSWD     设为 0 则不给当前用户配免密 sudo(默认 1 = 配)
+#   RUNNER_MIRROR      GitHub release 加速镜像前缀(默认 https://gh-proxy.com)
+#   RUNNER_DOWNLOAD_BASE  指定下载源前缀(留空 = 直连 + 镜像回退)
 #
 # 退出码
 #   0 装好并已启动
@@ -43,6 +45,10 @@ RUNNER_LABELS="${RUNNER_LABELS:-daedalus-kvm}"
 RUNNER_DIR="${RUNNER_DIR:-/opt/actions-runner}"
 GRANT_NOPASSWD="${GRANT_NOPASSWD:-1}"
 TOKEN_FILE="${TOKEN_FILE:-/tmp/.daedalus-runner-token}"
+# 跨境下载 GitHub release 常被掐断(SSL unexpected eof)。按序回退:
+#   显式 RUNNER_DOWNLOAD_BASE → 直连 GitHub → RUNNER_MIRROR 加速镜像。
+RUNNER_DOWNLOAD_BASE="${RUNNER_DOWNLOAD_BASE:-}"
+RUNNER_MIRROR="${RUNNER_MIRROR:-https://gh-proxy.com}"
 # 需要装的包:podman/qemu 已可能就位;bootc/ostree 是 P2 的 bootc 换部署验证用的,
 # 一次装齐省得后面再来一趟。
 PACKAGES=(podman qemu-kvm qemu-img bootc ostree)
@@ -52,6 +58,17 @@ info() { printf '   %s\n' "$*"; }
 ok()   { printf '\033[1;32m   OK %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m   !! %s\033[0m\n' "$*"; }
 bad()  { printf '\033[1;31m   XX %s\033[0m\n' "$*" >&2; }
+
+# fetch_tar <url> <dest> —— 带重试下载,并校验是合法 gzip(防止把半截文件或代理
+# 返回的 HTML 错误页当 tarball 解压)。
+fetch_tar() {
+    local url="$1" dest="$2"
+    curl -fL --retry 4 --retry-delay 3 --retry-all-errors \
+         --connect-timeout 20 --max-time 900 \
+         -o "$dest" "$url" || return 1
+    tar -tzf "$dest" >/dev/null 2>&1 || return 1
+    return 0
+}
 
 TOKEN=""
 PREFLIGHT_ONLY=0
@@ -148,8 +165,25 @@ if [ ! -x "$RUNNER_DIR/config.sh" ]; then
     sudo chown "$(id -un):$(id -gn)" "$RUNNER_DIR"
     tarball="$RUNNER_DIR/runner.tar.gz"
     url="https://github.com/actions/runner/releases/download/v${RUNNER_VER}/actions-runner-linux-x64-${RUNNER_VER}.tar.gz"
-    info "下载 $url"
-    curl -fsSL -o "$tarball" "$url" || { bad "下载 runner 失败"; exit 2; }
+    # 跨境下载 GitHub release 常在传输中断(curl 56 / SSL unexpected eof),
+    # 逐个回退源:显式指定 → 直连 → 加速镜像。
+    got=0
+    if [ -n "$RUNNER_DOWNLOAD_BASE" ]; then
+        info "下载(1/3)指定源: ${RUNNER_DOWNLOAD_BASE}"
+        fetch_tar "${RUNNER_DOWNLOAD_BASE}/${url}" "$tarball" && got=1 \
+            || warn "指定源失败,继续下一个"
+    fi
+    if [ "$got" = 0 ]; then
+        info "下载(2/3)直连 GitHub: $url"
+        fetch_tar "$url" "$tarball" && got=1 \
+            || warn "直连失败(跨境网络常见),换加速镜像"
+    fi
+    if [ "$got" = 0 ]; then
+        info "下载(3/3)加速镜像: ${RUNNER_MIRROR}/${url}"
+        fetch_tar "${RUNNER_MIRROR}/${url}" "$tarball" && got=1 \
+            || warn "加速镜像也失败"
+    fi
+    [ "$got" = 1 ] || { bad "runner 下载失败(所有源都不通);可试 RUNNER_MIRROR=<你的镜像> 重跑"; exit 2; }
     tar -xzf "$tarball" -C "$RUNNER_DIR" || { bad "解压 runner 失败"; exit 2; }
     rm -f "$tarball"
     # 解出来的文件会带默认标签;显式 restorecon 一次,避免 203/EXEC。
