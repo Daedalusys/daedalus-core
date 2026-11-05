@@ -1,23 +1,34 @@
 #!/bin/bash
-# Headless deployment validation harness for daedalus-os on Mastwet_Server.
-# Drives issue core#36 (P4 controller validation checklist) against a rootless
-# podman + systemd-in-container runtime, because the target has no sudo / qemu.
+# daedalus-os 无头部署验证 harness:在 rootless podman + systemd-in-container
+# 运行时里跑 A1–F1 行为探针(单元产物/生命周期/drift/ownership/审计链/smoke)。
 #
-# Usage: ./headless-test.sh [image-ref]
-#   default image-ref: ghcr.io/daedalusys/daedalus-os:latest
+# 用法:
+#   ./headless-test.sh [image-ref]                # 默认远端 Mastwet_Server
+#   REMOTE_HOST=local ./headless-test.sh <image>   # 本地执行(CI 的 P0 门禁用)
+#   ./headless-test.sh --selftest                 # 只跑判定函数自检
+#   默认 image-ref: ghcr.io/daedalusys/daedalus-os:latest
 #
-# What we can honestly verify in this environment:
-#   - image pull + container boot with systemd-as-PID1 (headless)
-#   - A1/A2 unit artifacts, B1-B3 lifecycle, D1/D2 read-only drift/ownership,
-#     E1 audit chain, F1 daedalus-smoke
-#   - C1-C3 (real tx drive / service / package) only if the image is P4+
-#   - C3 additionally requires /usr writes, which rootless overlay may block
+# 本环境能诚实验证的范围:
+#   - 镜像拉取 + 以 systemd 作 PID1 的无头容器启动
+#   - A1/A2 单元产物、B1-B3 生命周期、D1/D2 只读 drift/ownership、
+#     E1 审计链、F1 daedalus-smoke
+#   - C1-C3(真实 tx 驱动 / 服务 / 包)仅当镜像是 P4+
+#   - C3 另外还需要 /usr 可写,rootless overlay 可能挡住
 #
-# Everything is written to RESULTS and echoed at the end.
+# 退出码:
+#   0  探针全过(FAIL 计数为 0)
+#   1  有探针 FAIL —— 门禁据此判红,不得静默放过
+#   2  连不上执行目标(远端 ssh 不通 / 本地 podman 不可用)
+#   3  systemd 未到 running/degraded
+#
+# 结果全部写进 RESULTS 关联数组并在末尾打印。
 
 set -uo pipefail
 
-REMOTE_HOST="${REMOTE_HOST:-Mastwet_Server}"
+# REMOTE_HOST 未设置时默认走远端 Mastwet_Server(既有用法不变);
+# 显式置空或取 local 则在本地执行 —— CI 的 P0 门禁跑在托管 runner 上,
+# 没有可 ssh 的目标机,而探针本身只需要 podman。
+REMOTE_HOST="${REMOTE_HOST-Mastwet_Server}"
 IMAGE_REF="${1:-ghcr.io/daedalusys/daedalus-os:latest}"
 CONTAINER_NAME="daedalus-headless-$$"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
@@ -29,7 +40,15 @@ declare -A RESULT  # key -> PASS|FAIL|SKIP|NOTE|N/A
 declare -A DETAIL  # key -> short detail
 for k in "${ORDER[@]}"; do RESULT[$k]="N/A"; DETAIL[$k]=""; done
 
-rsh() { ssh -o ConnectTimeout=20 "$REMOTE_HOST" "$@"; }
+rsh() {
+    # local 模式:在 CI 托管 runner 上直接跑,无需(也无处)ssh。
+    # 现有调用点全部只传单个命令字符串,故本地走 bash -c "$*" 即可。
+    if [ -z "$REMOTE_HOST" ] || [ "$REMOTE_HOST" = local ]; then
+        bash -c "$*"
+    else
+        ssh -o ConnectTimeout=20 "$REMOTE_HOST" "$@"
+    fi
+}
 log()  { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  PASS  %s\n' "$*"; }
 bad()  { printf '  FAIL  %s\n' "$*"; }
@@ -85,11 +104,15 @@ rsh "podman pull '$IMAGE_REF' 2>&1 | tail -6"
 
 # ------------------------------------------------------------------- boot -----
 log "Launch headless container $CONTAINER_NAME (systemd as PID 1)"
+# 不加 --network=host:host 网络会和宿主自己的 sshd 抢 22 端口,且镜像 postprocess
+# 会 enable NetworkManager,在宿主 netns 里起来有动宿主网卡的风险(同项目
+# almalinux-bootc/tests/rescue-path.sh 已踩过并修掉)。本探针全走 podman exec,
+# 不需要宿主网络。
 rsh "podman rm -f $CONTAINER_NAME >/dev/null 2>&1 || true
      podman run -d \
        --name $CONTAINER_NAME \
        --hostname daedalus-headless \
-       --privileged --systemd=always --network=host \
+       --privileged --systemd=always \
        --security-opt label=disable --cgroupns=host \
        --tmpfs /run --tmpfs /tmp \
        '$IMAGE_REF' 2>&1 | tail -4"
@@ -287,6 +310,22 @@ for k in "${ORDER[@]}"; do
     printf '%-4s %-6s %s\n' "$k" "${RESULT[$k]}" "${DETAIL[$k]:0:100}"
 done
 
+# 退出码契约:此前本脚本恒 exit 0,CI 里成了「跑过就算过」的假绿。
+# 只有 FAIL 计入(多点探测下 SKIP/NOTE/N/A 是正常态,不代表坏)。
+fail_n=0
+for k in "${ORDER[@]}"; do
+    [ "${RESULT[$k]}" = FAIL ] && fail_n=$((fail_n + 1))
+done
+
 echo
 echo "Container '$CONTAINER_NAME' left running."
-echo "Stop: ssh $REMOTE_HOST 'podman stop $CONTAINER_NAME && podman rm $CONTAINER_NAME'"
+if [ -z "$REMOTE_HOST" ] || [ "$REMOTE_HOST" = local ]; then
+    echo "Stop: podman rm -f $CONTAINER_NAME"
+else
+    echo "Stop: ssh $REMOTE_HOST 'podman stop $CONTAINER_NAME && podman rm $CONTAINER_NAME'"
+fi
+
+echo
+echo "结论: $fail_n 项 FAIL"
+if [ "$fail_n" -gt 0 ]; then exit 1; fi
+exit 0
