@@ -93,6 +93,12 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		code := cmdRescue(stdout, stderr, args)
 		hostAudit("host_rescue_vnc", pluginDir, "", code)
 		return code
+	case "node":
+		// 控制面被控节点名单(审计在子命令内部按 list/add 分别落)。
+		return cmdNode(stdout, stderr, args)
+	case "plan":
+		// 跨机 Plan 的提交/查询/人在环恢复(审计同理按子命令落)。
+		return cmdPlan(stdout, stderr, args)
 	case "inspect", "verify", "run-plugin", "render-unit":
 		id, tail, err := parseIDArgs(args)
 		if err != nil {
