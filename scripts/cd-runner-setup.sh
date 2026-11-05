@@ -25,7 +25,9 @@
 #   RUNNER_VER         runner 版本(默认 2.338.2)
 #   RUNNER_NAME        runner 名字(默认取主机名)
 #   RUNNER_LABELS      附加标签(默认 daedalus-kvm)
-#   RUNNER_DIR         安装目录(默认 ~/actions-runner)
+#   RUNNER_DIR         安装目录(默认 /opt/actions-runner —— **不要放家目录**:
+#                      Fedora SELinux Enforcing 下 systemd 无法执行 ~ 里的文件,
+#                      svc 会以 203/EXEC 失败)
 #   GRANT_NOPASSWD     设为 0 则不给当前用户配免密 sudo(默认 1 = 配)
 #
 # 退出码
@@ -38,7 +40,7 @@ REPO="${DAEDALUS_REPO:-Daedalusys/daedalus-core}"
 RUNNER_VER="${RUNNER_VER:-2.338.2}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname -s)}"
 RUNNER_LABELS="${RUNNER_LABELS:-daedalus-kvm}"
-RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner}"
+RUNNER_DIR="${RUNNER_DIR:-/opt/actions-runner}"
 GRANT_NOPASSWD="${GRANT_NOPASSWD:-1}"
 TOKEN_FILE="${TOKEN_FILE:-/tmp/.daedalus-runner-token}"
 # 需要装的包:podman/qemu 已可能就位;bootc/ostree 是 P2 的 bootc 换部署验证用的,
@@ -131,17 +133,30 @@ command -v bootc >/dev/null 2>&1 && ok "bootc 就位(P2 的 bootc 换部署验�
 # ------------------------------------------------------------------ runner ---
 say "Phase 3 · 安装 runner"
 [ -n "$TOKEN" ] || { bad "缺注册 token(用 --token-file 或 --token 提供);前置体检已通过,补 token 后重跑即可"; exit 2; }
-if [ -x "$RUNNER_DIR/config.sh" ]; then
-    ok "复用已存在的 runner 安装目录 $RUNNER_DIR"
-else
-    mkdir -p "$RUNNER_DIR"
+
+# 旧装法(Fedora SELinux Enforcing)会把 svc 打成 203/EXEC:systemd 无法执行
+# ~ 里的文件。所以目录固定在 /opt,并在解包后 restorecon 把标签摆正。
+UNIT_NAME="actions.runner.${REPO//\//-}.${RUNNER_NAME}.service"
+if systemctl list-unit-files "$UNIT_NAME" --no-legend 2>/dev/null | grep -q .; then
+    info "存在旧的服务单元 $UNIT_NAME,先停掉"
+    sudo systemctl disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
+fi
+
+if [ ! -x "$RUNNER_DIR/config.sh" ]; then
+    info "准备安装目录 $RUNNER_DIR"
+    sudo mkdir -p "$RUNNER_DIR"
+    sudo chown "$(id -un):$(id -gn)" "$RUNNER_DIR"
     tarball="$RUNNER_DIR/runner.tar.gz"
     url="https://github.com/actions/runner/releases/download/v${RUNNER_VER}/actions-runner-linux-x64-${RUNNER_VER}.tar.gz"
     info "下载 $url"
     curl -fsSL -o "$tarball" "$url" || { bad "下载 runner 失败"; exit 2; }
     tar -xzf "$tarball" -C "$RUNNER_DIR" || { bad "解压 runner 失败"; exit 2; }
     rm -f "$tarball"
+    # 解出来的文件会带默认标签;显式 restorecon 一次,避免 203/EXEC。
+    sudo restorecon -R "$RUNNER_DIR" 2>/dev/null || warn "restorecon 不可用,若 svc 仍 203/EXEC 需手工处理标签"
     ok "runner v${RUNNER_VER} 已解压到 $RUNNER_DIR"
+else
+    ok "复用已存在的 runner 安装目录 $RUNNER_DIR"
 fi
 
 cd "$RUNNER_DIR"
@@ -151,6 +166,7 @@ cd "$RUNNER_DIR"
     --name "$RUNNER_NAME" \
     --labels "$RUNNER_LABELS" \
     --unattended \
+    --replace \
     --work _work \
     || { bad "runner 注册失败(标签重复?token 过期?)"; exit 2; }
 ok "runner 已注册: $RUNNER_NAME(标签 $RUNNER_LABELS)"
@@ -159,8 +175,15 @@ say "Phase 4 · 装成 systemd 服务"
 sudo ./svc.sh install "$(id -un)" || { bad "svc.sh install 失败"; exit 2; }
 sudo ./svc.sh start   || { bad "svc.sh start 失败"; exit 2; }
 sleep 3
-sudo ./svc.sh status || warn "svc.sh status 非零(服务可能仍在启动中)"
-ok "runner 服务已启动"
+# 不能只看 svc.sh 的退出码:它在服务实际 failed 时也可能返回 0(本轮就踩到过,
+# 报「已启动」而 systemd 里是 203/EXEC)。必须以 systemctl is-active 为准。
+if sudo systemctl is-active --quiet "$UNIT_NAME"; then
+    ok "runner 服务 active($UNIT_NAME)"
+else
+    bad "runner 服务未 active —— 看 'systemctl status $UNIT_NAME'"
+    sudo systemctl status "$UNIT_NAME" --no-pager -l 2>&1 | head -15 | sed 's/^/      /'
+    exit 2
+fi
 
 # ------------------------------------------------------------------- 收尾 ---
 say "Phase 5 · 验证"
