@@ -56,11 +56,37 @@ manifests_from_tree() {
 }
 
 # release_caps —— 兄弟仓 plugins 的 release.yml 供料 cap 集合(可选来源)。
+#
+# plugins 仓自 #72 起把清单收敛为 workflow 级 `env.CAPS` 单一事实源,release 步骤
+# 里写成 `for cap in $CAPS; do`。取到 `$CAPS` 这类**引用**时必须回同一文件的 env
+# 段解析出真实名单 —— 否则会把字面量 `$CAPS` 当成一个 cap,门禁报出根本不存在的
+# 漂移(2026-11-04 起 core main 的 CI 就红在这个假漂移上)。
+# 解析不出 → 返回空,由调用方 fail-closed:不得静默跳过第四份核对。
 release_caps() {
-    local f="$1"
+    local f="$1" raw resolved var
     [ -f "$f" ] || return 1
-    sed -n 's/.*for cap in \(.*\); do.*/\1/p' "$f" | head -n 1 \
-        | tr ' ' '\n' | sed '/^$/d' | sort
+    raw="$(sed -n 's/.*for cap in \(.*\); do.*/\1/p' "$f" | head -n 1)"
+    [ -n "$raw" ] || return 1
+    resolved="$raw"
+    case "$raw" in
+        '$'*|'${'*)
+            var="${raw#\$\{}"; var="${var%\}}"; var="${var#\$}"
+            resolved="$(awk -v var="$var" '
+                /^[ \t]*#/ { next }
+                $0 ~ "^[ \t]*" var ":" {
+                    q = sprintf("%c", 39)
+                    v = $0
+                    sub("^[ \t]*" var ":[ \t]*", "", v)
+                    gsub(/^[ \t]+|[ \t]+$/, "", v)
+                    gsub(/^"|"$/, "", v)
+                    gsub("^" q "|" q "$", "", v)
+                    print v
+                    exit
+                }' "$f")"
+            [ -n "$resolved" ] || return 1
+            ;;
+    esac
+    printf '%s\n' "$resolved" | tr ' ' '\n' | sed '/^$/d' | sort
 }
 
 # compare_sets <标签A> <集合A> <标签B> <集合B> —— 两个集合(换行分隔、已排序)不等即打印
@@ -112,9 +138,37 @@ if [ "${1:-}" = "--selftest" ]; then
     doctored="$(mktemp)"
     printf 'name: daedalus-plugins\non: push\n' > "$doctored"
     rc=0
-    DAEDALUS_PLUGINS_RELEASE_YML="$doctored" bash "$0" >/dev/null 2>&1 || rc=$?
+    msg="$(DAEDALUS_PLUGINS_RELEASE_YML="$doctored" bash "$0" 2>&1 >/dev/null)" || rc=$?
     st 1 "$rc" "release.yml 存在但无 'for cap in' 行 → 正式流程 exit 1(fail-closed)"
+    # 诊断行必须在:fail-closed 静默退出(不打印原因)会让排障者只看到裸 rc=1。
+    st 1 "$(printf '%s' "$msg" | grep -c '解析不出 cap 集合')" "同一场景必须打印「解析不出 cap 集合」的诊断"
     rm -f "$doctored"
+
+    # 6) plugins 仓自 #72 起把清单收敛为 workflow 级 `env.CAPS` 单一事实源,
+    #    release 步骤写成 `for cap in $CAPS; do`。解析器必须回 env 段取回真实名单,
+    #    不能把字面量 `$CAPS` 当成一个 cap —— 那正是 2026-11-04 起 core main
+    #    CI 报「集合不等」的假漂移。
+    envform="$(mktemp)"
+    cat > "$envform" <<'ENVEOF'
+env:
+  CAPS: "blueprint dupe"
+jobs:
+  release:
+    steps:
+      - run: |
+          for cap in $CAPS; do
+            echo "$cap"
+          done
+ENVEOF
+    st $'blueprint\ndupe' "$(release_caps "$envform")" "release.yml 的 for cap in \$CAPS → 回 env.CAPS 解析出名单"
+    rm -f "$envform"
+
+    # 7) `$CAPS` 引用但 env 段解析不出 → 必须为空(fail-closed),
+    #    不得把字面量 `$CAPS` 当成一个 cap 混进集合。
+    noenv="$(mktemp)"
+    printf 'jobs:\n  release:\n    steps:\n      - run: for cap in $CAPS; do echo x; done\n' > "$noenv"
+    st "" "$(release_caps "$noenv")" "\$CAPS 解析不出 → 空(fail-closed)"
+    rm -f "$noenv"
 
     if [ "$fail_n" -eq 0 ]; then echo "RESULT: SELFTEST PASS"; exit 0; fi
     echo "RESULT: SELFTEST FAIL ($fail_n)"; exit 1
@@ -131,7 +185,9 @@ fi
 
 release=""
 if [ -f "$PLUGINS_RELEASE_YML" ]; then
-    release="$(release_caps "$PLUGINS_RELEASE_YML")"
+    # `|| true`:release_caps 解析失败会返回 1,而 set -e 会在赋值处直接退出 ——
+    # 那样下面的诊断行永远打不出来,fail-closed 就只剩一个裸 rc=1。
+    release="$(release_caps "$PLUGINS_RELEASE_YML")" || true
     # 文件在、却解析不出名单 = 该来源已不可用(格式漂移)。此时**不得**当作「跳过」:
     # 静默跳过会让第四份核对凭空消失而门禁仍报 OK —— fail-closed,直接拒。
     [ -n "$release" ] || {
