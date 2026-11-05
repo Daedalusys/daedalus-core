@@ -482,6 +482,25 @@ jobs:
         working-directory: daedalus-core
         run: ./tests/build/image-lint.sh localhost/daedalus-os:latest
 
+      - name: Headless deployment probes (systemd-in-container)
+        # 在真容器里跑 A–F 行为探针:镜像能不能起 systemd、控制器能不能动、
+        # 审计链在不在、smoke 过不过。此前整条产线只验「镜像构建成功」,
+        # 从不验「镜像起不来」——本步把后者变成门禁。
+        # x86-64-v3 前置:镜像内 glibc 硬性要求;runner CPU 不满足时**响亮失败**,
+        # 绝不静默跳过(跳过 = 假绿,正是本仓要消灭的形态)。
+        shell: bash
+        working-directory: daedalus-core
+        env:
+          REMOTE_HOST: local
+          LOG_DIR: ${{ runner.temp }}/daedalus-headless-logs
+        run: |
+          missing=""
+          for f in avx2 bmi1 bmi2 fma movbe xsave; do
+            grep -qw "$f" /proc/cpuinfo || missing="$missing $f"
+          done
+          [ -z "$missing" ] || { echo "ERROR: runner CPU 不支持 x86-64-v3,缺:$missing"; exit 1; }
+          bash tests/deploy/headless-test.sh localhost/daedalus-os:latest
+
       # ---- 发布:OCI 镜像 → ghcr.io (bootc 原生分发形态),按 ref 分两档 ----
       #   :<sha>          —— 每次成功构建都推(build-qcow2 按它取本 run 的镜像);
       #   :latest/:upstream —— 只有 main / tag / dispatch(PUSH=true) 才写。
@@ -621,3 +640,54 @@ jobs:
           path: output/qcow2/
           if-no-files-found: error
           compression-level: 0
+
+  # 真机引导门禁:qcow2 在真 KVM 上起起来,串口必须出现 login 提示符。
+  # 此前 qcow2 只产出不引导——「镜像能不能起来」这件事从未被任何 CI 判过。
+  deploy-verify-kvm:
+    name: Deploy Verify (real KVM boot)
+    # 跑在自托管 runner 上(标签 daedalus-kvm):必须是 x86-64-v3 且有 /dev/kvm,
+    # 否则 AlmaLinux 10 的 glibc 会在 guest 里 panic。
+    # 只对出货档开放(main / tag / dispatch(PUSH=true)):自托管 runner 会执行
+    # 构建产物,PR 与 feat/* 分支绝不触发——这是安全底线,不是省时间。
+    runs-on: [self-hosted, linux, x64, daedalus-kvm]
+    needs: build-qcow2
+    if: ${{ !cancelled() && needs.build-qcow2.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: daedalus-core
+
+      - name: Download qcow2 artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: daedalus-os-qcow2-headless
+          path: ${{ github.workspace }}/qcow2
+
+      - name: Boot the qcow2 in KVM and wait for login prompt
+        shell: bash
+        working-directory: daedalus-core
+        env:
+          VERIFY_WORK: ${{ github.workspace }}/verify-out
+        run: |
+          qcow2="$(find "${{ github.workspace }}/qcow2" -name '*.qcow2' -type f | head -1)"
+          [ -n "$qcow2" ] || { echo "ERROR: artifact 里没有 .qcow2"; exit 1; }
+          # sudo 会清环境变量,VERIFY_WORK 必须显式透传
+          sudo VERIFY_WORK="$VERIFY_WORK" bash tests/real-machine/bootc-verify.sh --qcow2 "$qcow2"
+
+      - name: Upload boot evidence
+        # 引导失败时证据照样回传:串口日志是排查 panic 的唯一线索。
+        # 前置就失败时目录可能压根没建出来,所以用 warn 而不是 error——
+        # 「证据上传」不该变成第二个失败源。
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deploy-verify-kvm-evidence
+          path: ${{ github.workspace }}/verify-out
+          if-no-files-found: warn
+          retention-days: 30
