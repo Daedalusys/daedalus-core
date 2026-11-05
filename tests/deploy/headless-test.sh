@@ -47,11 +47,11 @@ a1_verdict() {
     esac
 }
 
-# F1 探针:present=yes/no(二进制是否在镜像里) + rc(执行退出码,缺失时为空)
+# F1 探针:present=yes/no(二进制是否在镜像里) + rc(执行退出码,缺失时为空)。
+# 二进制已随镜像交付 → 不再有"未安装所以跳过"这一态:只有 PASS / FAIL。
 f1_verdict() {
-    if [ "$1" != "yes" ]; then echo SKIP
-    elif [ "$2" = "0" ];  then echo PASS
-    else                       echo FAIL
+    if [ "$1" = "yes" ] && [ "$2" = "0" ]; then echo PASS
+    else                                          echo FAIL
     fi
 }
 
@@ -66,10 +66,11 @@ if [ "${1:-}" = "--selftest" ]; then
     st FAIL "$(a1_verdict 'link->/nonexistent exists=no')" "A1 dangling symlink 必须 FAIL"
     st FAIL "$(a1_verdict 'MISSING')" "A1 无 symlink 必须 FAIL"
     st FAIL "$(a1_verdict 'regular-file (not a link)')" "A1 普通文件(非 link)必须 FAIL"
-    st SKIP "$(f1_verdict no '')" "F1 二进制缺失必须 SKIP(不得 PASS)"
+    st FAIL "$(f1_verdict no '')" "F1 二进制缺失必须 FAIL(装了却探不到 = 镜像坏;不再是 SKIP)"
     st PASS "$(f1_verdict yes 0)" "F1 rc=0 判 PASS"
     st FAIL "$(f1_verdict yes 1)" "F1 rc=1 判 FAIL"
     st FAIL "$(f1_verdict yes '')" "F1 rc 空(未取到)必须 FAIL"
+    st FAIL "$(f1_verdict no 0)" "F1 缺失但 rc=0(矛盾输入)必须 FAIL"
     if [ "$fail_n" -eq 0 ]; then echo "RESULT: SELFTEST PASS"; exit 0; fi
     echo "RESULT: SELFTEST FAIL ($fail_n)"; exit 1
 fi
@@ -259,9 +260,9 @@ fi
 log "F1: daedalus-smoke"
 # 假阳性修复(2026-10-29):原实现裸 exec + `grep -qiE 'ok|pass|smoke'`,而 podman 的
 # "executable file not found" 报错文本里就含二进制名 `daedalus-smoke` —— 于是二进制
-# 缺失也会被判 PASS。改为:先探测存在性,缺失判 SKIP;存在则以退出码为准。
-# 背景:当前 CI 的 Install core binaries 步骤只装 host/audit/tx + shell/service,
-# 不装 daedalus-smoke(build.yml 的 Install core binaries to image tree)。
+# 缺失也会被判 PASS。改为:先探测存在性,再以退出码为准。
+# 现在 CI 的 Install core binaries 步骤已把 daedalus-smoke 装进镜像,故"未安装所以
+# 跳过"这一态作废:缺失 = 镜像坏(FAIL),不再 SKIP。
 if ! rsh "podman exec $CONTAINER_NAME sh -c 'command -v daedalus-smoke >/dev/null 2>&1 || test -x /usr/local/bin/daedalus-smoke'" >/dev/null 2>&1; then
     F1_PRESENT=no
 else
@@ -275,8 +276,8 @@ else
 fi
 case "$(f1_verdict "$F1_PRESENT" "$F1_RC")" in
     PASS) ok "F1 smoke rc=0"; set_r F1 PASS "$(printf '%s\n' "$F1_OUT" | head -1)" ;;
-    SKIP) skp "F1 daedalus-smoke 未装进镜像(CI 不安装该二进制),跳过"; set_r F1 SKIP "binary absent in image" ;;
-    *)    bad "F1 smoke rc=${F1_RC:-?}"; set_r F1 FAIL "$(printf '%s\n' "$F1_OUT" | head -2 | tr '\n' '|')" ;;
+    *)    bad "F1 daedalus-smoke 未通过(present=${F1_PRESENT} rc=${F1_RC:-?})"
+          set_r F1 FAIL "$(printf '%s\n' "$F1_OUT" | head -2 | tr '\n' '|')" ;;
 esac
 
 # -------------------------------------------------------------- summary -------

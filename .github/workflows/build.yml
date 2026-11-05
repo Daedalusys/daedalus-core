@@ -360,18 +360,22 @@ jobs:
           done
 
       - name: Install core binaries to image tree
-        # files/system/usr/local/bin/ 下的 daedalus-{host,audit,tx,shell,service} 全是
-        # just plugin-pack 构建产物、不入库,故 CI 在此自行落位:host/audit/tx 取 core
-        # 新鲜构建产物;shell/service 取上方 release zip 解包态(files/system/opt/
+        # files/system/usr/local/bin/ 下的 daedalus-{host,audit,tx,smoke,shell,service}
+        # 全是 just plugin-pack 构建产物、不入库,故 CI 在此自行落位:host/audit/tx/smoke
+        # 取 core 新鲜构建产物;shell/service 取上方 release zip 解包态(files/system/opt/
         # daedalus/plugins/daedalus.{shell,service}/bin/),与插件安装态逐字节同源。
         # 76-daedalus-plugin-gen.sh 与 copilot wrapper 的 deno --allow-run 放行路径、
-        # 以及镜像内以字面路径直启的 QA 链路都依赖这两个位置,缺失即 fail-closed。
+        # 以及镜像内以字面路径直启的 QA 链路都依赖这些位置,缺失即 fail-closed。
+        #
+        # smoke 是 QA 链路专用(镜像内端到端自检),**不参与** systemd 单元渲染 ——
+        # 76-daedalus-plugin-gen.sh 只认插件 manifest 里声明的 capability 二进制。
         shell: bash
         working-directory: daedalus-core
         run: |
           install -Dm0755 bin/daedalus-host files/system/usr/local/bin/daedalus-host
           install -Dm0755 bin/daedalus-audit files/system/usr/local/bin/daedalus-audit
           install -Dm0755 bin/daedalus-tx files/system/usr/local/bin/daedalus-tx
+          install -Dm0755 bin/daedalus-smoke files/system/usr/local/bin/daedalus-smoke
           for cap in shell service; do
             src="files/system/opt/daedalus/plugins/daedalus.${cap}/bin/daedalus-${cap}"
             if [ ! -x "${src}" ]; then

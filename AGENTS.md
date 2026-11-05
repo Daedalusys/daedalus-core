@@ -31,7 +31,7 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 │   ├── daedalus-host/          #   插件 list/inspect/verify/run-plugin/render-unit (决策 16:非父进程,零 spawn)
 │   ├── daedalus-audit/         #   哈希链审计 CLI (--identity/--tool/--args/--outcome/--log-path, verify 子命令)
 │   ├── daedalus-tx/            #   事务通道 CLI (begin→propose→apply→rollback; service/package/task/container 适配器)
-│   ├── daedalus-smoke/         #   镜像内端到端 smoke (v3 构建机补跑; todo 18)
+│   ├── daedalus-smoke/         #   镜像内端到端 smoke (CI 每次镜像构建后执行)
 │   └── daedalus-plugin-pack/   #   zip 打包器 (checksums 注入 + manifest 规范化自摘要 + zip-slip 防线)
 ├── internal/                  # ★ 契约包 (核心 runtime 共享;其余安全包已迁 daedalus-sdk)
 │   ├── controller/             #   controller 共享包 (决策 25 契约缝锁定)
@@ -84,7 +84,7 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 | `daedalus-host` | Go binary | `cmd/daedalus-host/` (镜像态 `usr/local/bin/daedalus-host`) | 插件 list/inspect/verify/run-plugin/render-unit;**非父进程,零 spawn**;`paths.go` / `paths_demo.go` build-tag 互斥(dev 路径重写仅 demo 编译期常驻) |
 | `daedalus-audit` | Go binary | `cmd/daedalus-audit/` (镜像态 `usr/local/bin/`) | 哈希链审计 CLI;所有审计写入唯一入口 |
 | `daedalus-tx` | Go binary | `cmd/daedalus-tx/` | 事务 CLI;`begin`→`propose`→`apply`→`rollback`;service/package/task/container 适配器;user-scope-only (service/task/container-rootless) / root-only (package) euid 守门 |
-| `daedalus-smoke` | Go binary | `cmd/daedalus-smoke/` | 镜像内端到端 smoke;v3 构建机补跑 |
+| `daedalus-smoke` | Go binary | `cmd/daedalus-smoke/` | 镜像内端到端 smoke;CI 每次镜像构建后执行 |
 | `daedalus-plugin-pack` | Go binary | `cmd/daedalus-plugin-pack/` | zip 打包器;checksums 注入 + manifest 规范化自摘要 + zip-slip 防线 |
 | `controller` | Go pkg | `internal/controller/` | 决策 25 契约缝锁定包;host/tx 共享 |
 | `tx` | Go pkg | `internal/tx/` | 事务通道共享包;`tx.Step` 六键线上契约;D-1 裁决 ctx 侧路透传;`tx.List()` 回放序(created_at↑,id↑) |
@@ -387,7 +387,7 @@ podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release
 - `base_image/` carries upstream dormant CI targeting upstream repos — do NOT mistake for Daedalus CI.
 - Deno install (`65-ai-safety.sh`) pulls from `https://deno.land/install.sh` to `/usr/local/bin/deno` — used **only** by the copilot plugin now.
 - **构建机限制 (todo 5/10/13 记录)**: `just build` 在本机不可执行 — `almalinux-bootc:10` 要求 x86-64-v3 而本机 CPU 不支持; 镜像内断言(`just verify-image`, in-image `daedalus-host list`, bootc lint, 76 脚本真实执行, copilot wrapper 全链路)在 v3 构建机/CI 上补跑(plan todo 18)。本机等价断言: `find files/system base_image/files/system \( -name "*.py" -o -name "*.test.ts" -o -name "__pycache__" -o -name "go.mod" \) | wc -l` == 0。
-- 镜像内 `/usr/local/bin/daedalus-{audit,shell}`(audit.ts/exec.ts 的生产默认路径)已由 `just plugin-pack` 构建期安装(task 21 修复断链缺口; 与 wrapper `--allow-run` 放行路径一致); `daedalus-host list` 等镜像内端到端断言仍在 v3 构建机补跑(todo 18)。copilot 内向上回溯 dev 路径的回退链仅作开发态兜底。
+- 镜像内 `/usr/local/bin/daedalus-{audit,shell}`(audit.ts/exec.ts 的生产默认路径)已由 `just plugin-pack` 构建期安装(task 21 修复断链缺口; 与 wrapper `--allow-run` 放行路径一致); `daedalus-host list` 等镜像内端到端断言由 CI 的镜像构建腿执行(`tests/build/plugin-inventory-image.sh` 与 `tests/build/image-lint.sh`)。copilot 内向上回溯 dev 路径的回退链仅作开发态兜底。
 - **mid-migration 残留说明**: `daedalus-plugins/blueprint/{cmd,bin,blueprints}/`(本仓下)是迁移期产物 — cmd 与 bin 仅供历史回溯,主源在 `../daedalus-plugins/blueprint/`; `daedalus-plugins/go.work` 是迁移桥,迁移完成后会清空。`plugin/{fs,shell,pkg,sysinfo,service}/` 5 个子目录是占位 README,主源在 `../daedalus-plugins/<cap>/`。
 
 ## 源码树内调试(dev-install 替代形态 — 0 安装)

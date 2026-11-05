@@ -38,6 +38,9 @@ run_checks() {
     run_one "VARIANT=headless 标记" grep -q '^VARIANT=headless$' /etc/os-release
     # 宿主 CLI 是镜像内一切插件操作/救援路径的入口,必须是可执行文件。
     run_one "宿主 CLI 可执行(/usr/local/bin/daedalus-host)" test -x /usr/local/bin/daedalus-host
+    # QA 链路端到端:daedalus-smoke 在镜像内自检并通过。它此前从未装进镜像,
+    # 于是 tests/deploy/headless-test.sh 的 F1 恒 SKIP(假绿);装上之后退出码即判据。
+    run_one "qa: daedalus-smoke 端到端" /usr/local/bin/daedalus-smoke
 }
 
 # ---------------------------------------------------------------- 自检 ---------
@@ -68,6 +71,7 @@ EOS
 run --rm test-image bootc container lint
 run --rm test-image grep -q ^VARIANT=headless$ /etc/os-release
 run --rm test-image test -x /usr/local/bin/daedalus-host
+run --rm test-image /usr/local/bin/daedalus-smoke
 EOF
     }
 
@@ -83,9 +87,9 @@ EOF
     if PATH="$tmp:$PATH" PODMAN_LOG="$tmp/log" PODMAN_FAIL_AT=1 bash "$SELF" test-image >/dev/null 2>&1; then rc=0; else rc=$?; fi
     st 99 "$rc" "第 1 条断言失败 → 退出码透传(非零)"
 
-    # 失败传播:最后一条(宿主 CLI)失败 → 非零。
+    # 失败传播:最后一条(daedalus-smoke)失败 → 非零。
     rm -f "$tmp/log"
-    if PATH="$tmp:$PATH" PODMAN_LOG="$tmp/log" PODMAN_FAIL_AT=3 bash "$SELF" test-image >/dev/null 2>&1; then rc=0; else rc=$?; fi
+    if PATH="$tmp:$PATH" PODMAN_LOG="$tmp/log" PODMAN_FAIL_AT=4 bash "$SELF" test-image >/dev/null 2>&1; then rc=0; else rc=$?; fi
     st 99 "$rc" "最后一条断言失败 → 退出码透传(非零)"
 
     if [ "$fail_n" -eq 0 ]; then echo "RESULT: SELFTEST PASS"; exit 0; fi
@@ -97,4 +101,4 @@ command -v podman >/dev/null \
     || { echo "image-lint: 缺 podman,无法在镜像内断言(fail-closed)" >&2; exit 1; }
 echo "== 镜像最终态断言:${IMAGE} =="
 run_checks
-echo "OK: 镜像 lint + VARIANT + 宿主 CLI 断言通过"
+echo "OK: 镜像 lint + VARIANT + 宿主 CLI + daedalus-smoke 断言通过"
