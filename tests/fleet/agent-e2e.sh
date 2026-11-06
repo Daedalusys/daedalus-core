@@ -22,6 +22,14 @@
 #         - 控制面 mTLS 客户端凭证:DAEDALUS_FLEET_CLIENT_CERT / _KEY / DAEDALUS_FLEET_CA
 #         - agent 出货 tarball:DAEDALUS_AGENT_TARBALL=<path>(内含 bin/ 与 scripts/)
 #         - 目标机有 systemd 与免密 sudo(install.sh 的前置)
+#         - **各目标机的 agent 必须共用同一张 CA**:agent 首启会自举自己的 CA,而
+#           控制面对一个 Plan 里的所有节点只持有一份客户端证书,三台各一套 CA 时
+#           plan submit 谁都连不上。故须在 install 之前把同一张 CA 与各自签发的
+#           服务端证书铺进 /etc/daedalus-agent/tls/(覆盖 ca.pem/agent.pem/agent.key,
+#           配置里 cert_path/key_path/ca_path/ca_key_path 四个路径都非空才会开 mTLS)。
+#           服务端证书的 SAN 必须是控制面拨号地址的 host 段(本驱动的用法是 localhost)。
+#         - 目标机需已可用的包索引:cloud image 预置的索引可能指向归档里已被撤下
+#           的版本,不刷新会让 package.set 因"取不到包"这种与被测对象无关的原因失败。
 #
 # 退出码:0 全部断言通过;非 0 表示有断言失败(逐条打印)。
 #
@@ -29,6 +37,10 @@
 # 与期望不符之处不隐瞒;发现缺陷开 issue 并把编号写进证据文件。
 
 set -euo pipefail
+
+# 真机驱动最怕"静默中断":set -e 下任何意外失败都会让整轮以半截日志收场,现场
+# 看不出是哪一步。留一条 ERR 线索指名出错行,便于事后定位。
+trap 'echo "agent-e2e: 第 $LINENO 行意外失败(exit=$?)" >&2' ERR
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOST_BIN="${DAEDALUS_HOST_BIN:-$ROOT/bin/daedalus-host}"
@@ -77,15 +89,19 @@ plan_is_complete() {
 # 按发行版选宿主原生包管理器(Ubuntu/Debian 走 dpkg,其余走 rpm),且只查不装,
 # 与 agent 侧声称做了什么完全解耦。
 #
-# LC_ALL=C 是必须的:rpm/dpkg 的提示语是 gettext 本地化的,zh_CN 宿主上
-# "package nginx is not installed" 会变成"未安装软件包 nginx"。判定虽然对
-# 两种文本都 fail-closed,但把输出钉成英文能去掉一整类"换个 locale 就变脸"
-# 的不确定性,也让证据文件里的输出可跨宿主比对。
+# 两处易踩的坑,都在真机上撞过:
+#   - dpkg-query 的字段语法是 `${Status}`,不是 rpm 的 `%{Status}`。写错时未装
+#     的包会报 "no packages found"(看不出问题),装了之后才原样吐出 `%{Status}`
+#     —— 判定因此 fail-closed 地判"没装上",把真装好的机器误报成没装。
+#   - rpm/dpkg 的提示语是 gettext 本地化的,zh_CN 宿主上 "package nginx is not
+#     installed" 会变成"未安装软件包 nginx"。判定虽对两种文本都 fail-closed,
+#     但把输出钉成英文能去掉一整类"换个 locale 就变脸"的不确定性,也让证据文件
+#     里的输出可跨宿主比对。
 pkg_probe_cmd() {
     local distro="$1" pkg="$2"
     case "$distro" in
         ubuntu|debian)
-            printf 'LC_ALL=C dpkg-query -W -f="%%{Status}\\n%%{Version}\\n" %s 2>&1 || true' "$pkg"
+            printf "LC_ALL=C dpkg-query -W -f='\${Status} \${Version}' %s 2>&1 || true" "$pkg"
             ;;
         *)
             printf 'LC_ALL=C rpm -q %s 2>&1 || true' "$pkg"
@@ -180,18 +196,22 @@ os_field() {
 
 # remote_os_release <ssh>:读目标机的 /etc/os-release(原文,进证据文件)。
 remote_os_release() {
-    "$SSH" "$1" 'cat /etc/os-release' 2>/dev/null
+    "$SSH" -n "$1" 'cat /etc/os-release' 2>/dev/null
 }
 
 # remote_agent_id <ssh>:agent 的身份来自它自己的配置(install.sh 的 postinstall
 # 写 /etc/daedalus-agent/config.yaml);控制面发起 Register 时用同一个值。
+#
+# 远端命令整体单引号包住、内部只用双引号,避免嵌套引号被本地 shell 先吃掉一层
+# —— 早先那种 `tr -d ' "'` 写法在远端留下一个未闭合的单引号,ssh 直接以 2 退出,
+# 又撞上 set -e 把整个矩阵静默打断。
 remote_agent_id() {
-    "$SSH" "$1" "sudo grep -E '^agent_id:' /etc/daedalus-agent/config.yaml 2>/dev/null | head -1 | cut -d: -f2- | tr -d ' \"" 2>/dev/null
+    "$SSH" -n "$1" 'sudo sed -n "s/^agent_id:[[:space:]]*//p" /etc/daedalus-agent/config.yaml' 2>/dev/null
 }
 
 # remote_first_addr <ssh>:目标机第一个非回环 IPv4(可拨地址缺省时的取值)。
 remote_first_addr() {
-    "$SSH" "$1" "hostname -I 2>/dev/null | awk '{print \$1}'" 2>/dev/null
+    "$SSH" -n "$1" "hostname -I 2>/dev/null | awk '{print \$1}'" 2>/dev/null
 }
 
 # install_agent_on <key> <ssh>:把出货 tarball 送到目标机,解出它自带的
@@ -224,7 +244,7 @@ assert_pkg_installed_on_target() {
     local key="$1" alias="$2" distro="$3" pkg="$4"
     local cmd out rc=0
     cmd="$(pkg_probe_cmd "$distro" "$pkg")"
-    out="$("$SSH" "$alias" "$cmd" 2>&1)" || rc=$?
+    out="$("$SSH" -n "$alias" "$cmd" 2>&1)" || rc=$?
     echo "  [独立核实] ${key}: \$ ${cmd}"
     printf '%s\n' "$out" | sed 's/^/    /'
     if pkg_installed_from_output "$distro" "$pkg" "$out"; then
@@ -274,6 +294,10 @@ run_selftest() {
     step "目标机独立核实:包管理器输出判定(不采信任何自我汇报)"
     check_probe "dpkg 报告 install ok installed → 判已装" \
         ubuntu "$WANT_PKG" installed "$(printf 'install ok installed\n1.24.0-2ubuntu7\n')"
+    check_probe "dpkg 单行格式 install ok installed <版本> → 判已装" \
+        ubuntu "$WANT_PKG" installed "$(printf 'install ok installed 1.24.0-2ubuntu7.18')"
+    check_probe "dpkg 字段占位符没被展开(写成 rpm 的 %{Status})→ 判没装上" \
+        ubuntu "$WANT_PKG" absent "$(printf '%%{Status}\n%%{Version}\n')"
     check_probe "dpkg 报告 no packages found → 判没装上" \
         ubuntu "$WANT_PKG" absent "$(printf 'dpkg-query: no packages found matching nginx\n')"
     check_probe "rpm 报告 nginx-1.24.0-2.el9.x86_64 → 判已装" \
@@ -365,14 +389,19 @@ run_matrix() {
         distros[i]="${id,,}"
         vers[i]="$ver"
         ok "${keys[i]}(${sshs[i]}): ID=${id} VERSION_ID=${ver} PRETTY_NAME=\"$(os_field "$osrel" PRETTY_NAME)\""
-        echo "    uname -r: $("$SSH" "${sshs[i]}" 'uname -r' 2>/dev/null)"
+        echo "    uname -r: $("$SSH" -n "${sshs[i]}" 'uname -r' 2>/dev/null)"
     done
 
     step "逐台安装 daedalus-agent(出货 install.sh)"
     for ((i = 0; i < n; i++)); do
         if install_agent_on "${keys[i]}" "${sshs[i]}"; then
             ok "${keys[i]}: install.sh 退出 0"
-            agent_ids[i]="$(remote_agent_id "${sshs[i]}")"
+            # 单台取不到 agent_id 不该把整个矩阵打断(set -e 下命令替换失败会直接
+            # 退出):记成失败继续,让后面的台子照样跑到。
+            agent_ids[i]="$(remote_agent_id "${sshs[i]}")" || agent_ids[i]=""
+            if [ -z "${agent_ids[i]}" ]; then
+                bad "${keys[i]}: install.sh 成功但取不到 agent_id(检查 /etc/daedalus-agent/config.yaml)"
+            fi
         else
             bad "${keys[i]}: install.sh 失败"
         fi
@@ -385,7 +414,12 @@ run_matrix() {
         if [ -z "$addr" ]; then
             addr="$(remote_first_addr "${sshs[i]}")"
         fi
-        dials[i]="${addr}:${AGENT_PORT}"
+        # 显式给的 <可拨地址> 可能自带端口(localhost:9471),那就原样用;只有没带
+        # 端口的裸地址(含 hostname -I 取回的那类)才补默认端口。
+        if [[ "$addr" != *:* ]]; then
+            addr="${addr}:${AGENT_PORT}"
+        fi
+        dials[i]="$addr"
         if [ -z "${agent_ids[i]}" ]; then
             bad "${keys[i]}: 取不到 agent_id,跳过登记"
             continue
@@ -406,32 +440,55 @@ run_matrix() {
         'all(.nodes[]; .support_level == "supported" or .support_level == "experimental")' "$json"
     echo "  node list: $json"
 
-    step "低危腿:package.set ${WANT_PKG}(low)→ 目标机独立核实"
-    local -a pairs=()
-    while IFS= read -r line; do
-        [ -n "$line" ] && pairs+=("${line%%|*}:${line##*|}")
-    done < <("$JQ" -r '.nodes[] | "\(.node_id)|\(.support_level)"' <<<"$json")
-    local planfile low_json
-    planfile="$(mktemp)"
-    render_low_plan "$WANT_PKG" ${pairs[@]+"${pairs[@]}"} > "$planfile"
-    low_json="$("$HOST_BIN" plan submit "$planfile")"
-    assert_jq "低危 Plan status=complete" '.status == "complete"' "$low_json"
-    # "零目标机的 Plan" 也会报 complete,所以只断 status 是空过:必须断言真的
-    # 每台目标机都有一条落地记录,且带非空 tx_id。
-    assert_jq "低危 Plan 每条目标机都有落地记录" ".results | length == $n" "$low_json"
-    assert_jq "每条落地记录都有非空 tx_id(本地有回滚点)" 'all(.results[]; .tx_id != "")' "$low_json"
-    echo "  plan submit(package.set ${WANT_PKG}): $low_json"
-    # ★ 不采信上面的 complete:回到每台目标机上,用包管理器独立核实。
+    # 按回滚点把节点分成两组。agent 的 RF3 对**所有** ApplyIntent 生效(不限风险
+    # 等级),没有回滚点的节点连低危 intent 也会被拒 —— 所以低危腿只能打有回滚点
+    # 的节点,没回滚点的归高危腿(验"下发前就被拒")。这不是迁就测试,而是被验
+    # 对象的真实语义。按 node.addr 对齐回主机下标。
+    local -a caps=()
     for ((i = 0; i < n; i++)); do
-        assert_pkg_installed_on_target "${keys[i]}" "${sshs[i]}" "${distros[i]}" "$WANT_PKG"
+        caps[i]="$("$JQ" -r --arg a "${dials[i]}" \
+            '[.nodes[] | select(.addr == $a) | .snapshot_capability] | first // ""' <<<"$json")"
+        echo "  node ${keys[i]}: addr=${dials[i]} snapshot_capability=${caps[i]:-<无此节点>}"
     done
-    rm -f "$planfile"
+
+    step "低危腿:package.set ${WANT_PKG}(low)→ 目标机独立核实"
+    local -a low_pairs=() low_keys=() low_sshs=() low_distros=()
+    local low_json
+    for ((i = 0; i < n; i++)); do
+        if [ -z "${caps[i]}" ] || [ "${caps[i]}" = "SNAPSHOT_CAPABILITY_NONE" ]; then
+            echo "  ${keys[i]}: 无回滚点,低危腿跳过(RF3 会拒;归高危腿)"
+            continue
+        fi
+        low_pairs+=("$("$JQ" -r --arg a "${dials[i]}" '.nodes[] | select(.addr == $a) | "\(.node_id):\(.support_level)"' <<<"$json" | head -1)")
+        low_keys+=("${keys[i]}"); low_sshs+=("${sshs[i]}"); low_distros+=("${distros[i]}")
+    done
+    if [ "${#low_pairs[@]}" -eq 0 ]; then
+        bad "没有任何有回滚点的节点,低危腿无法执行"
+    else
+        local planfile
+        planfile="$(mktemp)"
+        render_low_plan "$WANT_PKG" ${low_pairs[@]+"${low_pairs[@]}"} > "$planfile"
+        low_json="$("$HOST_BIN" plan submit "$planfile")"
+        assert_jq "低危 Plan status=complete" '.status == "complete"' "$low_json"
+        # "零目标机的 Plan" 也会报 complete,所以只断 status 是空过:必须断言真的
+        # 每台目标机都有一条落地记录,且带非空 tx_id。
+        assert_jq "低危 Plan 每条目标机都有落地记录" ".results | length == ${#low_pairs[@]}" "$low_json"
+        assert_jq "每条落地记录都有非空 tx_id(本地有回滚点)" 'all(.results[]; .tx_id != "")' "$low_json"
+        echo "  plan submit(package.set ${WANT_PKG}): $low_json"
+        # ★ 不采信上面的 complete:回到每台目标机上,用包管理器独立核实。
+        for ((i = 0; i < ${#low_pairs[@]}; i++)); do
+            assert_pkg_installed_on_target "${low_keys[i]}" "${low_sshs[i]}" "${low_distros[i]}" "$WANT_PKG"
+        done
+        rm -f "$planfile"
+    fi
 
     step "高危腿:只打没有回滚点的节点 → 期望当场 dirty(且什么都没下发)"
     local -a none_pairs=()
-    while IFS= read -r line; do
-        [ -n "$line" ] && none_pairs+=("${line%%|*}:${line##*|}")
-    done < <("$JQ" -r '.nodes[] | select(.snapshot_capability == "SNAPSHOT_CAPABILITY_NONE") | "\(.node_id)|\(.support_level)"' <<<"$json")
+    for ((i = 0; i < n; i++)); do
+        if [ "${caps[i]}" = "SNAPSHOT_CAPABILITY_NONE" ]; then
+            none_pairs+=("$("$JQ" -r --arg a "${dials[i]}" '.nodes[] | select(.addr == $a) | "\(.node_id):\(.support_level)"' <<<"$json" | head -1)")
+        fi
+    done
     if [ "${#none_pairs[@]}" -eq 0 ]; then
         bad "没有 snapshot 能力为 NONE 的节点,高危腿无法按预期执行(不下发高危变更);记为偏差"
     else
@@ -502,6 +559,8 @@ case "$mode" in
         ;;
 esac
 
+# 汇总之后就不是"意外失败"了:关掉 ERR 线索,免得把正常的非零退出也报成异常。
+trap - ERR
 echo
 echo "agent-e2e: $pass 通过 / $fail 失败"
 [ "$fail" -eq 0 ]
