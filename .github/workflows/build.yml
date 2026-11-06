@@ -273,11 +273,15 @@ jobs:
         # 门禁脚本自身的逻辑也要被验证:否则「改断言」这一步不可验证,脚本退化
         # (少跑一条断言、判定函数变瞎)不会被任何东西发现。
         # workflow-hygiene.sh 的 selftest 在它自己的步骤里跑(与真实扫描同处)。
+        # release-promote-test.sh 把两条发布腿的 run 块抽出来用假 gh 驱动 —— 那些腿
+        # 只在出货档触发,不在这里守的话就只能等下一次真出货才发现退化。
         shell: bash
         working-directory: daedalus-core
         run: |
           bash tests/build/image-lint.sh --selftest
           bash tests/ci/credential-surface-check.sh --selftest
+          bash tests/ci/release-asset-name-test.sh
+          bash tests/ci/release-promote-test.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
@@ -579,10 +583,23 @@ jobs:
     # 排除 pull_request 与 feat/* 分支 push —— 出货腿红点不该被当成 PR 的合并门。
     # 该腿曾有宿主侧拦截的历史失败(runner 漂移),已由钉 ubuntu-24.04 修掉。
     if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
+    # contents:write 只为末尾的「晋级到 Release」那一步(gh release create/upload
+    # 走 GITHUB_TOKEN)。本 job 跑在 GitHub 托管的 ubuntu-24.04 上、不执行仓库脚本
+    # 之外的任何自带代码,故提权面就是这条腿自己;绝不下放到 workflow 级 ——
+    # 其余 job 与 PR 触发路径都只需 read。
     permissions:
-      contents: read
+      contents: write
       packages: read
     steps:
+      - name: Checkout repository
+        # 晋级步骤要用 scripts/release-asset-name.sh(资产命名规则的单一事实源)
+        # 并用 git 解出本次 commit 的短 sha,故本 job 也必须检出仓库。
+        # 布局同其它 job:检出到 daedalus-core 子目录,不逃出 GITHUB_WORKSPACE。
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: daedalus-core
+
       - name: Set up Podman
         shell: bash
         run: |
@@ -635,11 +652,79 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: daedalus-os-qcow2-headless
-          # 限额说明:GitHub Release 单文件硬限 2GiB;qcow2 预计 3-6GB,artifact 上限
-          # 10GB 更稳。若未来要挂 Release,先 gzip 或分卷。默认保留 90 天。
+          # 限额说明:qcow2 实测约 1.3GB,artifact 上限 10GB;挂 Release 时的硬限
+          # 是单文件 2GiB —— 那条闸在 scripts/release-asset-name.sh 里(超限退出码 2,
+          # 明确失败而非静默跳过)。artifact 默认保留 90 天,Release 资产长期可引用。
           path: output/qcow2/
           if-no-files-found: error
           compression-level: 0
+
+      - name: Promote qcow2 to GitHub Release
+        # 只对出货档上传:PR 与 feat/* 分支绝不写 Release(job 级 if 已过滤,这里
+        # 再挡一次,免得将来有人把 job 的 if 放宽)。本 job 在 GitHub 托管的
+        # ubuntu-24.04 上跑,contents:write 只在本 job 内授予。
+        #
+        # 用 success() 而不是 !cancelled():后者的字面意思是"前一步挂了也继续"。
+        # 对发布腿而言那正是要避免的 —— 产物没通过前面的构建/上传链路就不该进
+        # Release,否则会出现"前面红、发布绿"的假绿,让人以为这一版发成功了。
+        # (GitHub Actions 里 if 一旦写了状态检查函数,隐式的 success() 就失效,
+        # 所以必须显式写出来;括号不能省,否则 || 会把 success() 短路掉。)
+        if: ${{ success() && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
+        shell: bash
+        working-directory: daedalus-core
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # 无 tag 的出货档(dispatch / main push)用短 sha 当版本标识,与
+          # release-asset-name.sh 的规则同源;有 tag 时用 tag 名。
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG:-$(git rev-parse --short=12 HEAD)}"
+          # 晋级的就是本 job 刚构建的那一份($GITHUB_WORKSPACE/output/qcow2 之下,
+          # 与上方 artifact 上传同源),**不重新构建** —— 被验证的产物与被发布的
+          # 产物必须是同一份字节。
+          qcow2="$(find "$GITHUB_WORKSPACE/output/qcow2" -name '*.qcow2' -type f | head -1)"
+          [ -n "$qcow2" ] || { echo "ERROR: 没有 qcow2 可晋级(发布腿不得在产物缺失时静默跳过)"; exit 1; }
+          name="$(bash scripts/release-asset-name.sh qcow2 "$qcow2")"
+          # 资产名里的版本必须等于 Release tag:两处规则一旦漂开,"按这个 URL 拉"
+          # 就会拉到对不上的东西。
+          case "$name" in "qcow2-${tag}."*) ;; *) echo "ERROR: 资产名 $name 与 Release tag $tag 不一致"; exit 1 ;; esac
+          # 资产名取的是**上传的文件名**:gh release upload 的「路径#标签」只设 label,
+          # 资产名仍是原文件名(实测:label=qcow2-<ver>.qcow2 而 name=disk.qcow2)。
+          # 故先按目标名在临时目录落一份再上传 —— 文件名必须**恰好**是资产名,
+          # 故落位目录单独开一个,不给文件名加前缀;同文件系统用硬链接(零拷贝),
+          # 跨设备退化为复制。临时目录不碰产物目录,免得污染 artifact 上传的输入。
+          stagedir="${RUNNER_TEMP:?RUNNER_TEMP 未设置}/daedalus-release"
+          mkdir -p "$stagedir"
+          staged="$stagedir/$name"
+          rm -f "$staged"
+          ln "$qcow2" "$staged" 2>/dev/null || cp "$qcow2" "$staged"
+          trap 'rm -f "$staged"' EXIT
+          # --target 把 tag 钉在本 run 的 commit 上:不给它,gh 会把新 tag 建在默认
+          # 分支当时的头上,于是"货"与 tag 未必对得上。
+          # Release 已存在时必须确认它指向的就是本 run 的 commit —— 绝不在"指向
+          # 别人的 commit 的 Release"上补资产,那会造出跨 commit 的混合发布。
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha || true)"
+            if [ -z "$existing" ]; then
+              echo "ERROR: Release $tag 已存在,却读不回它指向的 commit,拒绝在上面补资产" >&2
+              exit 1
+            fi
+            if [ "$existing" != "$GITHUB_SHA" ]; then
+              echo "ERROR: Release $tag 指向 $existing,不是本次 run 的 $GITHUB_SHA" >&2
+              exit 1
+            fi
+            echo "Release $tag 已存在且指向本 run 的 commit:只补同名资产"
+          else
+            # 另一条腿可能在同一瞬间建同一个 tag:建失败但 Release 已存在,即视为成功
+            # (幂等),否则两条腿会因竞态随机红一条。
+            gh release create "$tag" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "$tag" --notes "daedalus-os $tag" \
+              || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || { echo "ERROR: 创建 Release $tag 失败" >&2; exit 1; }
+          fi
+          # --clobber:同一 ref 重跑 workflow 时覆盖同名资产,而不是报 already exists 变红
+          gh release upload "$tag" "$staged" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "已晋级 Release 资产: $name"
 
   # 真机引导门禁:qcow2 在真 KVM 上起起来,串口必须出现 login 提示符。
   # 此前 qcow2 只产出不引导——「镜像能不能起来」这件事从未被任何 CI 判过。
@@ -760,8 +845,13 @@ jobs:
     needs: build-image
     if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
     timeout-minutes: 180
+    # contents:write 只为末尾的「晋级到 Release」那一步(gh release create/upload
+    # 走 GITHUB_TOKEN)。本 job 跑在**自托管** runner 上、以 sudo 执行仓库脚本
+    # (构建产物 + 派生镜像都会落地),故这条提权只在本 job 内授予,且 job 级 if
+    # 已把触发面限死在出货档(main / tag / dispatch 且 PUSH=true)—— PR 与
+    # feat/* 分支一律不进来。绝不下放到 workflow 级。
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -788,3 +878,56 @@ jobs:
           path: ${{ github.workspace }}/iso-verify
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Promote ISO to GitHub Release
+        # 与 build-qcow2 那条腿同型:只对出货档上传,提权只在 job 内、只在出货 ref 上。
+        # success() 不能省:这条腿前面正是 **ISO 的引导验证**,而 iso-verify.sh 引导
+        # 失败时 exit 1 但 ISO 文件仍在盘上 —— 用 !cancelled() 会把一个没通过验证的
+        # ISO 发出去,且发布步骤显示绿。括号同样不能省(见另一条腿的说明)。
+        if: ${{ success() && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
+        shell: bash
+        working-directory: daedalus-core
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          # 与上方构建步骤同一个工作目录:晋级的就是这一条腿刚刚验证过的那份 ISO。
+          VERIFY_WORK: ${{ github.workspace }}/iso-verify
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG:-$(git rev-parse --short=12 HEAD)}"
+          # iso-verify.sh 的产物落在 $VERIFY_WORK/output 下,不重新构建 ——
+          # 被验证的那份 ISO 与被发布的 ISO 必须是同一份字节。
+          iso="$(find "$VERIFY_WORK/output" -name '*.iso' -type f | head -1)"
+          [ -n "$iso" ] || { echo "ERROR: 没有 ISO 可晋级(发布腿不得在产物缺失时静默跳过)"; exit 1; }
+          name="$(bash scripts/release-asset-name.sh iso "$iso")"
+          # 资产名里的版本必须等于 Release tag,否则"按这个 URL 拉"会拉到对不上的东西
+          case "$name" in "iso-${tag}."*) ;; *) echo "ERROR: 资产名 $name 与 Release tag $tag 不一致"; exit 1 ;; esac
+          # 资产名取的是**上传的文件名**(gh release upload 的「路径#标签」只设 label,
+          # 见 build-qcow2 那条腿的说明),故先按目标名在临时目录落一份再上传 ——
+          # 文件名必须恰好是资产名,故单独开一个落位目录、不加前缀。
+          stagedir="${RUNNER_TEMP:?RUNNER_TEMP 未设置}/daedalus-release"
+          mkdir -p "$stagedir"
+          staged="$stagedir/$name"
+          rm -f "$staged"
+          ln "$iso" "$staged" 2>/dev/null || cp "$iso" "$staged"
+          trap 'rm -f "$staged"' EXIT
+          # Release 已存在时必须确认它指向的就是本 run 的 commit(理由见 qcow2 那条腿)。
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha || true)"
+            if [ -z "$existing" ]; then
+              echo "ERROR: Release $tag 已存在,却读不回它指向的 commit,拒绝在上面补资产" >&2
+              exit 1
+            fi
+            if [ "$existing" != "$GITHUB_SHA" ]; then
+              echo "ERROR: Release $tag 指向 $existing,不是本次 run 的 $GITHUB_SHA" >&2
+              exit 1
+            fi
+            echo "Release $tag 已存在且指向本 run 的 commit:只补同名资产"
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "$tag" --notes "daedalus-os $tag" \
+              || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || { echo "ERROR: 创建 Release $tag 失败" >&2; exit 1; }
+          fi
+          # --clobber:同一 ref 重跑 workflow 时覆盖同名资产,而不是报 already exists 变红
+          gh release upload "$tag" "$staged" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "已晋级 Release 资产: $name"
