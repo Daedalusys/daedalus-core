@@ -23,6 +23,9 @@
 #   ./bootc-switch-verify.sh --only-preflight     # 只体检
 #   sudo VERIFY_WORK=/tmp/x ./bootc-switch-verify.sh
 #
+# 派生镜像/qcow2/QEMU/SSH 的机制由共享驱动 tests/real-machine/lib/guest-driver.sh
+# 提供(与 tests/real-machine/probe-*.sh 同一套);本脚本只保留 switch/rollback 断言。
+#
 # 环境变量
 #   VERIFY_WORK          工作目录(默认:$SUDO_USER 家目录下 daedalus-switch-verify)
 #   VERIFY_IMAGE         基准镜像(默认 ghcr.io/daedalusys/daedalus-os:latest)
@@ -36,51 +39,32 @@
 # =============================================================================
 set -uo pipefail
 
-IMAGE="${VERIFY_IMAGE:-ghcr.io/daedalusys/daedalus-os:latest}"
-MEM="${VERIFY_MEM:-4096}"
-BOOT_TIMEOUT="${VERIFY_BOOT_TIMEOUT:-240}"
-SSH_PORT="${VERIFY_SSH_PORT:-2222}"
+# 端口与工作目录的历史默认值由本脚本钉住(探针套件默认 2223/daedalus-guest-driver,
+# 两者互不干扰);派生镜像/qcow2/引导/SSH 全部委托共享驱动。
+VERIFY_SSH_PORT="${VERIFY_SSH_PORT:-2222}"
+export VERIFY_SSH_PORT
+_inv="${SUDO_USER:-$USER}"
+_inv_home="$(getent passwd "$_inv" 2>/dev/null | cut -d: -f6)"; [ -n "${_inv_home:-}" ] || _inv_home="$HOME"
+VERIFY_WORK="${VERIFY_WORK:-$_inv_home/daedalus-switch-verify}"
+export VERIFY_WORK
+# 证据文件名是复核者的契约,保持不变(驱动库默认 guest-driver.log)。
+export DRIVER_LOG="$VERIFY_WORK/bootc-switch-verify.log"
+# shellcheck source=lib/guest-driver.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/guest-driver.sh"
+
 ONLY_PREFLIGHT=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --only-preflight) ONLY_PREFLIGHT=1; shift ;;
-        -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "未知参数: $1" >&2; exit 2 ;;
     esac
 done
 
-_inv="${SUDO_USER:-$USER}"
-_inv_home="$(getent passwd "$_inv" 2>/dev/null | cut -d: -f6)"; [ -n "${_inv_home:-}" ] || _inv_home="$HOME"
-WORK="${VERIFY_WORK:-$_inv_home/daedalus-switch-verify}"
-mkdir -p "$WORK" || { echo "无法创建工作目录 $WORK" >&2; exit 2; }
-# 本脚本以 root 跑(派生镜像/出 qcow2 要 rootful podman),但证据要能被**调用者**
-# 读走(CI 的 upload-artifact 以 runner 用户读;`.verify-pass` 还是 0600)。
-# 与 bootc-verify.sh 同一模式:把工作目录归还给发起 sudo 的用户。
-_owner="$_inv:$(id -gn "$_inv" 2>/dev/null || echo "$_inv")"
-chown -R "$_owner" "$WORK" 2>/dev/null || true
-LOG="$WORK/bootc-switch-verify.log"
-: > "$LOG"
-
-log() { printf '%s\n' "$*" >>"$LOG"; }
-say()  { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; log ""; log "== $* =="; }
-info() { printf '   %s\n' "$*"; log "   $*"; }
-ok()   { printf '\033[1;32m   OK %s\033[0m\n' "$*"; log "   OK $*"; }
-warn() { printf '\033[1;33m   !! %s\033[0m\n' "$*"; log "   !! $*"; }
-bad()  { printf '\033[1;31m   XX %s\033[0m\n' "$*" >&2; log "   XX $*"; }
-die()  { bad "$*"; exit 1; }
-
-QEMU_PID=""
-cleanup() {
-    [ -n "${QEMU_PID:-}" ] && { kill "$QEMU_PID" 2>/dev/null; sleep 1; kill -9 "$QEMU_PID" 2>/dev/null; }
-    # 归还工作目录给调用者(证据要能被非 root 读走;失败路径也要还)。
-    chown -R "$_owner" "$WORK" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-VM="$WORK/verify-image"      # 派生镜像的构建上下文
-OUT="$WORK/output"
-PASS_FILE="$WORK/.verify-pass"
+WORK="$DRIVER_WORK"
+LOG="$DRIVER_LOG"
+trap driver_cleanup EXIT
 
 # ------------------------------------------------------------------ 前置体检 --
 say "Phase 0 · preflight"
@@ -99,87 +83,30 @@ if [ "$ONLY_PREFLIGHT" = 1 ]; then say "只体检模式,停止"; exit 0; fi
 [ "$(id -u)" -eq 0 ] || { bad "需要 root(派生镜像/出 qcow2 都要 rootful podman):请 sudo"; exit 2; }
 
 # ------------------------------------------------------- Phase 1 · 派生镜像 ----
-# 复刻 78-dev-user.sh 的要点:video/render 组病态半初始化必须先补 /etc/group;
-# home 必须走 tmpfiles(bootc 不从镜像 seed /var)。
-say "Phase 1 · 派生一次性 verify 镜像(本地,不推 registry)"
-mkdir -p "$VM"
-[ -s "$PASS_FILE" ] || { head -c12 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$PASS_FILE"; chmod 600 "$PASS_FILE"; }
-VPASS="$(cat "$PASS_FILE")"; VUSER="verify"
-derive() {  # derive <from-ref> <new-tag> <extra-containerfile-lines>
-    cat > "$VM/Containerfile" <<EOF
-FROM $1
-RUN set -eux; \\
-    grep -qE '^video:'  /etc/group || echo 'video:x:39:'   >> /etc/group; \\
-    grep -qE '^render:' /etc/group || echo 'render:x:105:' >> /etc/group; \\
-    (id ${VUSER} >/dev/null 2>&1 || useradd -m -G wheel,video,render -s /bin/bash ${VUSER}); \\
-    echo '${VUSER}:${VPASS}' | chpasswd; \\
-    printf '${VUSER} ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/${VUSER}; chmod 0440 /etc/sudoers.d/${VUSER}; \\
-    printf 'd /var/home 0755 root root -\nd /var/home/${VUSER} 0700 ${VUSER} ${VUSER} -\n' > /etc/tmpfiles.d/${VUSER}.conf; \\
-    systemctl enable sshd${3:+; $3}
-EOF
-    podman build --security-opt label=disable -t "$2" -f "$VM/Containerfile" "$VM" >>"$LOG" 2>&1 \
-        || { bad "派生镜像 $2 构建失败,见 $LOG"; exit 1; }
-}
-D1="localhost/daedalus-verify:base"
-D2="localhost/daedalus-verify:switch-target"
-podman image exists "$IMAGE" || podman pull "$IMAGE" >>"$LOG" 2>&1 || { bad "拉取 $IMAGE 失败"; exit 1; }
-derive "$IMAGE" "$D1" ""
-derive "$D1"   "$D2" "echo \"switch-target $D2\" > /usr/share/daedalus-verify-marker"
-ok "派生镜像就绪: $D1 / $D2(verify 用户: $VUSER,密码随机)"
+# 一次性 verify 镜像(复刻 78-dev-user.sh 的组/用户/sudoers/tmpfiles)与 qcow2
+# 全部委托共享驱动:见 tests/real-machine/lib/guest-driver.sh。
+driver_init
+D1="$DRIVER_IMAGE_BASE"
+VUSER="$DRIVER_USER"
 
-# ------------------------------------------------------------ Phase 2 · qcow2 --
-say "Phase 2 · 出 qcow2(从 base 派生镜像)"
-mkdir -p "$OUT/qcow2"; rm -f "$OUT/qcow2"/*.qcow2
-podman run --rm --privileged --security-opt label=disable \
-    -v "$OUT/qcow2:/output" \
-    -v /var/lib/containers/storage:/var/lib/containers/storage \
-    quay.io/centos-bootc/bootc-image-builder:latest \
-    --local --type qcow2 --output /output "$D1" >>"$LOG" 2>&1 \
-    || { bad "bootc-image-builder 失败,见 $LOG"; exit 1; }
-QCOW2="$(find "$OUT/qcow2" -name '*.qcow2' | head -1)"
-[ -n "$QCOW2" ] || { bad "builder 没产出 qcow2"; exit 1; }
-ok "qcow2: $QCOW2($(du -h "$QCOW2" | cut -f1))"
+say "Phase 1.1 · 派生切换目标镜像(带 marker)"
+D2="$DRIVER_IMAGE_TARGET"
+driver_derive "$D1" "$D2" "echo \"switch-target $D2\" > /usr/share/daedalus-verify-marker"
+ok "切换目标镜像就绪: $D2(verify 用户: $VUSER,密码随机)"
 
 # 切换目标的 OCI 归档(scp 进 guest 用)
 say "Phase 2.1 · 打包切换目标为 OCI 归档"
 ARCHIVE="$WORK/switch-target.tar"
-podman save --format oci-archive -o "$ARCHIVE" "$D2" >>"$LOG" 2>&1 || { bad "podman save 失败"; exit 1; }
-ok "OCI 归档: $ARCHIVE($(du -h "$ARCHIVE" | cut -f1))"
+driver_oci_archive "$D2" "$ARCHIVE"
 
 # ---------------------------------------------------- Phase 3 · 引导 + SSH ----
-SERIAL="$WORK/serial-console.log"
+SERIAL="$DRIVER_SERIAL"
 ADV="$WORK/advice.log"
 advise() { printf '%s\n' "$*" | tee -a "$ADV"; }
 
 say "Phase 3 · 引导 qcow2(可写,允许重启)+ 等 SSH"
-: > "$SERIAL"
-qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m "$MEM" -smp 2 \
-    -nographic -drive file="$QCOW2",if=virtio,format=qcow2 \
-    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 -device virtio-net,netdev=net0 \
-    </dev/null >"$SERIAL" 2>&1 &
-QEMU_PID=$!
-info "qemu pid=$QEMU_PID,串口 → $SERIAL"
-
-cat > "$WORK/askpass.sh" <<EOF
-#!/bin/sh
-cat "$PASS_FILE"
-EOF
-chmod 700 "$WORK/askpass.sh"
-export SSH_ASKPASS="$WORK/askpass.sh" SSH_ASKPASS_REQUIRE=force DISPLAY=:0
-SSH_OPTS=(-p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-          -o ConnectTimeout=8 -o LogLevel=ERROR -o PreferredAuthentications=password -o PubkeyAuthentication=no)
-gssh() { ssh "${SSH_OPTS[@]}" "${VUSER}@127.0.0.1" "$@" </dev/null; }
-
-wait_ssh() {  # wait_ssh <秒数>
-    local t="$1" i=0
-    while [ "$i" -lt "$t" ]; do
-        gssh true >/dev/null 2>&1 && return 0
-        sleep 3; i=$((i+3))
-    done
-    return 1
-}
-wait_ssh "$BOOT_TIMEOUT" || { bad "等 SSH 超时;串口尾部:"; tail -20 "$SERIAL" | sed 's/^/      /'; exit 1; }
-ok "SSH 可达(${VUSER}@127.0.0.1:${SSH_PORT})"
+driver_boot
+QCOW2="$DRIVER_QCOW2"
 
 # --------------------------------------------------- Phase 4 · deployment A ---
 say "Phase 4 · 基线 deployment(A)"
@@ -195,29 +122,15 @@ info "marker(A) : $MARKER_A   期望 ABSENT(基线镜像没有 marker)"
 [ "$MARKER_A" = ABSENT ] || { bad "基线不该有 marker"; exit 1; }
 ok "A 基线符合预期"
 
-reboot_and_wait() {  # reboot_and_wait <旧 boot_id> <秒数>
-    local old="$1" t="$2" i=0
-    while [ "$i" -lt "$t" ]; do
-        if gssh true >/dev/null 2>&1; then
-            local b; b="$(gssh 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '\r')"
-            [ -n "$b" ] && [ "$b" != "$old" ] && { printf '%s' "$b"; return 0; }
-        fi
-        sleep 3; i=$((i+3))
-    done
-    return 1
-}
-
 # ------------------------------------------------- Phase 5 · switch 到 B ------
 say "Phase 5 · scp 切换目标 + bootc switch --apply"
-scp -P "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-    "$ARCHIVE" "${VUSER}@127.0.0.1:/home/${VUSER}/switch-target.tar" >>"$LOG" 2>&1 \
-    || { bad "scp 归档进 guest 失败"; exit 1; }
+gssh_scp "$ARCHIVE" "/home/${VUSER}/switch-target.tar" || { bad "scp 归档进 guest 失败"; exit 1; }
 ok "归档已进 guest:/home/${VUSER}/switch-target.tar"
 
 SW="$(gssh "sudo bootc switch --transport oci-archive /home/${VUSER}/switch-target.tar --apply" 2>&1)"
 info "switch 输出: $(printf '%s' "$SW" | tr '\n' ' ' | head -c 200)"
 ok "已发起 switch(--apply 会重启)"
-BOOT_ID_B="$(reboot_and_wait "$BOOT_ID_A" "$BOOT_TIMEOUT")" \
+BOOT_ID_B="$(driver_reboot_and_wait "$BOOT_ID_A" "$DRIVER_BOOT_TIMEOUT")" \
     || { bad "switch 后未观察到重启+SSH 回来;串口尾部:"; tail -20 "$SERIAL" | sed 's/^/      /'; exit 1; }
 STATUS_B="$(gssh 'sudo bootc status' 2>/dev/null)"
 DIGEST_B="$(printf '%s' "$STATUS_B" | sed -n 's/.*imageDigest: *\(sha256:[0-9a-f]*\).*/\1/p' | head -1)"
@@ -233,7 +146,7 @@ ok "switch 生效: 部署已切到目标镜像,marker 出现"
 say "Phase 6 · bootc rollback --apply"
 gssh 'sudo bootc rollback --apply' >>"$LOG" 2>&1
 ok "已发起 rollback(--apply 会重启)"
-BOOT_ID_C="$(reboot_and_wait "$BOOT_ID_B" "$BOOT_TIMEOUT")" \
+BOOT_ID_C="$(driver_reboot_and_wait "$BOOT_ID_B" "$DRIVER_BOOT_TIMEOUT")" \
     || { bad "rollback 后未观察到重启+SSH 回来;串口尾部:"; tail -20 "$SERIAL" | sed 's/^/      /'; exit 1; }
 STATUS_C="$(gssh 'sudo bootc status' 2>/dev/null)"
 DIGEST_C="$(printf '%s' "$STATUS_C" | sed -n 's/.*imageDigest: *\(sha256:[0-9a-f]*\).*/\1/p' | head -1)"
