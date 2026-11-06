@@ -1,0 +1,356 @@
+########## probe-systemd-sandbox START 2026-11-07T07:18:45+08:00 ##########
+   OK 复用已构建产物: qcow2=/var/tmp/daedalus-probe-suite/output/qcow2/disk.qcow2
+   qemu pid=1652774,串口 → /var/tmp/daedalus-probe-suite/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+
+== A3-0 · 单元声明的沙箱属性(独立观测:systemctl show) ==
+   lo yes read-only strict _llseek _newselect accept accept4 access add_key alarm arch_prctl arm_fadvise64_64 bind brk cacheflush capget chdir chmod clock_getres clock_getres_time64 clock_gettime clock_gettime64 clock_nanosleep clock_nanosleep_time64 clone clone3 close close_range connect copy_file_range creat dup dup2 dup3 epoll_create epoll_create1 epoll_ctl epoll_ctl_old epoll_pwait epoll_pwait2 epoll_wait epoll_wait_old eventfd eventfd2 execve execveat exit exit_group faccessat faccessat2 fadvise64 fadvise64_64 fallocate fchdir fchmod fchmodat fchmodat2 fcntl fcntl64 fdatasync fgetxattr flistxattr flock fork fremovexattr fsetxattr fstat fstat64 fstatat64 fstatfs fstatfs64 fsync ftruncate ftruncate64 futex futex_time64 futex_waitv futimesat get_mempolicy get_robust_list get_thread_area getcpu getcwd getdents getdents64 getegid getegid32 geteuid geteuid32 getgid getgid32 getgroups getgroups32 getitimer getpeername getpgid getpgrp getpid getppid getpriority getrandom getresgid getresgid32 getresuid getresuid32 getrlimit getrusage getsid getsockname getsockopt gettid gettimeofday getuid getuid32 getxattr getxattrat inotify_add_watch inotify_init inotify_init1 inotify_rm_watch io_cancel io_destroy io_getevents io_pgetevents io_pgetevents_time64 io_setup io_submit io_uring_enter io_uring_register io_uring_setup ioctl ioprio_get ipc kcmp keyctl kill landlock_add_rule landlock_create_ruleset landlock_restrict_self lgetxattr link linkat listen listmount listxattr listxattrat llistxattr lremovexattr lseek lsetxattr lstat lstat64 madvise membarrier memfd_create mkdir mkdirat mknod mknodat mlock mlock2 mlockall mmap mmap2 mprotect mq_getsetattr mq_notify mq_open mq_timedreceive mq_timedreceive_time64 mq_timedsend mq_timedsend_time64 mq_unlink mremap mseal msgctl msgget msgrcv msgsnd msync munlock munlockall munmap name_to_handle_at nanosleep newfstatat oldfstat oldlstat oldolduname oldstat olduname open openat openat2 pause personality pidfd_open pidfd_send_signal pipe pipe2 poll ppoll ppoll_time64 prctl pread64 preadv preadv2 prlimit64 process_madvise process_vm_readv process_vm_writev pselect6 pselect6_time64 pwrite64 pwritev pwritev2 read readahead readdir readlink readlinkat readv recv recvfrom recvmmsg recvmmsg_time64 recvmsg remap_file_pages removexattr removexattrat rename renameat renameat2 request_key restart_syscall riscv_flush_icache riscv_hwprobe rmdir rseq rt_sigaction rt_sigpending rt_sigprocmask rt_sigqueueinfo rt_sigreturn rt_sigsuspend rt_sigtimedwait rt_sigtimedwait_time64 rt_tgsigqueueinfo sched_get_priority_max sched_get_priority_min sched_getaffinity sched_getattr sched_getparam sched_getscheduler sched_rr_get_interval sched_rr_get_interval_time64 sched_yield seccomp select semctl semget semop semtimedop semtimedop_time64 send sendfile sendfile64 sendmmsg sendmsg sendto set_robust_list set_thread_area set_tid_address set_tls setfsgid setfsgid32 setgid setgid32 setitimer setns setpgid setregid setregid32 setresgid setresgid32 setsid setsockopt setxattr setxattrat shmat shmctl shmdt shmget shutdown sigaction sigaltstack signal signalfd signalfd4 sigpending sigprocmask sigreturn sigsuspend socket socketcall socketpair splice stat stat64 statfs statfs64 statmount statx swapcontext symlink symlinkat sync sync_file_range sync_file_range2 syncfs sysinfo tee tgkill time timer_create timer_delete timer_getoverrun timer_gettime timer_gettime64 timer_settime timer_settime64 timerfd_create timerfd_gettime timerfd_gettime64 timerfd_settime timerfd_settime64 times tkill truncate truncate64 ugetrlimit umask uname unlink unlinkat unshare uretprobe userfaultfd utime utimensat utimensat_time64 utimes vfork vmsplice wait4 waitid waitpid write writev
+
+== A3-1 · 沙箱内五条反证的观测 ==
+      == uid ==
+      61865
+      == passwd-file-count ==
+      0
+      0
+      == passwd-lookup ==
+      probe-a3:x:61865:61865:Dynamic User:/:/usr/sbin/nologin
+      == erofs ==
+      /run/probe-a3-inner.sh: line 8: /opt/daedalus/shared/policy.toml: Read-only file system
+      erofs-rc=1
+      == credentials ==
+      CREDDIR=/run/credentials/probe-a3.service
+      total 4
+      -r--r-----+ 1 root root 11 Nov  6 23:18 daedalus_token_default
+      == seccomp ==
+      Seccomp:	2
+      Seccomp_filters:	22
+      == net-loopback ==
+      lo-rc=0
+      == net-external ==
+      net-rc=124
+      == privileged-syscall ==
+      mount-rc=159
+      /run/probe-a3-inner.sh: line 14:  1286 Bad system call         (core dumped) ( mount -t tmpfs none /mnt 2>&1 )
+      hostname-rc=159
+      /run/probe-a3-inner.sh: line 15:  1295 Bad system call         (core dumped) ( hostname probe-a3 2>&1 )
+PASS  A3-1 写 /opt/daedalus/shared/policy.toml 被拒(ProtectSystem=strict): /run/probe-a3-inner.sh: line 8: /opt/daedalus/shared/policy.toml: Read-only file system
+PASS  A3-2 DynamicUser:UID=61865 在 dynamic 区间且 /etc/passwd 文件无此条目(两次 61865 vs 61784)
+PASS  A3-3 $CREDENTIALS_DIRECTORY 含 daedalus_token_default
+PASS  A3-4 回环可通(lo-rc=0)而外部 TCP 被拒(net-rc=124)
+PASS  A3-5 seccomp 已装(Seccomp: 2);特权调用被杀 mount-rc=159 hostname-rc=159(SIGSYS=159)
+
+== A3-NOTE · systemd-analyze security 打分(证据,不参与判定) ==
+      ✗ UMask=                                                      Files created by service are world-readable by default                              0.1
+      
+      → Overall exposure level for daedalus-fs.service: 5.1 MEDIUM :-|
+
+判定: PASS
+########## probe-systemd-sandbox RC=0 2026-11-07T07:19:10+08:00 ##########
+########## probe-audit-inode START 2026-11-07T07:19:10+08:00 ##########
+   OK 复用已构建产物: qcow2=/var/tmp/daedalus-probe-suite/output/qcow2/disk.qcow2
+   qemu pid=1653017,串口 → /var/tmp/daedalus-probe-suite/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+   -----a---------------- /var/log/daedalus/audit.jsonl bash: line 1: /var/log/daedalus/audit.jsonl: Permission denied
+PASS  A4-1 /var/log/daedalus/audit.jsonl 存在且 lsattr 含 a: -----a---------------- /var/log/daedalus/audit.jsonl
+   写入 entry: {   "timestamp": "2026-11-06T23:19:19.514987+00:00",   "identity": "probe-a4",   "tool": "a4_probe",   "args": {},   "policy_version": "1.0",   "outcome": "success",   "prev_hash": "9fcb965b2d8ec3adcf
+   truncate 输出: truncate: cannot open '/var/log/daedalus/audit.jsonl' for writing: Operation not permitted TRUNC_RC=1
+PASS  A4-2 truncate -s 0 被拒(rc=1, Operation not permitted)
+   verify: verified 6 entries; hash chain intact
+PASS  A4-3 verify: verified 6 entries; hash chain intact
+
+== A4-4 · 轮转(服务口径 + --force 强制口径) ==
+   O_RDWR 打开(无 O_APPEND): bash: line 1: /var/log/daedalus/audit.jsonl: Operation not permitted RDWR_RC=1
+   O_APPEND 打开          : APPEND_RC=0
+   rotate.service: SVC_RC=0 0
+   rotate --force: audit: 清除 append-only 失败(中止轮转): open /var/log/daedalus/audit.jsonl: operation not permitted
+   archive: 
+   轮转后 verify: verified 6 entries; hash chain intact
+FAIL  A4-4 轮转在清 append-only 属性时中止(Daedalusys/daedalus-core#92):audit: 清除 append-only 失败(中止轮转): open /var/log/daedalus/audit.jsonl: operation not permitted
+
+判定: FAIL(1 条)
+########## probe-audit-inode RC=1 2026-11-07T07:19:21+08:00 ##########
+########## probe-fs-write-guard START 2026-11-07T07:19:21+08:00 ##########
+   OK 复用已构建产物: qcow2=/var/tmp/daedalus-probe-suite/output/qcow2/disk.qcow2
+   qemu pid=1653210,串口 → /var/tmp/daedalus-probe-suite/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+
+== A6-1 · 默认策略下写敏感路径(期望被一档白名单拒) ==
+      /etc/shadow (默认策略)       isError=yes source=一档 pathguard(AllowedDirs 白名单) text=Error: Access denied: path '/etc/shadow' (resolved: '/etc/shadow') is outside allowed directories (/home, /var/log, /tmp)."}],"isError
+      /proc/sys/kernel/hostname (默认策略) isError=yes source=一档 pathguard(AllowedDirs 白名单) text=Error: Access denied: path '/proc/sys/kernel/hostname' (resolved: '/proc/sys/kernel/hostname') is outside allowed directories (/home, /var/log, /tmp)."}],"isError
+
+== A6-2 · 隔离实验:白名单临时放宽到含 /etc /proc(guest 内临时副本) ==
+      allowed_dirs = ["/home","/var/log","/tmp","/etc","/proc"]
+      /etc/pam.d/probe-a6-guard (白名单含 /etc) isError=no source=其它:Successfully wrote 16 characters to /etc/pam.d/probe-a6-guard text=Successfully wrote 16 characters to /etc/pam.d/probe-a6-guard
+   落盘回读 /etc/pam.d/probe-a6-guard: probe-a6-widened
+      /etc/shadow (白名单含 /etc)  isError=no source=其它:Successfully wrote 16 characters to /etc/shadow text=Successfully wrote 16 characters to /etc/shadow
+
+== A6-3 · 结论 ==
+      结论: 二档写守卫对 fs.write_file 不生效:白名单含 /etc 时 /etc/pam.d/ 下的写入成功(该前缀在 ValidateWritePath 的 forbiddenWritePatterns 里,write 形参被丢弃)
+      issue: Daedalusys/daedalus-core#91
+
+判定: REPRO_DONE(复现任务不计 PASS/FAIL)
+########## probe-fs-write-guard RC=0 2026-11-07T07:19:44+08:00 ##########
+########## probe-readonly-plugins START 2026-11-07T07:19:44+08:00 ##########
+   OK 复用已构建产物: qcow2=/var/tmp/daedalus-probe-suite/output/qcow2/disk.qcow2
+   qemu pid=1653500,串口 → /var/tmp/daedalus-probe-suite/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+
+== A7-1 · service.query:真 timer 的 next_elapse + masked 单元的 load_state ==
+      timer next(systemd_timer_next): {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\n  \"unit\": \"daedalus-audit-rotate.timer\",\n  \"load_state\": \"loaded\",\n  \"active_state\": \"active\",\n  \"sub_state\": \"waiting\",\n  \"last_trigger_usec\": \"Fri 2026-11-06 07:12:08 UTC\",\n  \"next_elapse_usec_realtime
+      service.query(真单元): {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\n  \"kind\": \"service\",\n  \"name\": \"daedalus-audit-rotate.service\",\n  \"desired_state\": \"\",\n  \"properties\": {\n    \"ActiveEnterTimestamp\": \"\",\n    \"ActiveState\": \"inactive\",\n    \"FragmentPath\": \"/usr/lib/
+      masked 单元: --- systemctl show 原始输出 ---
+LoadState=masked
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"error: unit daedalus-diskclean.service not found"}],"isError":true}}
+PASS  A7-1a 如实记录:真 timer 有 next_elapse_usec_realtime
+PASS  A7-1b 如实记录:masked 单元的 LoadState 可见
+
+== A7-2 · pkg.dnf_query 兜底(rpm -q --info → dnf repoquery) ==
+      本地有(bash): {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Name        : bash\nVersion     : 5.2.26\nRelease     : 6.el10\nArchitecture: x86_64\nInstall Date: Tue Oct 20 06:52:45 2026\nGroup 
+      本地无 repo 有(tree): 
+      两边都无: 
+PASS  A7-2 如实记录(本地有/本地无 repo 有/两边都无 三段输出见上;本地无时兜底可能因仓库元数据不可达返回空)
+
+== A7-3 · sysinfo.network_status 三级兜底(PATH 里移走 ip) ==
+      ip -j 可用: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\n  \"interfaces\": [\n    {\n      \"addr_info\": [\n        {\n          \"family\": \"inet\",\n          \"label\": \"lo\",\n   
+      PATH 无 ip(第三级 /proc/net/dev): {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\n  \"interfaces\": {\n    \"enp0s2\": {\n      \"rx_bytes\": 978353,\n      \"tx_bytes\": 93138\n    },\n    \"lo\": {\n      \"rx
+PASS  A7-3 如实记录(降级路径仍产出网络信息)
+
+== A7-4 · proc:他人进程 fd 的 EACCES 与 unowned_sockets ==
+      proc_fds pid=1(以 verify 用户跑): {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Error executing tool proc_fds: proc: 读取 /proc/1/fd 失败: open /proc/1/fd: permission denied"}],"isError":true}}
+      proc_listen: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\n  \"proc_root\": \"/proc\",\n  \"proto\": \"tcp\",\n  \"listeners\": [\n    {\n      \"proto\": \"tcp\",\n      \"local_address\": \"0.0.0.0\",\n      \"local_port\": 22,\n      \"state\": \"LISTEN\",\n      \"inode\": 9240,\n   
+PASS  A7-4 如实记录(proc_fds 有响应;unreadable 计数见上)
+
+== A7-5 · trace 读真 /var/log/daedalus/audit.jsonl ==
+      trace_summary: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\n  \"log_path\": \"/var/log/daedalus/audit.jsonl\",\n  \"total\": 6,\n  \"first_timestamp\": \"2026-11-06T07:12:08.841095+00:00\",\n  \"last_timestamp\": \"2026-11-06T23:20:16.139460+00:00\",\n  \"by_tool\": {\n    \"host_controll
+PASS  A7-5 如实记录(真日志可被 trace 读取;单测遇真日志会 t.Skip)
+
+== A7-6 · dupe 对硬链接(同一 inode)的行为 ==
+      total 12
+      46 -rw-r--r--. 2 verify verify 27 Nov  6 23:20 a.txt
+      46 -rw-r--r--. 2 verify verify 27 Nov  6 23:20 b.txt
+      47 -rw-r--r--. 1 verify verify 27 Nov  6 23:20 c.txt
+      {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[\n  {\n    \"group_id\": \"sha256-4ad0b661c6aa4ac1\",\n    \"files\": [\n      \"/tmp/a7-dupe/a.txt\",\n      \"/tmp/a7-dupe/b.txt\",\n      \"/tmp/a7-dupe/c.txt\"\n    ],\n    \"wasted_bytes\": 54,\n    \"same_dir\": true\n  }\n]"}]}}
+      结论: a.txt 与 b.txt 是同一 inode,却被一起报为重复 —— 硬链接被误报(wasted_bytes 虚高)
+      issue: Daedalusys/daedalus-plugins#76
+PASS  A7-6 如实记录(硬链接误报,详见输出与 issue)
+
+判定: PASS
+########## probe-readonly-plugins RC=0 2026-11-07T07:20:32+08:00 ##########
+########## probe-plugin-inventory START 2026-11-07T07:20:32+08:00 ##########
+   期望插件集合(从 76 CAPS 派生 + copilot): daedalus.blueprint daedalus.copilot daedalus.diskclean daedalus.dupe daedalus.fs daedalus.organize daedalus.pkg daedalus.proc daedalus.service daedalus.shell daedalus.sysinfo daedalus.trace 
+   OK 复用已构建产物: qcow2=/var/tmp/daedalus-probe-suite/output/qcow2/disk.qcow2
+   qemu pid=1653870,串口 → /var/tmp/daedalus-probe-suite/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+
+== A12-0 · guest 内 daedalus-host list 原始输出(root 口径:与仓内契约一致) ==
+      ID                  NAME                                                             VERSION  TYPE        RUNTIME  I18N          STATUS
+      daedalus.blueprint  Daedalus Blueprint                                               0.1.0    capability  native   -             ok
+      daedalus.copilot    Daedalus Copilot                                                 1.0.0    copilot     deno     en_US, zh_CN  ok
+      daedalus.diskclean  Daedalus Disk Cleanup (Cache / Journal / Coredump / Old Kernel)  0.1.0    capability  native   en_US, zh_CN  ok
+      daedalus.dupe       Daedalus Large & Duplicate File Scanner                          0.1.0    capability  native   -             ok
+      daedalus.fs         Daedalus Filesystem Access                                       0.1.0    capability  native   -             ok
+      daedalus.organize   Daedalus File Organizer (By Type / Date / Size / Extension)      0.1.0    capability  native   en_US, zh_CN  ok
+      daedalus.pkg        Daedalus Package Query                                           0.1.0    capability  native   -             ok
+      daedalus.proc       Daedalus Process Reconnaissance                                  0.1.0    capability  native   -             ok
+      daedalus.service    Daedalus Service Query                                           0.1.0    capability  native   -             ok
+      daedalus.shell      Daedalus Command Execution                                       0.1.0    capability  native   -             ok
+      daedalus.sysinfo    Daedalus System Information                                      0.1.0    capability  native   -             ok
+      daedalus.trace      Daedalus Audit Trace Viewer                                      0.1.0    capability  native   -             ok
+   实际插件集合: daedalus.blueprint daedalus.copilot daedalus.diskclean daedalus.dupe daedalus.fs daedalus.organize daedalus.pkg daedalus.proc daedalus.service daedalus.shell daedalus.sysinfo daedalus.trace 
+   degraded      : （无）
+PASS  A12-1 插件集合恰为 CAPS + copilot(12 个)
+PASS  A12-2 无 degraded 插件(root 口径)
+
+== A12-3 · 非 root 口径(普通用户跑宿主 CLI)的可读性 ==
+      755 /opt/daedalus/plugins/daedalus.blueprint/
+      700 /opt/daedalus/plugins/daedalus.copilot/
+      755 /opt/daedalus/plugins/daedalus.diskclean/
+      755 /opt/daedalus/plugins/daedalus.dupe/
+      755 /opt/daedalus/plugins/daedalus.fs/
+      755 /opt/daedalus/plugins/daedalus.organize/
+      755 /opt/daedalus/plugins/daedalus.pkg/
+      755 /opt/daedalus/plugins/daedalus.proc/
+      755 /opt/daedalus/plugins/daedalus.service/
+      755 /opt/daedalus/plugins/daedalus.shell/
+      755 /opt/daedalus/plugins/daedalus.sysinfo/
+      755 /opt/daedalus/plugins/daedalus.trace/
+NOTE  A12-3 非 root 口径出现 degraded: daedalus.copilot (目录权限见上;issue Daedalusys/daedalus-core#89)
+      目录权限明细: 755 /opt/daedalus/plugins/daedalus.blueprint/ 700 /opt/daedalus/plugins/daedalus.copilot/ 755 /opt/daedalus/plugins/daedalus.diskclean/ 755 /opt/daedalus/plugins/daedalus.dupe/ 755 /opt/daedalus/plugins/daedalus.fs/ 755 /opt/daedalus/plugins/daedalus.organize/ 755 /opt/daedalus/plugins/daedalus.pkg/ 755 /opt/daedalus/plugins/daedalus.proc/ 755 /opt/daedalus/plugins/daedalus.service/ 755 /opt/daedalus/plugins/daedalus.shell/ 755 /opt/daedalus/plugins/daedalus.sysinfo/ 755 /opt/daedalus/plugins/daedalus.trace/
+      /sysroot 侧权限: ls: cannot access '/sysroot/opt/daedalus/plugins/daedalus.copilot': No such file or directory drwx------. 3 root root 138 Jan  1  1970 /sysroot/ostree/deploy/default/deploy/67d648e3caf8082aefb6314bfd26f78ab22bf6423206384b6fa1d7996c386466.0/opt/daedalus/plugins/daedalus.copilot drwx------. 3 root root 138 Jan  1  1970 /sysroot/ostree/deploy/default/deploy/8b1fb1e7a4d6f5be4f0aad7dd7b40110d3ed1b5ef68c99520601f9cf1639bfd4.0/opt/daedalus/plugins/daedalus.copilot 
+
+判定: PASS
+########## probe-plugin-inventory RC=0 2026-11-07T07:20:43+08:00 ##########
+########## probe-copilot START 2026-11-07T07:20:43+08:00 ##########
+   OK 复用已构建产物: qcow2=/var/tmp/daedalus-probe-suite/output/qcow2/disk.qcow2
+   qemu pid=1654016,串口 → /var/tmp/daedalus-probe-suite/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+
+== A11-0 · copilot 安装态与宿主构造的启动命令 ==
+      ls: cannot access '/opt/daedalus/plugins/daedalus.copilot/main.ts': Permission denied
+      -rwxr-xr-x. 1 root root 3040 Nov  6 07:11 /usr/local/bin/daedalus
+      daedalus-host: run-plugin: daedalus.copilot is degraded; refusing to produce a start command: 无法读取 /opt/daedalus/plugins/daedalus.copilot/daedalus.plugin.json: open /opt/daedalus/plugins/daedalus.copilot/daedalus.plugin.json: permission denied
+
+== A11-1 · --dry-run 是否能在无 key 下翻译 ==
+      daedalus-host: run-plugin: daedalus.copilot is degraded; refusing to produce a start command: 无法读取 /opt/daedalus/plugins/daedalus.copilot/daedalus.plugin.json: open /opt/daedalus/plugins/daedalus.copilot/daedalus.plugin.json: permission denied
+      RC=1
+FAIL  A11-1 CLI 在 guest 内不可用:copilot 插件被判 degraded(目录权限不足,普通用户读不到 manifest;见 Daedalusys/daedalus-core#89)
+
+== A11-2 · watchdog(rc=124 + 无残留进程) ==
+NOTE  A11-2 BLOCKED: no key(watchdog 需经 LLM 翻译产出可执行命令;sleep 亦不在 15 条白名单内)
+
+== A11-3 · Deno 权限边界(manifest --allow-write 之外的路径必须被拒) ==
+      DENIED:PermissionDenied
+      DENIED:NotFound
+PASS  A11-3 Deno 拒写 --allow-write 之外的 /etc(白名单内路径可写,见上)
+
+== A11-4 · 真 provider(有 key 才跑) ==
+NOTE  A11-4 BLOCKED: no key(未跑真 provider)
+
+判定: FAIL(1 条)
+########## probe-copilot RC=1 2026-11-07T07:20:54+08:00 ##########
+########## probe-destructive-plugins START 2026-11-07T07:20:54+08:00 ##########
+   OK 复用已构建产物: qcow2=/var/tmp/daedalus-probe-suite/output/qcow2/disk.qcow2
+   qemu pid=1654159,串口 → /var/tmp/daedalus-probe-suite/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+
+== A5-1 · blueprint_apply 失败回滚(guest 无 nginx → post_check 必失败) ==
+   原文件 sha256: 8e48ba85daed2b98970feaad831fc2296f96c154b60f4c465cce441caa541065
+      RENDER={"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\n  \"plan_id\": \"57ac149c4e927509\",\n  \"rendered_content\": \"# Nginx 虚拟主机 server block\\n# 由 daedalus-blueprint 渲染;输出到 /etc/nginx/conf.d/{domain}.conf\\n# 注意:此模板使用 Go text/template 语法,占位符(形如 {param} 的路径模板,与 schema.json 字段一一对应)。\\nserver {\\n    server_
+      PLAN_ID=57ac149c4e927509
+      TOKEN=d48a70bbde06b126c01c274de782144a2b4326dd9aa78050b8950c26327f30e4
+      APPLY={"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Error: post_check 失败(已回滚): post_check 命令 \"nginx\" 失败: exec: \"nginx\": executable file not found in $PATH"}],"isError":true}}
+   回滚后 sha256: 8e48ba85daed2b98970feaad831fc2296f96c154b60f4c465cce441caa541065
+PASS  A5-1 blueprint_apply 失败后回滚把 /etc/nginx/conf.d/probe-a5.example.com.conf 恢复到原 sha256(8e48ba85daed2b98970feaad831fc2296f96c154b60f4c465cce441caa541065)
+
+== A5-2a · diskclean 走完整 begin→propose→apply→rollback ==
+   tx_id(disk.clean)=b65dac16d3e23349
+   propose: {"id":"b65dac16d3e23349","created_at":"2026-11-06T23:21:04.466835025Z","status":"proposed","steps":[{"index":0,"adapter":"disk.clean","args":{"paths":["/home/verify/a5-disk/junk1.bin","/home/verify/a5-disk/junk2.bin","/home/verify/a5-disk/junk3.bin"]},"before_state":{"snapshots":[{"path":"/var/home/
+   apply: {"id":"b65dac16d3e23349","created_at":"2026-11-06T23:21:04.466835025Z","status":"applied","steps":[{"index":0,"adapter":"disk.clean","args":{"paths":["/home/verify/a5-disk/junk1.bin","/home/verify/a5-
+   apply 后清单: /home/verify/a5-disk/keep.txt
+   rollback 后清单: /home/verify/a5-disk/junk1.bin /home/verify/a5-disk/junk2.bin /home/verify/a5-disk/junk3.bin /home/verify/a5-disk/keep.txt
+PASS  A5-2a disk.clean 真删除了目标(keep.txt 留存),清单 diff 已记录
+
+== A5-2b · organize 走完整 begin→propose→apply→rollback ==
+   tx_id(organize.move)=d75df2c53f4b912b
+   propose: {"id":"d75df2c53f4b912b","created_at":"2026-11-06T23:21:05.321654758Z","status":"proposed","steps":[{"index":0,"adapter":"organize.move","args":{"plan_id":"probe-a5","moves":[{"from":"/home/verify/a5-
+   apply: {"id":"d75df2c53f4b912b","created_at":"2026-11-06T23:21:05.321654758Z","status":"applied","steps":[{"index":0,"adapter":"organize.move","args":{"plan_id":"probe-a5","moves":[{"from":"/home/verify/a5-o
+   apply 后清单: /home/verify/a5-org/dst/m1.txt /home/verify/a5-org/dst/m2.txt
+   rollback 后清单: /home/verify/a5-org/src/m1.txt /home/verify/a5-org/src/m2.txt
+PASS  A5-2b organize.move apply 生效且 rollback 归位(src↔dst 清单 diff 已记录)
+
+== A5-3 · 宿主 lsblk 前后一致 ==
+PASS  A5-3 宿主 lsblk 前后逐字节一致(未碰宿主盘)
+
+判定: PASS
+########## probe-destructive-plugins RC=0 2026-11-07T07:21:07+08:00 ##########
+########## probe-bootc-install-upgrade START 2026-11-07T07:21:07+08:00 ##########
+   OK 复用已构建产物: qcow2=/var/tmp/daedalus-probe-suite/output/qcow2/disk.qcow2
+   qemu pid=1654387,串口 → /var/tmp/daedalus-probe-suite/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+
+== A2-0 · guest 内盘位与 bootc 可用性 ==
+      NAME    SIZE TYPE
+      sr0    1024M rom
+      vda      10G disk
+      ├─vda1    1M part
+      ├─vda2  501M part
+      ├─vda3    1G part
+      └─vda4  8.5G part
+      vdb      20G disk
+      ---
+      bootc 1.16.13
+      error: Status: Preparing for write: Querying root privilege: This command must be executed as the root user
+
+== A2-1 · bootc install to-disk /dev/vdb ==
+
+== A2-1 · bootc install to-disk /dev/vdb ==
+      Install to the target block device.
+      
+      This command must be invoked inside of the container, which will be installed. The container must be
+      run in `--privileged` mode, and hence will be able to see all block devices on the system.
+      
+      The default storage layout uses the root filesystem type configured in the container image,
+      alongside any required system partitions such as the EFI system partition. Use `install
+      to-filesystem` for anything more complex such as RAID, LVM, LUKS etc.
+      
+      Usage: bootc install to-disk [OPTIONS] <DEVICE>
+      
+      Arguments:
+        <DEVICE>
+                Target block device for installation.  The entire device will be wiped
+      
+      Options:
+            --wipe
+                Automatically wipe all existing data on device
+      
+            --block-setup <BLOCK_SETUP>
+                Target root block device setup.
+                
+                direct: Filesystem written directly to block device tpm2-luks: Bind unlock of filesystem
+                to presence of the default tpm2 device.
+   OK OCI 归档: /var/tmp/daedalus-probe-suite/a2-source.tar(1.3G)
+      Install the running container to a target.
+      
+      Takes a container image and installs it to disk in a bootable format.
+      
+      Usage: bootc install <COMMAND>
+      
+      Commands:
+        to-disk              Install to the target block device
+        to-filesystem        Install to an externally created filesystem structure
+        to-existing-root     Install to the host root filesystem
+        finalize             Execute this as the penultimate step of an installation using `install
+                             to-filesystem`
+        ensure-completion    Intended for use in environments that are performing an ostree-based
+                             installation, not bootc
+        print-configuration  Output JSON to stdout that contains the merged installation configuration as
+                             it may be relevant to calling processes using `install to-filesystem` that in
+                             particular want to discover the desired root filesystem type from the
+                             container image
+        help                 Print this message or the help of the given subcommand(s)
+      
+      Options:
+        -h, --help
+                Print help (see a summary with '-h')
+   源镜像归档: /var/tmp/daedalus-probe-suite/a2-source.tar → guest:/home/verify/a2-source.tar
+   source=oci-archive:/home/verify/a2-source.tar → rc=1
+        error: Multiple commit objects found
+        
+        RC=1
+   source=oci:/home/verify/a2-source.tar → rc=1
+        error: Multiple commit objects found
+        
+        RC=1
+   source=registry:ghcr.io/daedalusys/daedalus-os:latest → rc=1
+        error: Multiple commit objects found
+        
+        RC=1
+   source=docker://ghcr.io/daedalusys/daedalus-os:latest → rc=1
+        error: Multiple commit objects found
+        
+        RC=1
+      error: Installing to disk: Creating source info from a given imageref: Subprocess failed: ExitStatus(unix_wait_status(256))
+      error: Multiple commit objects found
+      
+      RC=1
+   install rc=1 (source=docker://ghcr.io/daedalusys/daedalus-os:latest)
+   目标盘分区: vdb 
+PROBE_WIP  A2-1 install to-disk 未成功(rc=1,source=docker://ghcr.io/daedalusys/daedalus-os:latest): error: Installing to disk: Creating source info from a given imageref: Subprocess failed: ExitStatus(unix_wait_status(256))
+
+== A2-2 · bootc upgrade ==
+      error: Upgrading: Preparing import: Fetching manifest: failed to invoke method OpenImage: fetching manifest base in localhost/daedalus-verify: pinging container registry localhost: Get "https://localhost/v2/": dial tcp [::1]:443: connect: connection refused
+      RC=1
+   upgrade 前 digest: sha256:1675a8a430fe26ffb75a35cf540470efd25d8aff4b067fe975d19fcf1860eb63
+      error: Upgrading: Preparing import: Fetching manifest: failed to invoke method OpenImage: fetching manifest base in localhost/daedalus-verify: pinging container registry localhost: Get "https://localhost/v2/": dial tcp [::1]:443: connect: connection refused
+      RC=1
+   upgrade 后 digest: sha256:1675a8a430fe26ffb75a35cf540470efd25d8aff4b067fe975d19fcf1860eb63
+   当前部署来源: 
+NOTE  A2-2 无 registry 可查(部署来源  是本地派生 ref)—— 真 upgrade 未验证
+   upgrade --check rc=1
+
+== A2-3 · 宿主盘未被触碰 ==
+PASS  A2-3 宿主 lsblk 前后逐字节一致(install 目标是宿主上的一个 qcow2 文件)
+
+判定: PASS
+########## probe-bootc-install-upgrade RC=0 2026-11-07T07:21:38+08:00 ##########
+########## ALL DONE 2026-11-07T07:21:38+08:00 ##########

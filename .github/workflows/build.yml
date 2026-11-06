@@ -948,3 +948,65 @@ jobs:
           # --clobber:同一 ref 重跑 workflow 时覆盖同名资产,而不是报 already exists 变红
           gh release upload "$tag" "$staged" --clobber --repo "$GITHUB_REPOSITORY"
           echo "已晋级 Release 资产: $name"
+  # guest 实机探针门禁:把「只有真 guest 才能证伪」的面各做成一条可重跑、有判定、
+  # 有证据的探针(A3 沙箱反证 / A4 audit 真 inode / A5 破坏性插件回滚 / A6 fs 写
+  # 守卫复现 / A7 只读插件真数据源 / A12 插件盘点 / copilot / A2 install+upgrade),
+  # 全部经共享驱动派生一次性 verify 镜像后进 guest 执行。
+  # 与 deploy-verify-kvm / -bootc-switch / -iso 同宿主同标签,会串行;同样只对出货档
+  # 开放 —— 自托管 runner 会执行构建产物,PR 与 feat/* 绝不触发。
+  # copilot 探针缺 DAEDALUS_LLM_API_KEY 时只记 BLOCKED 并自身退 0,故不阻塞。
+  deploy-verify-guest-probes:
+    name: Deploy Verify (guest probes A3/A4/A5/A6/A7/A12/copilot/A2)
+    runs-on: [self-hosted, linux, x64, daedalus-kvm]
+    needs: build-image
+    if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
+    # 排队时间计入 timeout-minutes:三条实机腿共用同一台自托管 runner,串行排队
+    # 时长叠加。180 分钟与既有三条腿一致(PR #87),45/60 会让排不上的腿被误判 cancelled。
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: daedalus-core
+
+      - name: "Guest probes: systemd sandbox / audit inode / destructive / fs guard / readonly / inventory / copilot / bootc install+upgrade"
+        # 八个探针串行跑:共享一个 VERIFY_WORK 目录 —— 首个探针派生一次性 verify
+        # 镜像与 qcow2,其余复用(driver_init 幂等),否则每条都要重出 ~7GB 镜像。
+        # 任一探针非 0 即 job 红;fs 写守卫是复现任务,恒退 0。
+        shell: bash
+        working-directory: daedalus-core
+        env:
+          VERIFY_WORK: ${{ github.workspace }}/guest-probes
+        run: |
+          IMAGE="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/daedalus-os:${{ github.sha }}"
+          echo "被测镜像: $IMAGE"
+          fail=0
+          for p in \
+            probe-systemd-sandbox \
+            probe-audit-inode \
+            probe-destructive-plugins \
+            probe-fs-write-guard \
+            probe-readonly-plugins \
+            probe-plugin-inventory \
+            probe-copilot \
+            probe-bootc-install-upgrade \
+          ; do
+            echo "########## $p ##########"
+            sudo VERIFY_IMAGE="$IMAGE" VERIFY_WORK="$VERIFY_WORK" \
+              bash "tests/real-machine/$p.sh" || fail=1
+          done
+          exit "$fail"
+
+      - name: Upload guest probe evidence
+        # 失败时证据照样回传:每条探针的驱动日志与 guest 内原始输出是唯一线索。
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deploy-verify-guest-probes-evidence
+          path: ${{ github.workspace }}/guest-probes
+          if-no-files-found: warn
+          retention-days: 30
+
