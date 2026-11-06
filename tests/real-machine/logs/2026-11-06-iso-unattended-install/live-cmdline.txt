@@ -1,0 +1,1 @@
+BOOT_IMAGE=/images/pxeboot/vmlinuz root=live:CDLABEL=DAEDALUS_ISO rd.live.image quiet rhgb enforcing=0 console=ttyS0,115200n8 daedalus.install.disk=/dev/vda quiet

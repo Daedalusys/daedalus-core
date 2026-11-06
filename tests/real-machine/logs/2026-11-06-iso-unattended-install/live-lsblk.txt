@@ -1,0 +1,8 @@
+NAME    SIZE TYPE MOUNTPOINTS
+loop0   1.1G loop /run/rootfsbase
+sr0     1.4G rom  /run/initramfs/live
+vda      20G disk 
+├─vda1    1M part 
+├─vda2  512M part 
+└─vda3 19.5G part /run/bootc/storage
+                  /run/bootc/mounts/rootfs

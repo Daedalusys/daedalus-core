@@ -1,0 +1,19 @@
+# 无人值守装机单元:只在 live 介质上触发一次,把本镜像装到内核参数点名的目标盘。
+#
+# 为什么用 ConditionKernelCommandLine:generic-iso 的 live 内核参数里有 rd.live.image
+# (由 iso-verify.sh Phase 2 的 image type 固定注入),装好的系统不会有它 —— 这就是
+# "同一份镜像里这个单元只该在安装介质上跑"的判据;否则装好的系统会自己重装自己。
+[Unit]
+Description=Daedalus 无人值守装机(live 介质专用)
+ConditionKernelCommandLine=rd.live.image
+ConditionPathExists=!/etc/daedalus-iso-installed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/daedalus-iso-autoinstall
+TimeoutStartSec=45min
+
+[Install]
+WantedBy=multi-user.target
