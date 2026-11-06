@@ -29,6 +29,8 @@
 #                      Fedora SELinux Enforcing 下 systemd 无法执行 ~ 里的文件,
 #                      svc 会以 203/EXEC 失败)
 #   GRANT_NOPASSWD     设为 0 则不给当前用户配免密 sudo(默认 1 = 配)
+#   RUNNER_MIRROR      GitHub release 加速镜像前缀(默认 https://gh-proxy.com)
+#   RUNNER_DOWNLOAD_BASE  指定下载源前缀(留空 = 直连 + 镜像回退)
 #
 # 退出码
 #   0 装好并已启动
@@ -43,6 +45,10 @@ RUNNER_LABELS="${RUNNER_LABELS:-daedalus-kvm}"
 RUNNER_DIR="${RUNNER_DIR:-/opt/actions-runner}"
 GRANT_NOPASSWD="${GRANT_NOPASSWD:-1}"
 TOKEN_FILE="${TOKEN_FILE:-/tmp/.daedalus-runner-token}"
+# 跨境下载 GitHub release 常被掐断(SSL unexpected eof)。按序回退:
+#   显式 RUNNER_DOWNLOAD_BASE → 直连 GitHub → RUNNER_MIRROR 加速镜像。
+RUNNER_DOWNLOAD_BASE="${RUNNER_DOWNLOAD_BASE:-}"
+RUNNER_MIRROR="${RUNNER_MIRROR:-https://gh-proxy.com}"
 # 需要装的包:podman/qemu 已可能就位;bootc/ostree 是 P2 的 bootc 换部署验证用的,
 # 一次装齐省得后面再来一趟。
 PACKAGES=(podman qemu-kvm qemu-img bootc ostree)
@@ -52,6 +58,17 @@ info() { printf '   %s\n' "$*"; }
 ok()   { printf '\033[1;32m   OK %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m   !! %s\033[0m\n' "$*"; }
 bad()  { printf '\033[1;31m   XX %s\033[0m\n' "$*" >&2; }
+
+# fetch_tar <url> <dest> —— 带重试下载,并校验是合法 gzip(防止把半截文件或代理
+# 返回的 HTML 错误页当 tarball 解压)。
+fetch_tar() {
+    local url="$1" dest="$2"
+    curl -fL --retry 4 --retry-delay 3 --retry-all-errors \
+         --connect-timeout 20 --max-time 900 \
+         -o "$dest" "$url" || return 1
+    tar -tzf "$dest" >/dev/null 2>&1 || return 1
+    return 0
+}
 
 TOKEN=""
 PREFLIGHT_ONLY=0
@@ -98,20 +115,21 @@ fi
 # --------------------------------------------------------------- sudo 凭据 ---
 say "Phase 1 · sudo 与免密"
 sudo -v || { bad "sudo 不可用(本脚本需要 sudo 装包与装 systemd 服务)"; exit 2; }
-if sudo -n true 2>/dev/null; then
-    ok "sudo 已免密"
+if [ "$GRANT_NOPASSWD" = "1" ]; then
+    SUDOERS_FILE="/etc/sudoers.d/daedalus-runner"
+    # 无条件写入(幂等),**不能**用 `sudo -n true` 判断「是否已免密」:
+    # 上一行 sudo -v 刚把凭据缓存进本会话,那次 sudo -n 会假成功,
+    # 于是永远判定成「已免密」而从不写 drop-in —— 结果 CD job 里的非交互 sudo 失败。
+    warn "写入 $SUDOERS_FILE:$(id -un) ALL=(ALL) NOPASSWD: ALL(撤销:rm -f $SUDOERS_FILE)"
+    printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$(id -un)" | sudo tee "$SUDOERS_FILE" >/dev/null
+    sudo chmod 440 "$SUDOERS_FILE"
+    sudo -n true || { bad "免密 sudo 写入后仍不可用"; exit 2; }
+    ok "已为 $(id -un) 配置免密 sudo"
 else
-    if [ "$GRANT_NOPASSWD" = "1" ]; then
-        SUDOERS_FILE="/etc/sudoers.d/daedalus-runner"
-        warn "当前用户 $(id -un) 的 sudo 需要密码;CD job 里的 sudo 是非交互的,必须免密。"
-        warn "将写入 $SUDOERS_FILE:$(id -un) ALL=(ALL) NOPASSWD: ALL"
-        warn "撤销:rm -f $SUDOERS_FILE"
-        printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$(id -un)" | sudo tee "$SUDOERS_FILE" >/dev/null
-        sudo chmod 440 "$SUDOERS_FILE"
-        sudo -n true || { bad "免密 sudo 写入后仍不可用"; exit 2; }
-        ok "已为 $(id -un) 配置免密 sudo"
+    if sudo -n true 2>/dev/null; then
+        ok "sudo 已免密"
     else
-        warn "GRANT_NOPASSWD=0,未配置免密 sudo —— deploy-verify-kvm job 里的 sudo 会失败"
+        warn "GRANT_NOPASSWD=0 且 sudo 需密码 —— deploy-verify-kvm job 里的 sudo 会失败"
     fi
 fi
 
@@ -137,9 +155,14 @@ say "Phase 3 · 安装 runner"
 # 旧装法(Fedora SELinux Enforcing)会把 svc 打成 203/EXEC:systemd 无法执行
 # ~ 里的文件。所以目录固定在 /opt,并在解包后 restorecon 把标签摆正。
 UNIT_NAME="actions.runner.${REPO//\//-}.${RUNNER_NAME}.service"
-if systemctl list-unit-files "$UNIT_NAME" --no-legend 2>/dev/null | grep -q .; then
-    info "存在旧的服务单元 $UNIT_NAME,先停掉"
+UNIT_PATH="/etc/systemd/system/$UNIT_NAME"
+# 上一轮失败会在 /etc/systemd/system 留下 unit 文件,而 svc.sh install 拒绝覆盖
+# 已存在的文件(Failed: error: exists ...)。只 disable 不够,必须删掉文件再 daemon-reload。
+if [ -e "$UNIT_PATH" ] || systemctl list-unit-files "$UNIT_NAME" --no-legend 2>/dev/null | grep -q .; then
+    info "存在旧的服务单元 $UNIT_NAME,先停用并删除"
     sudo systemctl disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
+    sudo rm -f "$UNIT_PATH"
+    sudo systemctl daemon-reload 2>/dev/null || true
 fi
 
 if [ ! -x "$RUNNER_DIR/config.sh" ]; then
@@ -148,31 +171,63 @@ if [ ! -x "$RUNNER_DIR/config.sh" ]; then
     sudo chown "$(id -un):$(id -gn)" "$RUNNER_DIR"
     tarball="$RUNNER_DIR/runner.tar.gz"
     url="https://github.com/actions/runner/releases/download/v${RUNNER_VER}/actions-runner-linux-x64-${RUNNER_VER}.tar.gz"
-    info "下载 $url"
-    curl -fsSL -o "$tarball" "$url" || { bad "下载 runner 失败"; exit 2; }
+    # 跨境下载 GitHub release 常在传输中断(curl 56 / SSL unexpected eof),
+    # 逐个回退源:显式指定 → 直连 → 加速镜像。
+    got=0
+    if [ -n "$RUNNER_DOWNLOAD_BASE" ]; then
+        info "下载(1/3)指定源: ${RUNNER_DOWNLOAD_BASE}"
+        fetch_tar "${RUNNER_DOWNLOAD_BASE}/${url}" "$tarball" && got=1 \
+            || warn "指定源失败,继续下一个"
+    fi
+    if [ "$got" = 0 ]; then
+        info "下载(2/3)直连 GitHub: $url"
+        fetch_tar "$url" "$tarball" && got=1 \
+            || warn "直连失败(跨境网络常见),换加速镜像"
+    fi
+    if [ "$got" = 0 ]; then
+        info "下载(3/3)加速镜像: ${RUNNER_MIRROR}/${url}"
+        fetch_tar "${RUNNER_MIRROR}/${url}" "$tarball" && got=1 \
+            || warn "加速镜像也失败"
+    fi
+    [ "$got" = 1 ] || { bad "runner 下载失败(所有源都不通);可试 RUNNER_MIRROR=<你的镜像> 重跑"; exit 2; }
     tar -xzf "$tarball" -C "$RUNNER_DIR" || { bad "解压 runner 失败"; exit 2; }
     rm -f "$tarball"
-    # 解出来的文件会带默认标签;显式 restorecon 一次,避免 203/EXEC。
-    sudo restorecon -R "$RUNNER_DIR" 2>/dev/null || warn "restorecon 不可用,若 svc 仍 203/EXEC 需手工处理标签"
     ok "runner v${RUNNER_VER} 已解压到 $RUNNER_DIR"
 else
     ok "复用已存在的 runner 安装目录 $RUNNER_DIR"
 fi
+# 新旧目录都 restorecon 一次:复用旧目录时标签可能仍是 home 类,SELinux 下会
+# 让 svc 以 203/EXEC 失败(本脚本第一版就栽在这)。restorecon 幂等,代价可忽略。
+sudo restorecon -R "$RUNNER_DIR" 2>/dev/null || warn "restorecon 不可用,若 svc 仍 203/EXEC 需手工处理标签"
 
 cd "$RUNNER_DIR"
-./config.sh \
-    --url "https://github.com/$REPO" \
-    --token "$TOKEN" \
-    --name "$RUNNER_NAME" \
-    --labels "$RUNNER_LABELS" \
-    --unattended \
-    --replace \
-    --work _work \
-    || { bad "runner 注册失败(标签重复?token 过期?)"; exit 2; }
-ok "runner 已注册: $RUNNER_NAME(标签 $RUNNER_LABELS)"
+# 已经配置过(.runner 存在)就跳过注册:重跑 config.sh 会硬失败
+# "Cannot configure the runner because it is already configured"。想重注册请先
+# 手动 ./config.sh remove。/opt 目录跨轮次复用,这一步让重跑变成幂等。
+if [ -f .runner ]; then
+    ok "runner 已配置(.runner 存在),跳过注册;如需换名/换标签请先 ./config.sh remove"
+else
+    [ -n "$TOKEN" ] || { bad "缺注册 token(用 --token-file 或 --token 提供);本轮未配置过 runner,必须给"; exit 2; }
+    ./config.sh \
+        --url "https://github.com/$REPO" \
+        --token "$TOKEN" \
+        --name "$RUNNER_NAME" \
+        --labels "$RUNNER_LABELS" \
+        --unattended \
+        --replace \
+        --work _work \
+        || { bad "runner 注册失败(标签重复?token 过期?)"; exit 2; }
+    ok "runner 已注册: $RUNNER_NAME(标签 $RUNNER_LABELS)"
+fi
 
 say "Phase 4 · 装成 systemd 服务"
-sudo ./svc.sh install "$(id -un)" || { bad "svc.sh install 失败"; exit 2; }
+if ! sudo ./svc.sh install "$(id -un)"; then
+    # 再兜一层:svc.sh 对已存在的 unit 文件是硬失败,清掉再来一次
+    warn "svc.sh install 失败,清掉旧 unit 文件后重试"
+    sudo rm -f "$UNIT_PATH"
+    sudo systemctl daemon-reload 2>/dev/null || true
+    sudo ./svc.sh install "$(id -un)" || { bad "svc.sh install 失败"; exit 2; }
+fi
 sudo ./svc.sh start   || { bad "svc.sh start 失败"; exit 2; }
 sleep 3
 # 不能只看 svc.sh 的退出码:它在服务实际 failed 时也可能返回 0(本轮就踩到过,
