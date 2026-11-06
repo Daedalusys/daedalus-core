@@ -45,6 +45,9 @@
 #   VERIFY_BOOT_TIMEOUT   等 live 系统可 SSH 的秒数(默认 600)
 #   VERIFY_INSTALL_TIMEOUT 等装机完成的秒数(默认 2400)
 #   VERIFY_REQUIRE_INSTALL 置 1 时,P2-2b 未达成也判失败(默认 0:P2-2a 绿即绿)
+#   VERIFY_SSH_PORT live 自证的 hostfwd/ssh 端口(默认 2222;同一台宿主上并行跑多个
+#                   worker 时端口会撞,撞上就是 qemu "Could not set up host forwarding
+#                   rule" → QEMU 当场退出、整条验证假失败,故可配)
 #   VERIFY_DISK_SIZE 目标盘大小(默认 20G)
 #
 # 退出码
@@ -61,7 +64,9 @@ INSTALL_TIMEOUT="${VERIFY_INSTALL_TIMEOUT:-2400}"
 DISK_SIZE="${VERIFY_DISK_SIZE:-20G}"
 BUILDER_IMAGE="${VERIFY_BUILDER_IMAGE:-ghcr.io/osbuild/image-builder-cli:latest}"
 REQUIRE_INSTALL="${VERIFY_REQUIRE_INSTALL:-0}"
-SSH_PORT=2222
+# hostfwd 端口可配:同一台靶机上多个 worker 会同时跑 QEMU,写死就会互相撞
+# (症状是 qemu 抛 "Could not set up host forwarding rule" 后直接退出,很难定位)。
+SSH_PORT="${VERIFY_SSH_PORT:-2222}"
 ONLY_PREFLIGHT=0
 
 while [ $# -gt 0 ]; do

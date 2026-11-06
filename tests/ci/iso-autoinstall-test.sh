@@ -91,7 +91,8 @@ if [ -f "$VERIFY" ]; then
     fi
     has '2026-11-06-iso-blueprint.md' "$VERIFY"
     st $? "规则6 脚本里锚定了 Task 1 探查笔记(避免有人再走回头路)"
-    has 'SSH_PORT=2222' "$VERIFY"; st $? "规则7 live 自证端口固定为 2222"
+    hasre 'SSH_PORT="\$\{VERIFY_SSH_PORT:-2222\}"' "$VERIFY"
+    st $? "规则7 live 自证端口可配(默认 2222;并行 worker 用 VERIFY_SSH_PORT 避让)"
     hasre 'hostfwd=tcp::.*-:22' "$VERIFY"; st $? "规则7 live 自证走 hostfwd"
     hasre 'qemu-img create' "$VERIFY"; st $? "规则7 每次新建目标盘 qcow2(不复用旧盘)"
     hasre 'daedalus\.install\.disk=/dev/vda' "$VERIFY"; st $? "规则7 目标盘通过内核参数点名"
