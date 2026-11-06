@@ -1,0 +1,542 @@
+
+== Phase 0 · preflight ==
+   OK CPU 支持 x86-64-v3
+   OK /dev/kvm 可读写
+   OK qemu / podman / qemu-img 就位
+   工作目录: /tmp/iso-verify-run
+
+== Phase 1 · 派生一次性 ISO payload 镜像 ==
+STEP 1/2: FROM ghcr.io/daedalusys/daedalus-os:latest
+STEP 2/2: RUN set -eux;     echo 10 > /etc/dnf/vars/releasever;     dnf install -y cpio squashfs-tools xorriso isomd5sum syslinux grub2-efi-x64-cdboot;     dnf -y reinstall --downloadonly --downloaddir=/tmp/rpms shim-x64 grub2-efi-x64 grub2-efi-x64-cdboot;     cd /; for r in /tmp/rpms/*.rpm; do rpm2cpio "$r" | cpio -idmu; done; rm -rf /tmp/rpms;     mkdir -p /boot/efi/EFI/almalinux;     cp -f /boot/efi/EFI/BOOT/* /boot/efi/EFI/almalinux/ 2>/dev/null || true;     if [ ! -f /boot/efi/EFI/almalinux/shimx64.efi ] && [ -f /boot/efi/EFI/almalinux/shimx64-almalinux.efi ]; then         cp -f /boot/efi/EFI/almalinux/shimx64-almalinux.efi /boot/efi/EFI/almalinux/shimx64.efi;     fi;     test -f /boot/efi/EFI/almalinux/shimx64.efi; ls /boot/efi/EFI/almalinux/
++ echo 10
++ dnf install -y cpio squashfs-tools xorriso isomd5sum syslinux grub2-efi-x64-cdboot
+AlmaLinux Kitten 10 - CRB                       263 kB/s | 845 kB     00:03    
+Daedalus Aliyun BaseOS (AlmaLinux 10)           9.4 MB/s |  55 MB     00:05    
+Daedalus Aliyun AppStream (AlmaLinux 10)        5.5 MB/s | 2.9 MB     00:00    
+Daedalus Aliyun Extras (AlmaLinux 10)            33 kB/s |  13 kB     00:00    
+Daedalus Aliyun HighAvailability (AlmaLinux 10)  54 kB/s |  25 kB     00:00    
+Daedalus Aliyun CRB (AlmaLinux 10)              1.5 MB/s | 680 kB     00:00    
+Daedalus Aliyun EPEL 10                         8.8 MB/s | 7.3 MB     00:00    
+Extra Packages for Enterprise Linux 10 - x86_64 2.3 MB/s | 7.4 MB     00:03    
+Package cpio-2.15-3.el10.x86_64 is already installed.
+Dependencies resolved.
+========================================================================================
+ Package                Arch    Version                 Repository                  Size
+========================================================================================
+Installing:
+ grub2-efi-x64-cdboot   x86_64  1:2.12-46.el10_2.alma.1 daedalus-aliyun-baseos     2.2 M
+ isomd5sum              x86_64  1:1.2.5-3.el10          daedalus-aliyun-appstream   32 k
+ squashfs-tools         x86_64  4.6.1-6.el10            daedalus-aliyun-baseos     249 k
+ syslinux               x86_64  6.04-0.34.el10.alma.2   daedalus-aliyun-baseos     560 k
+ xorriso                x86_64  1.5.6-6.el10            daedalus-aliyun-appstream  321 k
+Installing dependencies:
+ libburn                x86_64  1.5.6-6.el10            daedalus-aliyun-appstream  171 k
+ libisoburn             x86_64  1.5.6-6.el10            daedalus-aliyun-appstream  430 k
+ libisofs               x86_64  1.5.6-6.el10            daedalus-aliyun-appstream  236 k
+ mtools                 x86_64  4.0.43-7.el10           daedalus-aliyun-baseos     221 k
+ syslinux-nonlinux      noarch  6.04-0.34.el10.alma.2   daedalus-aliyun-baseos     586 k
+Downgrading:
+ grub2-common           noarch  1:2.12-46.el10_2.alma.1 daedalus-aliyun-baseos     1.0 M
+ grub2-efi-x64          x86_64  1:2.12-46.el10_2.alma.1 daedalus-aliyun-baseos     2.2 M
+ grub2-pc               x86_64  1:2.12-46.el10_2.alma.1 daedalus-aliyun-baseos      16 k
+ grub2-pc-modules       noarch  1:2.12-46.el10_2.alma.1 daedalus-aliyun-baseos     1.1 M
+ grub2-tools            x86_64  1:2.12-46.el10_2.alma.1 daedalus-aliyun-baseos     1.9 M
+ grub2-tools-minimal    x86_64  1:2.12-46.el10_2.alma.1 daedalus-aliyun-baseos     687 k
+
+Transaction Summary
+========================================================================================
+Install    10 Packages
+Downgrade   6 Packages
+
+Total download size: 12 M
+Downloading Packages:
+(1/16): grub2-pc-2.12-46.el10_2.alma.1.x86_64.r  56 kB/s |  16 kB     00:00    
+(2/16): grub2-common-2.12-46.el10_2.alma.1.noar 2.0 MB/s | 1.0 MB     00:00    
+(3/16): grub2-pc-modules-2.12-46.el10_2.alma.1. 4.1 MB/s | 1.1 MB     00:00    
+(4/16): grub2-efi-x64-2.12-46.el10_2.alma.1.x86 3.5 MB/s | 2.2 MB     00:00    
+(5/16): grub2-tools-minimal-2.12-46.el10_2.alma 2.0 MB/s | 687 kB     00:00    
+(6/16): grub2-tools-2.12-46.el10_2.alma.1.x86_6 4.2 MB/s | 1.9 MB     00:00    
+(7/16): grub2-efi-x64-cdboot-2.12-46.el10_2.alm 4.4 MB/s | 2.2 MB     00:00    
+(8/16): mtools-4.0.43-7.el10.x86_64.rpm         589 kB/s | 221 kB     00:00    
+(9/16): squashfs-tools-4.6.1-6.el10.x86_64.rpm  823 kB/s | 249 kB     00:00    
+(10/16): isomd5sum-1.2.5-3.el10.x86_64.rpm      132 kB/s |  32 kB     00:00    
+(11/16): syslinux-6.04-0.34.el10.alma.2.x86_64. 1.3 MB/s | 560 kB     00:00    
+(12/16): syslinux-nonlinux-6.04-0.34.el10.alma. 1.6 MB/s | 586 kB     00:00    
+(13/16): libburn-1.5.6-6.el10.x86_64.rpm        698 kB/s | 171 kB     00:00    
+(14/16): libisoburn-1.5.6-6.el10.x86_64.rpm     1.1 MB/s | 430 kB     00:00    
+(15/16): libisofs-1.5.6-6.el10.x86_64.rpm       791 kB/s | 236 kB     00:00    
+(16/16): xorriso-1.5.6-6.el10.x86_64.rpm        633 kB/s | 321 kB     00:00    
+--------------------------------------------------------------------------------
+Total                                           5.2 MB/s |  12 MB     00:02     
+Running transaction check
+Transaction check succeeded.
+Running transaction test
+Transaction test succeeded.
+Running transaction
+  Preparing        :                                                        1/1 
+  Downgrading      : grub2-common-1:2.12-46.el10_2.alma.1.noarch           1/22 
+  Running scriptlet: grub2-tools-1:2.12-46.el10_2.alma.1.x86_64            2/22 
+  Downgrading      : grub2-tools-1:2.12-46.el10_2.alma.1.x86_64            2/22 
+  Running scriptlet: grub2-tools-1:2.12-46.el10_2.alma.1.x86_64            2/22 
+  Downgrading      : grub2-tools-minimal-1:2.12-46.el10_2.alma.1.x86_64    3/22 
+  Downgrading      : grub2-pc-modules-1:2.12-46.el10_2.alma.1.noarch       4/22 
+  Installing       : libisofs-1.5.6-6.el10.x86_64                          5/22 
+  Installing       : libburn-1.5.6-6.el10.x86_64                           6/22 
+  Installing       : libisoburn-1.5.6-6.el10.x86_64                        7/22 
+  Installing       : mtools-4.0.43-7.el10.x86_64                           8/22 
+  Installing       : syslinux-nonlinux-6.04-0.34.el10.alma.2.noarch        9/22 
+  Installing       : syslinux-6.04-0.34.el10.alma.2.x86_64                10/22 
+  Installing       : xorriso-1.5.6-6.el10.x86_64                          11/22 
+  Running scriptlet: xorriso-1.5.6-6.el10.x86_64                          11/22 
+  Downgrading      : grub2-pc-1:2.12-46.el10_2.alma.1.x86_64              12/22 
+  Downgrading      : grub2-efi-x64-1:2.12-46.el10_2.alma.1.x86_64         13/22 
+  Installing       : grub2-efi-x64-cdboot-1:2.12-46.el10_2.alma.1.x86_6   14/22 
+  Installing       : isomd5sum-1:1.2.5-3.el10.x86_64                      15/22 
+  Installing       : squashfs-tools-4.6.1-6.el10.x86_64                   16/22 
+  Cleanup          : grub2-pc-1:2.12-57.el10.alma.1.x86_64                17/22 
+  Cleanup          : grub2-efi-x64-1:2.12-57.el10.alma.1.x86_64           18/22 
+  Cleanup          : grub2-pc-modules-1:2.12-57.el10.alma.1.noarch        19/22 
+  Running scriptlet: grub2-tools-1:2.12-57.el10.alma.1.x86_64             20/22 
+  Cleanup          : grub2-tools-1:2.12-57.el10.alma.1.x86_64             20/22 
+  Running scriptlet: grub2-tools-1:2.12-57.el10.alma.1.x86_64             20/22 
+  Cleanup          : grub2-tools-minimal-1:2.12-57.el10.alma.1.x86_64     21/22 
+  Cleanup          : grub2-common-1:2.12-57.el10.alma.1.noarch            22/22 
+  Running scriptlet: grub2-common-1:2.12-46.el10_2.alma.1.noarch          22/22 
+  Running scriptlet: grub2-common-1:2.12-57.el10.alma.1.noarch            22/22 
+
+Downgraded:
+  grub2-common-1:2.12-46.el10_2.alma.1.noarch                                   
+  grub2-efi-x64-1:2.12-46.el10_2.alma.1.x86_64                                  
+  grub2-pc-1:2.12-46.el10_2.alma.1.x86_64                                       
+  grub2-pc-modules-1:2.12-46.el10_2.alma.1.noarch                               
+  grub2-tools-1:2.12-46.el10_2.alma.1.x86_64                                    
+  grub2-tools-minimal-1:2.12-46.el10_2.alma.1.x86_64                            
+Installed:
+  grub2-efi-x64-cdboot-1:2.12-46.el10_2.alma.1.x86_64                           
+  isomd5sum-1:1.2.5-3.el10.x86_64                                               
+  libburn-1.5.6-6.el10.x86_64                                                   
+  libisoburn-1.5.6-6.el10.x86_64                                                
+  libisofs-1.5.6-6.el10.x86_64                                                  
+  mtools-4.0.43-7.el10.x86_64                                                   
+  squashfs-tools-4.6.1-6.el10.x86_64                                            
+  syslinux-6.04-0.34.el10.alma.2.x86_64                                         
+  syslinux-nonlinux-6.04-0.34.el10.alma.2.noarch                                
+  xorriso-1.5.6-6.el10.x86_64                                                   
+
+Complete!
++ dnf -y reinstall --downloadonly --downloaddir=/tmp/rpms shim-x64 grub2-efi-x64 grub2-efi-x64-cdboot
+Last metadata expiration check: 0:00:07 ago on Fri Nov  6 03:23:29 2026.
+Dependencies resolved.
+================================================================================
+ Package            Arch   Version                 Repository              Size
+================================================================================
+Reinstalling:
+ grub2-efi-x64      x86_64 1:2.12-46.el10_2.alma.1 daedalus-aliyun-baseos 2.2 M
+ grub2-efi-x64-cdboot
+                    x86_64 1:2.12-46.el10_2.alma.1 daedalus-aliyun-baseos 2.2 M
+ shim-x64           x86_64 16.1-4.el10.alma.1      daedalus-aliyun-baseos 495 k
+
+Transaction Summary
+================================================================================
+
+Total download size: 4.8 M
+Installed size: 18 M
+DNF will only download packages for the transaction.
+Downloading Packages:
+(1/3): grub2-efi-x64-cdboot-2.12-46.el10_2.alma 2.3 MB/s | 2.2 MB     00:00    
+(2/3): grub2-efi-x64-2.12-46.el10_2.alma.1.x86_ 2.1 MB/s | 2.2 MB     00:01    
+(3/3): shim-x64-16.1-4.el10.alma.1.x86_64.rpm   402 kB/s | 495 kB     00:01    
+--------------------------------------------------------------------------------
+Total                                           3.9 MB/s | 4.8 MB     00:01     
+Complete!
+The downloaded packages were saved in cache until the next successful transaction.
+You can remove cached packages by executing 'dnf clean packages'.
++ cd /
++ for r in /tmp/rpms/*.rpm
++ rpm2cpio /tmp/rpms/grub2-efi-x64-2.12-46.el10_2.alma.1.x86_64.rpm
++ cpio -idmu
+13022 blocks
++ for r in /tmp/rpms/*.rpm
++ rpm2cpio /tmp/rpms/grub2-efi-x64-cdboot-2.12-46.el10_2.alma.1.x86_64.rpm
++ cpio -idmu
+13017 blocks
++ for r in /tmp/rpms/*.rpm
++ rpm2cpio /tmp/rpms/shim-x64-16.1-4.el10.alma.1.x86_64.rpm
++ cpio -idmu
+10153 blocks
++ rm -rf /tmp/rpms
++ mkdir -p /boot/efi/EFI/almalinux
++ cp -f /boot/efi/EFI/BOOT/BOOTX64.EFI /boot/efi/EFI/BOOT/fbx64.efi /boot/efi/EFI/almalinux/
++ '[' '!' -f /boot/efi/EFI/almalinux/shimx64.efi ']'
++ test -f /boot/efi/EFI/almalinux/shimx64.efi
++ ls /boot/efi/EFI/almalinux/
+BOOTX64.CSV
+BOOTX64.EFI
+fbx64.efi
+gcdx64.efi
+grubx64.efi
+mmx64.efi
+shim.efi
+shimx64-almalinux.efi
+shimx64.efi
+COMMIT localhost/daedalus-iso-payload
+--> 9351e48f3fa9
+Successfully tagged localhost/daedalus-iso-payload:latest
+9351e48f3fa936fdba0d69ec5da2c2c58947a56a0e101ae99d391a704a08d8cb
+   OK payload 镜像就绪: localhost/daedalus-iso-payload
+
+== Phase 2 · 用新版 image-builder CLI 出 generic-iso ==
+Manifest generation step
+Building manifest for bootc-based-generic-iso
+Image building step
+starting -Pipeline source org.osbuild.containers-storage: 8d8a8a8ede19e37b37ac07685cd6782f01b2282cb80e271075140ac1e96f5b8f
+Build
+  root: <host>
+Pipeline build: 6164608430c1fd0e9b05b5d2915b9ae1b9524c5548f536f2c4cb364da344036c
+Build
+  root: <host>
+  runner: org.osbuild.fedora38 (org.osbuild.fedora38)
+org.osbuild.container-deploy: 3438e2848fbae3b26fa44a2d64ab81676ac0db89f19ae4522d7ce67f46464b0f {
+  "remove-signatures": true
+}
+9351e48f3fa936fdba0d69ec5da2c2c58947a56a0e101ae99d391a704a08d8cb
+
+⏱  Duration: 7.49s
+org.osbuild.selinux: 6164608430c1fd0e9b05b5d2915b9ae1b9524c5548f536f2c4cb364da344036c {
+  "file_contexts": "etc/selinux/targeted/contexts/files/file_contexts",
+  "exclude_paths": [
+    "/sysroot"
+  ],
+  "labels": {
+    "/usr/bin/mount": "system_u:object_r:install_exec_t:s0",
+    "/usr/bin/ostree": "system_u:object_r:install_exec_t:s0",
+    "/usr/bin/umount": "system_u:object_r:install_exec_t:s0"
+  }
+}
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/gcc-14/python/libstdcxx/__init__.py and /run/osbuild/tree/usr/lib/python3.12/site-packages/file_magic-0.4.0-py3.12.egg-info/dependency_links.txt, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/iproute2/README and /run/osbuild/tree/etc/iproute2/README, using system_u:object_r:etc_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/makedumpfile/makedumpfile.conf.sample and /run/osbuild/tree/etc/makedumpfile.conf.sample, using system_u:object_r:etc_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/sssd/krb5-snippets/enable_sssd_conf_dir and /run/osbuild/tree/etc/krb5.conf.d/enable_sssd_conf_dir, using system_u:object_r:etc_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/jose/COPYING and /run/osbuild/tree/usr/lib/python3.12/site-packages/requests-2.32.4.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/libjose/COPYING and /run/osbuild/tree/usr/share/licenses/jose/COPYING, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-charset-normalizer/LICENSE and /run/osbuild/tree/usr/lib/python3.12/site-packages/charset_normalizer-3.4.2.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-idna/LICENSE.md and /run/osbuild/tree/usr/lib/python3.12/site-packages/idna-3.7.dist-info/LICENSE.md, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-packaging/LICENSE and /run/osbuild/tree/usr/lib/python3.12/site-packages/packaging-24.2.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-packaging/LICENSE.APACHE and /run/osbuild/tree/usr/lib/python3.12/site-packages/packaging-24.2.dist-info/LICENSE.APACHE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-packaging/LICENSE.BSD and /run/osbuild/tree/usr/lib/python3.12/site-packages/packaging-24.2.dist-info/LICENSE.BSD, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-ptyprocess/LICENSE and /run/osbuild/tree/usr/lib/python3.12/site-packages/ptyprocess-0.7.0.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-setuptools/LICENSE and /run/osbuild/tree/usr/lib/python3.12/site-packages/setuptools-69.0.3.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+
+⏱  Duration: 0.89s
+Pipeline efiboot-tree: d438e1600cdba1b1b064c5af938538b25c372217a0078d5f498e13205f39ca53
+Build
+  root: 6164608430c1fd0e9b05b5d2915b9ae1b9524c5548f536f2c4cb364da344036c
+  runner: org.osbuild.linux (org.osbuild.linux)
+org.osbuild.grub2.iso: d438e1600cdba1b1b064c5af938538b25c372217a0078d5f498e13205f39ca53 {
+  "product": {
+    "name": "AlmaLinux Kitten",
+    "version": "10"
+  },
+  "kernel": {
+    "dir": "/images/pxeboot",
+    "opts": [
+      "root=live:CDLABEL=Container-Installer-x86_64",
+      "rd.live.image",
+      "quiet",
+      "rhgb",
+      "enforcing=0"
+    ]
+  },
+  "isolabel": "Container-Installer-x86_64",
+  "architectures": [
+    "X64"
+  ],
+  "vendor": "almalinux",
+  "troubleshooting": true,
+  "test": true,
+  "install": true
+}
+kernel dir at /images/pxeboot
+
+⏱  Duration: 0.31s
+Pipeline os-tree: fb9eefa5f9709279bd6c894b869625694eb8f249befcdf74513c5438ef9a63f7
+Build
+  root: 6164608430c1fd0e9b05b5d2915b9ae1b9524c5548f536f2c4cb364da344036c
+  runner: org.osbuild.linux (org.osbuild.linux)
+org.osbuild.container-deploy: fb9eefa5f9709279bd6c894b869625694eb8f249befcdf74513c5438ef9a63f7 {
+  "remove-signatures": true
+}
+9351e48f3fa936fdba0d69ec5da2c2c58947a56a0e101ae99d391a704a08d8cb
+
+⏱  Duration: 5.34s
+Pipeline bootiso-tree: 07d4146459d3d1a2a7303257de9bd565928f762e11ac78bdc79812cc67bed780
+Build
+  root: 6164608430c1fd0e9b05b5d2915b9ae1b9524c5548f536f2c4cb364da344036c
+  runner: org.osbuild.linux (org.osbuild.linux)
+org.osbuild.mkdir: 45259261cc1dd6221eb5ad010377b505bf0a22ea96e5cf19443166787d68bf67 {
+  "paths": [
+    {
+      "path": "/images"
+    },
+    {
+      "path": "/images/pxeboot"
+    },
+    {
+      "path": "/LiveOS"
+    }
+  ]
+}
+
+⏱  Duration: 0.30s
+org.osbuild.copy: 51af209dca89a913f015b5488e8d875eb8db81107a3b669d398315c4f6ed6a65 {
+  "paths": [
+    {
+      "from": "input://tree/lib/modules/6.12.0-273.el10.x86_64/vmlinuz",
+      "to": "tree:///images/pxeboot/vmlinuz"
+    },
+    {
+      "from": "input://tree/lib/modules/6.12.0-273.el10.x86_64/initramfs.img",
+      "to": "tree:///images/pxeboot/initrd.img"
+    }
+  ]
+}
+copying '/run/osbuild/inputs/tree/lib/modules/6.12.0-273.el10.x86_64/vmlinuz' -> '/run/osbuild/tree/images/pxeboot/vmlinuz'
+copying '/run/osbuild/inputs/tree/lib/modules/6.12.0-273.el10.x86_64/initramfs.img' -> '/run/osbuild/tree/images/pxeboot/initrd.img'
+
+⏱  Duration: 0.42s
+org.osbuild.chmod: 76de91dbbaa14b3a88928d8919d8cef65fd69312003ad2b768c738863c7169b1 {
+  "items": {
+    "/images/pxeboot/initrd.img": {
+      "mode": "0644"
+    },
+    "/images/pxeboot/vmlinuz": {
+      "mode": "0644"
+    }
+  }
+}
+
+⏱  Duration: 0.30s
+org.osbuild.squashfs: 4834d9ffcac626d4dcba0b771232af0646872a75acfab248d936db4c608cfeb2 {
+  "filename": "LiveOS/squashfs.img",
+  "exclude_paths": [
+    "boot/efi/.*",
+    "boot/grub2/.*",
+    "boot/config-.*",
+    "boot/initramfs-.*",
+    "boot/loader/.*",
+    "boot/symvers-.*",
+    "boot/System.map-.*",
+    "usr/lib/sysimage/rpm/.*",
+    "var/lib/rpm/.*",
+    "var/lib/yum/.*",
+    "var/lib/dnf/.*"
+  ],
+  "compression": {
+    "method": "zstd"
+  }
+}
+Parallel mksquashfs: Using 20 processors
+Creating 4.0 filesystem on /run/osbuild/tree/LiveOS/squashfs.img, block size 131072.
+[================|                                           ] 11100/38889  28%[====================================\                       ] 23800/38889  61%[===========================================================/] 38889/38889 100%
+
+Exportable Squashfs 4.0 filesystem, zstd compressed, data block size 131072
+	compressed data, compressed metadata, compressed fragments,
+	compressed xattrs, compressed ids
+	duplicates are removed
+Filesystem size 1020021.15 Kbytes (996.11 Mbytes)
+	56.21% of uncompressed filesystem size (1814679.81 Kbytes)
+Inode table size 375375 bytes (366.58 Kbytes)
+	16.86% of uncompressed inode table size (2225861 bytes)
+Directory table size 421582 bytes (411.70 Kbytes)
+	36.46% of uncompressed directory table size (1156235 bytes)
+Xattr table size 1253 bytes (1.22 Kbytes)
+	22.50% of uncompressed xattr table size (5569 bytes)
+Number of duplicate files found 518
+Number of inodes 39678
+Number of files 27785
+Number of fragments 2929
+Number of symbolic links 6427
+Number of device nodes 0
+Number of fifo nodes 0
+Number of socket nodes 0
+Number of directories 5466
+Number of hard-links 3681
+Number of ids (unique uids + gids) 6
+Number of uids 1
+	root (0)
+Number of gids 6
+	unknown (0)
+	unknown (998)
+	unknown (993)
+	unknown (5)
+	unknown (22)
+	unknown (35)
+
+⏱  Duration: 26.36s
+org.osbuild.grub2.iso.legacy: 01c34d62b2342a2dae7e80027e52dcb2a3b9b0b4dd38ae61c6be59b518def5d8 {
+  "product": {
+    "name": "AlmaLinux Kitten",
+    "version": "10"
+  },
+  "kernel": {
+    "dir": "/images/pxeboot",
+    "opts": [
+      "root=live:CDLABEL=Container-Installer-x86_64",
+      "rd.live.image",
+      "quiet",
+      "rhgb",
+      "enforcing=0"
+    ]
+  },
+  "isolabel": "Container-Installer-x86_64",
+  "troubleshooting": true,
+  "test": true,
+  "install": true
+}
+kernel dir at /images/pxeboot
+
+⏱  Duration: 0.36s
+org.osbuild.grub2.inst: 85d018756ec9e007614d4bd5bdad9a8d552be99b329517178d512b3d86d68c26 {
+  "filename": "images/eltorito.img",
+  "platform": "i386-pc",
+  "core": {
+    "type": "mkimage",
+    "partlabel": "gpt",
+    "filesystem": "iso9660"
+  },
+  "prefix": {
+    "path": "/boot/grub2"
+  }
+}
+prefix: /boot/grub2
+grub2-mkimage: info: the total module size is 0x6768.
+grub2-mkimage: info: reading /usr/lib/grub/i386-pc/kernel.img.
+grub2-mkimage: info: locating the section .text at 0x0.
+grub2-mkimage: info: locating the section .rodata at 0xbed8.
+grub2-mkimage: info: locating the section .module_license at 0xddc0.
+grub2-mkimage: info: locating the section .data at 0xdde0.
+grub2-mkimage: info: locating the section .bss at 0xe760.
+grub2-mkimage: info: reading /usr/lib/grub/i386-pc/biosdisk.mod.
+grub2-mkimage: info: reading /usr/lib/grub/i386-pc/part_gpt.mod.
+grub2-mkimage: info: reading /usr/lib/grub/i386-pc/fshelp.mod.
+grub2-mkimage: info: reading /usr/lib/grub/i386-pc/iso9660.mod.
+grub2-mkimage: info: kernel_img=0x560a0054a5e0, kernel_size=0xe758.
+grub2-mkimage: info: the core size is 0x7f82.
+grub2-mkimage: info: reading /usr/lib/grub/i386-pc/lzma_decompress.img.
+grub2-mkimage: info: reading /usr/lib/grub/i386-pc/cdboot.img.
+grub2-mkimage: info: writing 0x800 bytes.
+grub2-mkimage: info: reading /usr/lib/grub/i386-pc/diskboot.img.
+grub2-mkimage: info: writing 0x200 bytes.
+grub2-mkimage: info: writing 0x8ab2 bytes.
+
+⏱  Duration: 0.33s
+org.osbuild.truncate: eca63803623ff22427f2aee500bb30a5964b22f5f2ad720b1464bf0a80ae9779 {
+  "filename": "images/efiboot.img",
+  "size": "20971520"
+}
+
+⏱  Duration: 0.30s
+org.osbuild.mkfs.fat: 6effbd57f33655bf68daffcf4acf62ac801fa9d959fdef0d0da5f3005b09df98 {
+  "volid": "B2F0704D"
+}
+device/device (org.osbuild.loopback): loop0 acquired (locked: True)
+mkfs.fat 4.2 (2021-01-31)
+
+⏱  Duration: 0.39s
+org.osbuild.copy: 855b8a52606a74411d2ef662700b8a77d3cb4aed44b2b1dbaa43a8d1ea246122 {
+  "paths": [
+    {
+      "from": "input://root-tree/",
+      "to": "mount://-/"
+    }
+  ]
+}
+device/- (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.fat): mounting /dev/loop0 -> /var/cache/image-builder/store/tmp/buildroot-tmp-07qunv7p/mounts/
+copying '/run/osbuild/inputs/root-tree/.' -> '/run/osbuild/mounts/.'
+mount/- (org.osbuild.fat): umount: /var/cache/image-builder/store/tmp/buildroot-tmp-07qunv7p/mounts/ unmounted
+
+⏱  Duration: 0.62s
+org.osbuild.copy: cd8f98f63b96b042a2896dde90ebc37633fddf2f4e1ad7d7c76ef3e47ca7ffd3 {
+  "paths": [
+    {
+      "from": "input://root-tree/EFI",
+      "to": "tree:///"
+    }
+  ]
+}
+copying '/run/osbuild/inputs/root-tree/EFI' -> '/run/osbuild/tree/.'
+
+⏱  Duration: 0.40s
+org.osbuild.discinfo: 07d4146459d3d1a2a7303257de9bd565928f762e11ac78bdc79812cc67bed780 {
+  "basearch": "x86_64",
+  "release": "10"
+}
+
+⏱  Duration: 0.30s
+Pipeline bootiso: 84d0bd92df3fbff82622345278f35ec9c81e6f8c31a7eaf1ed82730382825d4b
+Build
+  root: 6164608430c1fd0e9b05b5d2915b9ae1b9524c5548f536f2c4cb364da344036c
+  runner: org.osbuild.linux (org.osbuild.linux)
+org.osbuild.xorrisofs: c3e4c268845388670a73bee664971f51c550d3fd5842bd4cc31d3b5301487cb2 {
+  "filename": "install.iso",
+  "volid": "Container-Installer-x86_64",
+  "sysid": "LINUX",
+  "boot": {
+    "image": "images/eltorito.img",
+    "catalog": "boot.cat"
+  },
+  "efi": "images/efiboot.img",
+  "isolevel": 3,
+  "grub2mbr": "/usr/lib/grub/i386-pc/boot_hybrid.img"
+}
+['/usr/bin/xorrisofs', '-verbose', '-rock', '-joliet', '-iso-level', '3', '-V', 'Container-Installer-x86_64', '-sysid', 'LINUX', '--grub2-mbr', '/usr/lib/grub/i386-pc/boot_hybrid.img', '-partition_offset', '16', '-appended_part_as_gpt', '-append_partition', '2', 'C12A7328-F81F-11D2-BA4B-00A0C93EC93B', '/run/osbuild/inputs/tree/images/efiboot.img', '-iso_mbr_part_type', 'EBD0A0A2-B9E5-4433-87C0-68B6B72699C7', '-b', 'images/eltorito.img', '-c', 'boot.cat', '--boot-catalog-hide', '-no-emul-boot', '-boot-load-size', '4', '-boot-info-table', '--grub2-boot-info', '-eltorito-alt-boot', '-e', '--interval:appended_partition_2:all::', '-no-emul-boot', '-o', '/run/osbuild/tree/install.iso', '/run/osbuild/inputs/tree']
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev 'stdio:/run/osbuild/tree/install.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  443g free
+xorriso : WARNING : -volid text is too long for Joliet (26 > 16)
+xorriso : WARNING : -volid text does not comply to ISO 9660 / ECMA 119 rules
+Added to ISO image: directory '/'='/run/osbuild/inputs/tree'
+xorriso : UPDATE :     334 files added in 1 seconds
+xorriso : UPDATE :     334 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/usr/lib/grub/i386-pc/boot_hybrid.img'
+xorriso : UPDATE :  13.88% done
+ISO image produced: 592180 sectors
+Written to medium : 592180 sectors at LBA 0
+Writing to 'stdio:/run/osbuild/tree/install.iso' completed successfully.
+
+
+⏱  Duration: 1.97s
+org.osbuild.implantisomd5: 84d0bd92df3fbff82622345278f35ec9c81e6f8c31a7eaf1ed82730382825d4b {
+  "filename": "install.iso"
+}
+['implantisomd5', '/run/osbuild/tree/install.iso']
+Inserting md5sum into iso image...
+md5 = a865c9778b1073ff1bd90759038dc21e
+Inserting fragment md5sums into iso image...
+fragmd5 = a2e5dd1fd232f516af2b9e8a3f7d2725d7e6648f3b6aac795ececac3b998
+frags = 20
+Setting supported flag to 0
+
+⏱  Duration: 1.86s
+manifest - finished successfully
+
+Pipelines
+  build:    	6164608430c1fd0e9b05b5d2915b9ae1b9524c5548f536f2c4cb364da344036c
+  os-tree:  	fb9eefa5f9709279bd6c894b869625694eb8f249befcdf74513c5438ef9a63f7
+  efiboot-tree:	d438e1600cdba1b1b064c5af938538b25c372217a0078d5f498e13205f39ca53
+  bootiso-tree:	07d4146459d3d1a2a7303257de9bd565928f762e11ac78bdc79812cc67bed780
+  bootiso:  	84d0bd92df3fbff82622345278f35ec9c81e6f8c31a7eaf1ed82730382825d4b
+
+Checkpoints
+Image build successful: /output/bootc-almalinux-10-generic-iso-x86_64.iso
+   OK ISO: /tmp/iso-verify-run/output/bootc-almalinux-10-generic-iso-x86_64.iso(1.2G)
+
+== Phase 3 · KVM 引导 ISO,等 GRUB/安装器菜单 ==
+   qemu pid=1271848,串口 → /tmp/iso-verify-run/serial-console.log
+   OK ISO 可引导:串口出现安装器菜单
+
+== Summary ==
