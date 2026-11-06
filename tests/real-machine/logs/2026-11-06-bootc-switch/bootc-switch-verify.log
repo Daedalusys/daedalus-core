@@ -1,0 +1,611 @@
+
+== Phase 0 · preflight ==
+   OK CPU 支持 x86-64-v3
+   OK /dev/kvm 可读写
+   OK qemu / podman / qemu-img / ssh / scp 就位
+   工作目录: /tmp/bcsw-verify
+
+== Phase 1 · 派生一次性 verify 镜像(本地,不推 registry) ==
+STEP 1/2: FROM ghcr.io/daedalusys/daedalus-os:latest
+STEP 2/2: RUN set -eux;     grep -qE '^video:'  /etc/group || echo 'video:x:39:'   >> /etc/group;     grep -qE '^render:' /etc/group || echo 'render:x:105:' >> /etc/group;     (id verify >/dev/null 2>&1 || useradd -m -G wheel,video,render -s /bin/bash verify);     echo 'verify:18a94b63eaf742731ce9ab66' | chpasswd;     printf 'verify ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/verify; chmod 0440 /etc/sudoers.d/verify;     printf 'd /var/home 0755 root root -\nd /var/home/verify 0700 verify verify -\n' > /etc/tmpfiles.d/verify.conf;     systemctl enable sshd
+--> Using cache 662288ffcf3eb0ec9858dcbb36f895087eba4ed3f04ac99c1ca44d2c24d9a0a3
+COMMIT localhost/daedalus-verify:base
+--> 662288ffcf3e
+Successfully tagged localhost/daedalus-verify:base
+662288ffcf3eb0ec9858dcbb36f895087eba4ed3f04ac99c1ca44d2c24d9a0a3
+STEP 1/2: FROM localhost/daedalus-verify:base
+STEP 2/2: RUN set -eux;     grep -qE '^video:'  /etc/group || echo 'video:x:39:'   >> /etc/group;     grep -qE '^render:' /etc/group || echo 'render:x:105:' >> /etc/group;     (id verify >/dev/null 2>&1 || useradd -m -G wheel,video,render -s /bin/bash verify);     echo 'verify:18a94b63eaf742731ce9ab66' | chpasswd;     printf 'verify ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/verify; chmod 0440 /etc/sudoers.d/verify;     printf 'd /var/home 0755 root root -\nd /var/home/verify 0700 verify verify -\n' > /etc/tmpfiles.d/verify.conf;     systemctl enable sshd; echo "switch-target localhost/daedalus-verify:switch-target" > /usr/share/daedalus-verify-marker
++ grep -qE '^video:' /etc/group
++ grep -qE '^render:' /etc/group
++ id verify
++ echo verify:18a94b63eaf742731ce9ab66
++ chpasswd
++ printf 'verify ALL=(ALL) NOPASSWD:ALL\n'
++ chmod 0440 /etc/sudoers.d/verify
++ printf 'd /var/home 0755 root root -\nd /var/home/verify 0700 verify verify -\n'
++ systemctl enable sshd
++ echo 'switch-target localhost/daedalus-verify:switch-target'
+COMMIT localhost/daedalus-verify:switch-target
+--> 2437658aa0d2
+Successfully tagged localhost/daedalus-verify:switch-target
+2437658aa0d28ae44fb5491e289834d21838e416c99ecd511ee6ab87a65fcfe2
+   OK 派生镜像就绪: localhost/daedalus-verify:base / localhost/daedalus-verify:switch-target(verify 用户: verify,密码随机)
+
+== Phase 2 · 出 qcow2(从 base 派生镜像) ==
+Generating manifest manifest-qcow2.json
+WARNING: --local is now the default behavior, you can remove it from the command line
+Manifest generation step
+Done generating manifest
+Disk image building step
+Building manifest-qcow2.json
+starting -Pipeline source org.osbuild.containers-storage: 36274573902438dd682367079f22299a6e8b542a25724a9a050208aeca26af70
+Build
+  root: <host>
+Pipeline build: b3d705b5b83544b5a4e01bd0d8eac2b41b8bceac5d1f176d81f410cd0b02c254
+Build
+  root: <host>
+  runner: org.osbuild.centos9 (org.osbuild.centos9)
+org.osbuild.container-deploy: a1eb5b3c9d60b8f0be245f43278c162621ac55708d2f70f8b6278f5c648e892c {
+  "remove-signatures": true
+}
+662288ffcf3eb0ec9858dcbb36f895087eba4ed3f04ac99c1ca44d2c24d9a0a3
+
+⏱  Duration: 7.12s
+org.osbuild.selinux: b3d705b5b83544b5a4e01bd0d8eac2b41b8bceac5d1f176d81f410cd0b02c254 {
+  "file_contexts": "etc/selinux/targeted/contexts/files/file_contexts",
+  "exclude_paths": [
+    "/sysroot"
+  ],
+  "labels": {
+    "/usr/bin/mount": "system_u:object_r:install_exec_t:s0",
+    "/usr/bin/ostree": "system_u:object_r:install_exec_t:s0",
+    "/usr/bin/umount": "system_u:object_r:install_exec_t:s0"
+  }
+}
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/gcc-14/python/libstdcxx/__init__.py and /run/osbuild/tree/usr/lib64/python3.12/site-packages/dbus_python-1.3.2-py3.12.egg-info/dependency_links.txt, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/jose/COPYING and /run/osbuild/tree/usr/lib/python3.12/site-packages/requests-2.32.4.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/libjose/COPYING and /run/osbuild/tree/usr/share/licenses/jose/COPYING, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-charset-normalizer/LICENSE and /run/osbuild/tree/usr/lib/python3.12/site-packages/charset_normalizer-3.4.2.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-idna/LICENSE.md and /run/osbuild/tree/usr/lib/python3.12/site-packages/idna-3.7.dist-info/LICENSE.md, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-packaging/LICENSE and /run/osbuild/tree/usr/lib/python3.12/site-packages/packaging-24.2.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-packaging/LICENSE.APACHE and /run/osbuild/tree/usr/lib/python3.12/site-packages/packaging-24.2.dist-info/LICENSE.APACHE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-packaging/LICENSE.BSD and /run/osbuild/tree/usr/lib/python3.12/site-packages/packaging-24.2.dist-info/LICENSE.BSD, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-ptyprocess/LICENSE and /run/osbuild/tree/usr/lib/python3.12/site-packages/ptyprocess-0.7.0.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/usr/share/licenses/python3-setuptools/LICENSE and /run/osbuild/tree/usr/lib/python3.12/site-packages/setuptools-69.0.3.dist-info/LICENSE, using system_u:object_r:lib_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/etc/iproute2/README and /run/osbuild/tree/usr/share/iproute2/README, using system_u:object_r:usr_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/etc/krb5.conf.d/enable_sssd_conf_dir and /run/osbuild/tree/usr/share/sssd/krb5-snippets/enable_sssd_conf_dir, using system_u:object_r:usr_t:s0.
+setfiles: conflicting specifications for /run/osbuild/tree/etc/makedumpfile.conf.sample and /run/osbuild/tree/usr/share/makedumpfile/makedumpfile.conf.sample, using system_u:object_r:usr_t:s0.
+
+⏱  Duration: 0.96s
+Pipeline image: 9a711a228d2859f2b215629dec6ba4e8c754e993325b1096a546045c381b775a
+Build
+  root: b3d705b5b83544b5a4e01bd0d8eac2b41b8bceac5d1f176d81f410cd0b02c254
+  runner: org.osbuild.linux (org.osbuild.linux)
+org.osbuild.truncate: a1d94ade5c820cb42cf7d7f0982a2d7b376d42222b9092b9c208be7fc83cdd34 {
+  "filename": "disk.raw",
+  "size": "10737418240"
+}
+
+⏱  Duration: 0.26s
+org.osbuild.sfdisk: 8d6f1b0f92e6915cbf8723cea9020c28cb1149df990f79d3bc8c3e502e36fdd2 {
+  "label": "gpt",
+  "uuid": "0011ee27-6450-4f50-9f75-c832eb354e74",
+  "partitions": [
+    {
+      "bootable": true,
+      "size": 2048,
+      "start": 2048,
+      "type": "21686148-6449-6E6F-744E-656564454649",
+      "uuid": "3f2a99f4-3d91-4558-9086-386e8a6e89ea"
+    },
+    {
+      "size": 1026048,
+      "start": 4096,
+      "type": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+      "uuid": "6bf35530-86ce-49cc-b722-9320dc872416"
+    },
+    {
+      "size": 2097152,
+      "start": 1030144,
+      "type": "BC13C2FF-59E6-4262-A352-B275FD6F7172",
+      "uuid": "82805fa0-153c-4f62-bf18-4cbec4612cd3"
+    },
+    {
+      "size": 17842176,
+      "start": 3127296,
+      "type": "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+      "uuid": "31b50e03-5d24-489b-8f59-502afc98a164"
+    }
+  ]
+}
+device/device (org.osbuild.loopback): loop0 acquired (locked: True)
+label: gpt
+label-id: 0011ee27-6450-4f50-9f75-c832eb354e74
+start="2048", size="2048", type="21686148-6449-6E6F-744E-656564454649", uuid="3f2a99f4-3d91-4558-9086-386e8a6e89ea", bootable
+start="4096", size="1026048", type="C12A7328-F81F-11D2-BA4B-00A0C93EC93B", uuid="6bf35530-86ce-49cc-b722-9320dc872416"
+start="1030144", size="2097152", type="BC13C2FF-59E6-4262-A352-B275FD6F7172", uuid="82805fa0-153c-4f62-bf18-4cbec4612cd3"
+start="3127296", size="17842176", type="0FC63DAF-8483-4772-8E79-3D69D8477DE4", uuid="31b50e03-5d24-489b-8f59-502afc98a164"
+{
+   "partitiontable": {
+      "label": "gpt",
+      "id": "0011EE27-6450-4F50-9F75-C832EB354E74",
+      "device": "/dev/loop0",
+      "unit": "sectors",
+      "firstlba": 2048,
+      "lastlba": 20971486,
+      "sectorsize": 512,
+      "partitions": [
+         {
+            "node": "/dev/loop0p1",
+            "start": 2048,
+            "size": 2048,
+            "type": "21686148-6449-6E6F-744E-656564454649",
+            "uuid": "3F2A99F4-3D91-4558-9086-386E8A6E89EA"
+         },{
+            "node": "/dev/loop0p2",
+            "start": 4096,
+            "size": 1026048,
+            "type": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B",
+            "uuid": "6BF35530-86CE-49CC-B722-9320DC872416"
+         },{
+            "node": "/dev/loop0p3",
+            "start": 1030144,
+            "size": 2097152,
+            "type": "BC13C2FF-59E6-4262-A352-B275FD6F7172",
+            "uuid": "82805FA0-153C-4F62-BF18-4CBEC4612CD3"
+         },{
+            "node": "/dev/loop0p4",
+            "start": 3127296,
+            "size": 17842176,
+            "type": "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+            "uuid": "31B50E03-5D24-489B-8F59-502AFC98A164"
+         }
+      ]
+   }
+}
+
+⏱  Duration: 0.36s
+org.osbuild.mkfs.fat: 7674cbcdd72d3c5643c6cc8f6abd84edc81a506c2c4df31726eb83a416844351 {
+  "volid": "529536D6",
+  "label": "EFI-SYSTEM"
+}
+device/device (org.osbuild.loopback): loop0 acquired (locked: True)
+mkfs.fat 4.2 (2021-01-31)
+
+⏱  Duration: 0.33s
+org.osbuild.mkfs.xfs: 8291cc7980834ee77a7199f6d70219621ebb88a86aa0106d615cde761c184ccc {
+  "uuid": "a0a2a071-ac2a-466c-a2ee-f8cecaac266f",
+  "label": "boot"
+}
+device/device (org.osbuild.loopback): loop0 acquired (locked: True)
+meta-data=/dev/loop0             isize=512    agcount=4, agsize=65536 blks
+         =                       sectsz=512   attr=2, projid32bit=1
+         =                       crc=1        finobt=1, sparse=1, rmapbt=1
+         =                       reflink=1    bigtime=1 inobtcount=1 nrext64=1
+         =                       exchange=0   metadir=0
+data     =                       bsize=4096   blocks=262144, imaxpct=25
+         =                       sunit=0      swidth=0 blks
+naming   =version 2              bsize=4096   ascii-ci=0, ftype=1, parent=0
+log      =internal log           bsize=4096   blocks=28102, version=2
+         =                       sectsz=512   sunit=0 blks, lazy-count=1
+realtime =none                   extsz=4096   blocks=0, rtextents=0
+         =                       rgcount=0    rgsize=0 extents
+         =                       zoned=0      start=0 reserved=0
+Discarding blocks...Done.
+
+⏱  Duration: 0.34s
+org.osbuild.mkfs.xfs: 9ff0bdf997def360525f583801bf4609d03b4d036e14cf0cd45872f5d829eb35 {
+  "uuid": "ab1856e0-4add-448f-9bb8-60b6fc280a91",
+  "label": "root"
+}
+device/device (org.osbuild.loopback): loop0 acquired (locked: True)
+meta-data=/dev/loop0             isize=512    agcount=4, agsize=557568 blks
+         =                       sectsz=512   attr=2, projid32bit=1
+         =                       crc=1        finobt=1, sparse=1, rmapbt=1
+         =                       reflink=1    bigtime=1 inobtcount=1 nrext64=1
+         =                       exchange=0   metadir=0
+data     =                       bsize=4096   blocks=2230272, imaxpct=25
+         =                       sunit=0      swidth=0 blks
+naming   =version 2              bsize=4096   ascii-ci=0, ftype=1, parent=0
+log      =internal log           bsize=4096   blocks=32062, version=2
+         =                       sectsz=512   sunit=0 blks, lazy-count=1
+realtime =none                   extsz=4096   blocks=0, rtextents=0
+         =                       rgcount=0    rgsize=0 extents
+         =                       zoned=0      start=0 reserved=0
+Discarding blocks...Done.
+
+⏱  Duration: 0.32s
+org.osbuild.mkdir: 87402ad4617bba36d98f539b7b96087391616628a0560cc0b0aaf2c5ca53a1bb {
+  "paths": [
+    {
+      "path": "mount://-/boot",
+      "mode": 493
+    }
+  ]
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-tlq0fy4n/mounts/
+mount/- (org.osbuild.xfs): umount: /store/tmp/buildroot-tmp-tlq0fy4n/mounts/ unmounted
+
+⏱  Duration: 0.42s
+org.osbuild.mkdir: a7dd69c3036951e0a65a400455157689788573919a8347a9bab25d1f25f7b681 {
+  "paths": [
+    {
+      "path": "mount://boot/efi",
+      "mode": 493
+    }
+  ]
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-fg2wsve6/mounts/
+mount/boot (org.osbuild.xfs): mounting /dev/loop0p3 -> /store/tmp/buildroot-tmp-fg2wsve6/mounts/boot
+mount/boot (org.osbuild.xfs): umount: /store/tmp/buildroot-tmp-fg2wsve6/mounts/boot unmounted
+mount/- (org.osbuild.xfs): umount: /store/tmp/buildroot-tmp-fg2wsve6/mounts/ unmounted
+
+⏱  Duration: 0.51s
+org.osbuild.selinux: 0530a90af09d2b6e96fdbfeb4e38490a6e4c4adfd359433f2ea681e24415f9df {
+  "target": "mount://-/",
+  "file_contexts": "input://tree/etc/selinux/targeted/contexts/files/file_contexts"
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-_x96aq2w/mounts/
+mount/- (org.osbuild.xfs): umount: /store/tmp/buildroot-tmp-_x96aq2w/mounts/ unmounted
+
+⏱  Duration: 0.58s
+org.osbuild.selinux: 356c2b3887cf2ce7aa55340732614282500118f20f1c6877299673821ba6e329 {
+  "target": "mount://-/boot/",
+  "file_contexts": "input://tree/etc/selinux/targeted/contexts/files/file_contexts"
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-5estw573/mounts/
+mount/boot (org.osbuild.xfs): mounting /dev/loop0p3 -> /store/tmp/buildroot-tmp-5estw573/mounts/boot
+mount/boot (org.osbuild.xfs): umount: /store/tmp/buildroot-tmp-5estw573/mounts/boot unmounted
+mount/- (org.osbuild.xfs): umount: /store/tmp/buildroot-tmp-5estw573/mounts/ unmounted
+
+⏱  Duration: 0.60s
+org.osbuild.bootc.install-to-filesystem: 17dfeb74d1f568b046f01b5d511394befe60686fd21a31f9c86c01aa9488e979 {
+  "kernel-args": [
+    "rw",
+    "console=tty0",
+    "console=ttyS0"
+  ],
+  "target-imgref": "localhost/daedalus-verify:base"
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-w5nlk6l3/mounts/
+mount/boot (org.osbuild.xfs): mounting /dev/loop0p3 -> /store/tmp/buildroot-tmp-w5nlk6l3/mounts/boot
+mount/boot-efi (org.osbuild.fat): mounting /dev/loop0p2 -> /store/tmp/buildroot-tmp-w5nlk6l3/mounts/boot/efi
+Installing image: docker://localhost/daedalus-verify:base
+Initializing ostree layout
+layers already present: 0; layers needed: 17 (2.2 GB)
+Deploying container image...done (7 seconds)
+Bootloader: grub
+Installing bootloader via bootupd
+Added 01_users.cfg
+Added 10_blscfg.cfg
+Added 14_menu_show_once.cfg
+Added 30_uefi-firmware.cfg
+Added 41_custom.cfg
+Installed: grub.cfg
+Installed: bootuuid.cfg
+Installed: "almalinux/grub.cfg"
+Installed: "almalinux/bootuuid.cfg"
+Trimming root
+.: 8.5 GiB (9135194112 bytes) trimmed
+Finalizing filesystem root
+Trimming boot
+boot: 1 GiB (1073741824 bytes) trimmed
+Finalizing filesystem boot
+Installation complete!
+mount/boot-efi (org.osbuild.fat): umount: /store/tmp/buildroot-tmp-w5nlk6l3/mounts/boot/efi unmounted
+mount/boot (org.osbuild.xfs): umount: /store/tmp/buildroot-tmp-w5nlk6l3/mounts/boot unmounted
+mount/- (org.osbuild.xfs): umount: /store/tmp/buildroot-tmp-w5nlk6l3/mounts/ unmounted
+
+⏱  Duration: 44.44s
+org.osbuild.systemd.unit.create: c2e62203b3269e9d367fe2ee2ccdd17cb81cfe58d0938b2177c538823377564c {
+  "filename": "-.mount",
+  "unit-path": "etc",
+  "config": {
+    "Unit": {
+      "DefaultDependencies": true
+    },
+    "Mount": {
+      "What": "/dev/disk/by-uuid/ab1856e0-4add-448f-9bb8-60b6fc280a91",
+      "Where": "/",
+      "Type": "xfs",
+      "Options": "ro"
+    },
+    "Install": {
+      "WantedBy": [
+        "multi-user.target"
+      ]
+    }
+  }
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-9u2llann/mounts/
+mount/boot (org.osbuild.xfs): mounting /dev/loop0p3 -> /store/tmp/buildroot-tmp-9u2llann/mounts/boot
+mount/boot-efi (org.osbuild.fat): mounting /dev/loop0p2 -> /store/tmp/buildroot-tmp-9u2llann/mounts/boot/efi
+mount/ostree.deployment (org.osbuild.ostree.deployment): Deployment root at 'ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0'
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/boot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/var unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/sysroot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): mounting /store/tmp/buildroot-tmp-9u2llann/mounts/ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0 -> /store/tmp/buildroot-tmp-9u2llann/mounts
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-9u2llann/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-9u2llann/mounts/var unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-9u2llann/mounts/sysroot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-9u2llann/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-9u2llann/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-9u2llann/mounts/boot/efi unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-9u2llann/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-9u2llann/mounts unmounted
+mount/boot-efi (org.osbuild.fat): already unmounted: /store/tmp/buildroot-tmp-9u2llann/mounts/boot/efi
+mount/boot (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-9u2llann/mounts/boot
+mount/- (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-9u2llann/mounts/
+
+⏱  Duration: 0.80s
+org.osbuild.systemd.unit.create: 2d0aee3cc17f25abd1a9cc1915663111b224704e488afe0b02610adbd1352983 {
+  "filename": "boot-efi.mount",
+  "unit-path": "etc",
+  "config": {
+    "Unit": {
+      "DefaultDependencies": true
+    },
+    "Mount": {
+      "What": "/dev/disk/by-uuid/5295-36D6",
+      "Where": "/boot/efi",
+      "Type": "vfat",
+      "Options": "umask=0077,shortname=winnt"
+    },
+    "Install": {
+      "WantedBy": [
+        "multi-user.target"
+      ]
+    }
+  }
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-tozg5e1u/mounts/
+mount/boot (org.osbuild.xfs): mounting /dev/loop0p3 -> /store/tmp/buildroot-tmp-tozg5e1u/mounts/boot
+mount/boot-efi (org.osbuild.fat): mounting /dev/loop0p2 -> /store/tmp/buildroot-tmp-tozg5e1u/mounts/boot/efi
+mount/ostree.deployment (org.osbuild.ostree.deployment): Deployment root at 'ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0'
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/boot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/var unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/sysroot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): mounting /store/tmp/buildroot-tmp-tozg5e1u/mounts/ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0 -> /store/tmp/buildroot-tmp-tozg5e1u/mounts
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-tozg5e1u/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-tozg5e1u/mounts/var unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-tozg5e1u/mounts/sysroot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-tozg5e1u/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-tozg5e1u/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-tozg5e1u/mounts/boot/efi unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-tozg5e1u/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-tozg5e1u/mounts unmounted
+mount/boot-efi (org.osbuild.fat): already unmounted: /store/tmp/buildroot-tmp-tozg5e1u/mounts/boot/efi
+mount/boot (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-tozg5e1u/mounts/boot
+mount/- (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-tozg5e1u/mounts/
+
+⏱  Duration: 0.80s
+org.osbuild.systemd.unit.create: fac204e2e0924b22be23367cd05d4b13c1d14c7a7ce9905a9e2fcfcaf2cc115a {
+  "filename": "boot.mount",
+  "unit-path": "etc",
+  "config": {
+    "Unit": {
+      "DefaultDependencies": true
+    },
+    "Mount": {
+      "What": "/dev/disk/by-uuid/a0a2a071-ac2a-466c-a2ee-f8cecaac266f",
+      "Where": "/boot",
+      "Type": "xfs",
+      "Options": "ro"
+    },
+    "Install": {
+      "WantedBy": [
+        "multi-user.target"
+      ]
+    }
+  }
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-7fkpox_h/mounts/
+mount/boot (org.osbuild.xfs): mounting /dev/loop0p3 -> /store/tmp/buildroot-tmp-7fkpox_h/mounts/boot
+mount/boot-efi (org.osbuild.fat): mounting /dev/loop0p2 -> /store/tmp/buildroot-tmp-7fkpox_h/mounts/boot/efi
+mount/ostree.deployment (org.osbuild.ostree.deployment): Deployment root at 'ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0'
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/boot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/var unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/sysroot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): mounting /store/tmp/buildroot-tmp-7fkpox_h/mounts/ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0 -> /store/tmp/buildroot-tmp-7fkpox_h/mounts
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-7fkpox_h/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-7fkpox_h/mounts/var unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-7fkpox_h/mounts/sysroot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-7fkpox_h/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-7fkpox_h/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-7fkpox_h/mounts/boot/efi unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-7fkpox_h/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-7fkpox_h/mounts unmounted
+mount/boot-efi (org.osbuild.fat): already unmounted: /store/tmp/buildroot-tmp-7fkpox_h/mounts/boot/efi
+mount/boot (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-7fkpox_h/mounts/boot
+mount/- (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-7fkpox_h/mounts/
+
+⏱  Duration: 0.84s
+org.osbuild.systemd: 797c38626ce694b0ee66d695d15c09315bd04f64603e35ce37a3431d2c6a744c {
+  "enabled_services": [
+    "-.mount",
+    "boot-efi.mount",
+    "boot.mount"
+  ]
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-ft9ut4bz/mounts/
+mount/boot (org.osbuild.xfs): mounting /dev/loop0p3 -> /store/tmp/buildroot-tmp-ft9ut4bz/mounts/boot
+mount/boot-efi (org.osbuild.fat): mounting /dev/loop0p2 -> /store/tmp/buildroot-tmp-ft9ut4bz/mounts/boot/efi
+mount/ostree.deployment (org.osbuild.ostree.deployment): Deployment root at 'ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0'
+Created symlink '/run/osbuild/tree/etc/systemd/system/multi-user.target.wants/-.mount' → '/etc/systemd/system/-.mount'.
+Created symlink '/run/osbuild/tree/etc/systemd/system/multi-user.target.wants/boot-efi.mount' → '/etc/systemd/system/boot-efi.mount'.
+Created symlink '/run/osbuild/tree/etc/systemd/system/multi-user.target.wants/boot.mount' → '/etc/systemd/system/boot.mount'.
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/boot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/var unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/sysroot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): mounting /store/tmp/buildroot-tmp-ft9ut4bz/mounts/ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0 -> /store/tmp/buildroot-tmp-ft9ut4bz/mounts
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-ft9ut4bz/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-ft9ut4bz/mounts/var unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-ft9ut4bz/mounts/sysroot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-ft9ut4bz/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-ft9ut4bz/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-ft9ut4bz/mounts/boot/efi unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-ft9ut4bz/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-ft9ut4bz/mounts unmounted
+mount/boot-efi (org.osbuild.fat): already unmounted: /store/tmp/buildroot-tmp-ft9ut4bz/mounts/boot/efi
+mount/boot (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-ft9ut4bz/mounts/boot
+mount/- (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-ft9ut4bz/mounts/
+
+⏱  Duration: 0.79s
+org.osbuild.selinux: b0394da707dfffc1a1663fb6985bbf44361b09e6435e45084cb6ca730aa57055 {
+  "target": "tree:///etc",
+  "file_contexts": "etc/selinux/targeted/contexts/files/file_contexts",
+  "exclude_paths": [
+    "/sysroot"
+  ]
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-u5fyhs8x/mounts/
+mount/boot (org.osbuild.xfs): mounting /dev/loop0p3 -> /store/tmp/buildroot-tmp-u5fyhs8x/mounts/boot
+mount/boot-efi (org.osbuild.fat): mounting /dev/loop0p2 -> /store/tmp/buildroot-tmp-u5fyhs8x/mounts/boot/efi
+mount/ostree.deployment (org.osbuild.ostree.deployment): Deployment root at 'ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0'
+Can't stat exclude path "/run/osbuild/tree/etc/sysroot", No such file or directory - ignoring.
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/boot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/var unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/sysroot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): mounting /store/tmp/buildroot-tmp-u5fyhs8x/mounts/ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0 -> /store/tmp/buildroot-tmp-u5fyhs8x/mounts
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-u5fyhs8x/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-u5fyhs8x/mounts/var unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-u5fyhs8x/mounts/sysroot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-u5fyhs8x/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-u5fyhs8x/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-u5fyhs8x/mounts/boot/efi unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-u5fyhs8x/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-u5fyhs8x/mounts unmounted
+mount/boot-efi (org.osbuild.fat): already unmounted: /store/tmp/buildroot-tmp-u5fyhs8x/mounts/boot/efi
+mount/boot (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-u5fyhs8x/mounts/boot
+mount/- (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-u5fyhs8x/mounts/
+
+⏱  Duration: 0.83s
+org.osbuild.selinux: 9a711a228d2859f2b215629dec6ba4e8c754e993325b1096a546045c381b775a {
+  "target": "tree:///var",
+  "file_contexts": "etc/selinux/targeted/contexts/files/file_contexts",
+  "exclude_paths": [
+    "/sysroot"
+  ]
+}
+device/disk (org.osbuild.loopback): loop0 acquired (locked: False)
+mount/- (org.osbuild.xfs): mounting /dev/loop0p4 -> /store/tmp/buildroot-tmp-0r3p_u1a/mounts/
+mount/boot (org.osbuild.xfs): mounting /dev/loop0p3 -> /store/tmp/buildroot-tmp-0r3p_u1a/mounts/boot
+mount/boot-efi (org.osbuild.fat): mounting /dev/loop0p2 -> /store/tmp/buildroot-tmp-0r3p_u1a/mounts/boot/efi
+mount/ostree.deployment (org.osbuild.ostree.deployment): Deployment root at 'ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0'
+Can't stat exclude path "/run/osbuild/tree/var/sysroot", No such file or directory - ignoring.
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/boot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/var unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree/sysroot unmounted
+mount/bind-ostree-deployment-to-tree (org.osbuild.bind): umount: /store/stage/uuid-6e9441f02c5d48aaad00532747bc7b47/data/tree unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): mounting /store/tmp/buildroot-tmp-0r3p_u1a/mounts/ostree/deploy/default/deploy/e7d14675910e746c24985d9bb66c61ff3bcf01eb7a4e2b444c76c069358cec44.0 -> /store/tmp/buildroot-tmp-0r3p_u1a/mounts
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-0r3p_u1a/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-0r3p_u1a/mounts/var unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-0r3p_u1a/mounts/sysroot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-0r3p_u1a/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-0r3p_u1a/mounts unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-0r3p_u1a/mounts/boot/efi unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-0r3p_u1a/mounts/boot unmounted
+mount/ostree.deployment (org.osbuild.ostree.deployment): umount: /store/tmp/buildroot-tmp-0r3p_u1a/mounts unmounted
+mount/boot-efi (org.osbuild.fat): already unmounted: /store/tmp/buildroot-tmp-0r3p_u1a/mounts/boot/efi
+mount/boot (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-0r3p_u1a/mounts/boot
+mount/- (org.osbuild.xfs): already unmounted: /store/tmp/buildroot-tmp-0r3p_u1a/mounts/
+
+⏱  Duration: 0.76s
+Pipeline qcow2: 365486bb846b34d3121bfdf5fa018a3631758985e4d12b9835a9a7f37eda4f8a
+Build
+  root: <host>
+  runner: org.osbuild.centos9 (org.osbuild.centos9)
+org.osbuild.qemu: 365486bb846b34d3121bfdf5fa018a3631758985e4d12b9835a9a7f37eda4f8a {
+  "filename": "disk.qcow2",
+  "format": {
+    "type": "qcow2",
+    "compat": "1.1"
+  }
+}
+
+⏱  Duration: 29.74s
+manifest - finished successfully
+
+Pipelines
+  build:    	b3d705b5b83544b5a4e01bd0d8eac2b41b8bceac5d1f176d81f410cd0b02c254
+  image:    	9a711a228d2859f2b215629dec6ba4e8c754e993325b1096a546045c381b775a
+  qcow2:    	365486bb846b34d3121bfdf5fa018a3631758985e4d12b9835a9a7f37eda4f8a
+  vmdk:     	da6a8c81dfd2bf01fb1d02e33be7f553586bd1f64df5ad783656ffe0131d5fc9
+  vpc:      	26cc9850bfde89ecdf02361916a6d7dcd7bc5995ccb55d4649954598d57d89d9
+  ovf:      	515cc5e22fa2de7e1fa271a5e6b45f509ced451aa9b5d685542b9bf665beb45d
+  archive:  	d8b355e990391cb4b1863e379e3a1827e5ece198dd1da11ebeeea2ff04a1684d
+  gce:      	322667ef90d706101d4a14de603b397a27347264b3d4af691c81effdbda29a7e
+
+Checkpoints
+Build complete!
+Results saved in /output
+   OK qcow2: /tmp/bcsw-verify/output/qcow2/qcow2/disk.qcow2(1.3G)
+
+== Phase 2.1 · 打包切换目标为 OCI 归档 ==
+Copying blob sha256:107147a0af4d955812294688f7536799acbf18458b66be0c5a2d85846b5d3d28
+Copying blob sha256:3593b69b22f3a6348bb469196df3acfe8057246b2cdd5f7e9208142ba8707daf
+Copying blob sha256:e1ab5877d6a601e65ed7a2e3cae4cf65a1d92c4a7281b30b7da75620420b51ff
+Copying blob sha256:7164658ca3800c2dfc6ba21ae1c15e1d2a4ef98a6254f7c199b1a903db5b045a
+Copying blob sha256:8cbfa9a1c0ce5beec09f499139fe803280223b74d2394411e9f2e156791bd2ff
+Copying blob sha256:3c875b620059421a338bf26d5f459374a21e2a4b13e61d700c3c30ff08b783f3
+Copying blob sha256:e1d478ee80c8eab48925ad7d25a9bbfa8a76a2da7c3f01f75eca3ee9964d59cb
+Copying blob sha256:d674342d3125426466772216bf184ab26b1280b4e378bece775774cf8b19c562
+Copying blob sha256:966bc083b3712d1477a54ed36440ffc17cdac00f69398f237b1b6bb1b8cbbd10
+Copying blob sha256:6955fdb031a6d260493092ba27bf21d64a5b6eaa964446e6f4b0ea824659c5b7
+Copying blob sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef
+Copying blob sha256:34f52b2cfdf563201ab8dbff7424ff3e5ab439d93e10830691a9bb6e430c3b2b
+Copying blob sha256:8c1975f25266fccb4249a037cffea5a77fc5df005f917591ec82e207394e8c2c
+Copying blob sha256:00ef4c0065208bdd942ad5c4758078c2ef5a8a62743b6a2d257395df0eaea114
+Copying blob sha256:17a32a9e59b897117b00eef806e0733f1cd1e50e196ccb2059c5add59f5ab375
+Copying blob sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef
+Copying blob sha256:00548872af9bbf1c54231526b96c01e8c5486dbcaa39fd2ab726d3087f1968bc
+Copying blob sha256:69acef36f6d4f32531307e90497f28c8d4e50a8abadf99a395578da6dfff38f7
+Copying config sha256:2437658aa0d28ae44fb5491e289834d21838e416c99ecd511ee6ab87a65fcfe2
+Writing manifest to image destination
+   OK OCI 归档: /tmp/bcsw-verify/switch-target.tar(1.2G)
+
+== Phase 3 · 引导 qcow2(可写,允许重启)+ 等 SSH ==
+   qemu pid=1201026,串口 → /tmp/bcsw-verify/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2222)
+
+== Phase 4 · 基线 deployment(A) ==
+   boot_id(A): d6085f83-f66e-4400-866d-f3a54b88f0b3
+   digest(A) : sha256:bbd00d6084c69228ad2e0dc73d2be6d896634fbea43d6e97585812f62d6625b5
+   guest 根分区: composefs 6.8M 6.8M 0 100% /
+   marker(A) : ABSENT   期望 ABSENT(基线镜像没有 marker)
+   OK A 基线符合预期
+
+== Phase 5 · scp 切换目标 + bootc switch --apply ==
+   OK 归档已进 guest:/home/verify/switch-target.tar
+   switch 输出: layers already present: 17; layers needed: 1 (843 bytes) Deploying...done (2 seconds) Queued for next boot: ostree-unverified-image:oci-archive:/home/verify/switch-target.tar   Digest: sha256:aa1ad770
+   OK 已发起 switch(--apply 会重启)
+   boot_id(B): 718e9f0a-a18b-44d6-be8f-646a73ec538a
+   digest(B) : sha256:aa1ad770eb11eecb2b911c5750cb4d61211ac15542b4f0060d32c4ecf2725386
+   marker(B) : PRESENT   期望 PRESENT(切换目标带 marker)
+   OK switch 生效: 部署已切到目标镜像,marker 出现
+
+== Phase 6 · bootc rollback --apply ==
+Next boot: rollback deployment
+Connection to 127.0.0.1 closed by remote host.
+   OK 已发起 rollback(--apply 会重启)
+   boot_id(C): 17bf2d8a-3256-42ff-a532-78653850232a
+   digest(C) : sha256:bbd00d6084c69228ad2e0dc73d2be6d896634fbea43d6e97585812f62d6625b5
+   marker(C) : ABSENT   期望 ABSENT(已回滚到基线)
+   OK rollback 生效: 部署已回到基线
+
+== Summary ==
