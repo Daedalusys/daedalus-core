@@ -102,6 +102,16 @@ gpgkey=https://mirrors.aliyun.com/epel/RPM-GPG-KEY-EPEL-10
 REPO_EOF
 echo "64-dnf-mirrors: created /etc/yum.repos.d/daedalus-aliyun.repo (6 repos 全部阿里云)"
 
+# === 步骤 3.5:补 /etc/dnf/vars/releasever ===
+# kitten 基座镜像**没有** almalinux-release / system-release 包,/etc/dnf/vars/ 里
+# 只有 stream。于是任何引用 $releasever 的仓库(镜像里残留的 kitten mirrorlist 就是)
+# 会带着**字面量** "$releasever" 去请求 → 404,dnf 因该仓库元数据取不到而中止整个
+# 事务。后果不止是慢:镜像在**容器 / 构建器上下文**里根本装不了包 —— `dnf install`
+# 失败,`bootc-image-builder --type iso`(要下 Anaconda 环境 RPM)直接构建失败。
+# 这里补上 releasever,值与 baseurl 里的 /almalinux/10/ 一致。
+echo 10 > /etc/dnf/vars/releasever
+echo "64-dnf-mirrors: 写入 /etc/dnf/vars/releasever=10(修 \$releasever 无法展开导致的 404)"
+
 # === 步骤 4:dnf proxy 兜底(任何漏网的 repo 走 host proxy) ===
 if [ -n "${HTTP_PROXY:-}" ]; then
     echo "proxy=${HTTP_PROXY}" >> /etc/dnf/dnf.conf
