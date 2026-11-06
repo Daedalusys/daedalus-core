@@ -1,0 +1,11 @@
+--- fdisk -l (盘首副本) ---
+GPT PMBR size mismatch (41943039 != 4095) will be corrected by write.
+Disk /tmp/iso-verify-r2/target-head.img: 2 MiB, 2097152 bytes, 4096 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: dos
+Disk identifier: 0x00000000
+
+Device                              Boot Start   End Sectors Size Id Type
+/tmp/iso-verify-r2/target-head.img1          1  4095    4095   2M ee GPT

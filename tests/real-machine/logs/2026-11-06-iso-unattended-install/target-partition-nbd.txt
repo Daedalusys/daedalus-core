@@ -1,0 +1,11 @@
+Disk /dev/nbd0: 20 GiB, 21474836480 bytes, 41943040 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 131072 bytes
+Disklabel type: gpt
+Disk identifier: D7A121AB-D2A9-47E9-80EC-4434C629862A
+
+Device        Start      End  Sectors  Size Type
+/dev/nbd0p1    2048     4095     2048    1M BIOS boot
+/dev/nbd0p2    4096  1052671  1048576  512M EFI System
+/dev/nbd0p3 1052672 41940991 40888320 19.5G Linux root (x86-64)
