@@ -13,7 +13,7 @@
 | 段 | 判据 | 实测结果 |
 |---|---|---|
 | P2-2a(必做) | ISO 引导出**可用的 live 系统**:SSH 登录成功 + 根是 live 介质 + 系统就是本镜像 | ✅ 全绿 |
-| P2-2b(尽力) | live 环境**无人值守**把系统装到空虚拟盘 → 装完重启 → 引导该盘出现 `login:` + 目标盘有分区表 | ✅ 全绿 |
+| P2-2b(默认硬判据) | live 环境**无人值守**把系统装到空虚拟盘 → 装完重启 → 引导该盘出现 `login:` + 目标盘有分区表 | ✅ 全绿 |
 
 关键实测输出(原文):
 
@@ -109,7 +109,9 @@ Phase 3 引导 live ~1 min + 装机(含 guest 内拉 2.2 GB 镜像)~6 min + 引�
 
 - **CI 尚未端到端跑过这条腿**:本证据是手工在靶机跑出来的,不是自托管 runner 的产物。
   CI 侧要等一次出货档(main/tag/dispatch)触发 `deploy-verify-iso` 才能确认。
-- P2-2b 在 CI 里是**尽力项**(判定停在 `LIVE_OK` 也算绿);要它必须绿,在 job 里设 `VERIFY_REQUIRE_INSTALL=1`。
+- P2-2b 是**默认硬判据**:脚本默认 `VERIFY_REQUIRE_INSTALL=1`,`deploy-verify-iso` 也显式写死 1 ——
+  装机链(单元 / kernel args / payload 的 `dmsquash-live`)任何一处退化都必须让这条腿红,
+  不允许用 `LIVE_OK` 掩盖。只有本地排查 P2-2a 时才临时设 0。
 - ISO 里**烧死了目标盘设备名**(`daedalus.install.disk=/dev/vda`,来自派生层的 `iso.yaml`)——
   这是「不做选盘推测」的代价:换设备名要重新出 ISO。装机脚本本身不依赖这个默认值。
 - 装好的系统 **root 是锁定的**(发布镜像的 shadow 里 `root:*:`),本计划不设任何口令,

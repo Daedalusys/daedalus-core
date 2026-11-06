@@ -21,10 +21,10 @@
 #   段一 P2-2a:引导 ISO,用 SSH 自证它引导出的是**可用的 live 系统** ——
 #        (1) SSH 登录成功;(2) 根确为 live 介质;(3) 系统就是本镜像。
 #        理由:live 内核参数里没有 console=ttyS0,串口不可能有输出,SSH 是唯一稳定判据。
-#   段二 P2-2b:live 环境里的 oneshot 单元对**空虚拟盘**执行 `bootc install to-disk`,
+#   段二 P2-2b(默认硬判据):live 环境里的 oneshot 单元对**空虚拟盘**执行 `bootc install to-disk`,
 #        装完重启;然后引导那块盘,等串口出现 `login:`,并断言目标盘有分区表。
-#        P2-2b 是尽力项:受阻(例如 live 环境拿不到 source 镜像)时如实记 BLOCKED,
-#        不为此改发布镜像、不为此走 Anaconda 路线。
+#        受阻(例如 live 环境拿不到 source 镜像)时如实记 BLOCKED 并以非 0 退出 ——
+#        判据不允许「跑到就算过」;只有本地排查 P2-2a 时才用 VERIFY_REQUIRE_INSTALL=0 临时放宽。
 #
 # 为什么不走 kickstart(这是 Task 1 实测推翻计划前提后的结论,别再走回头路)
 #   `generic-iso` **不消费 blueprint**:传了 `--blueprint` 构建照样成功,但产出的
@@ -44,7 +44,8 @@
 #   VERIFY_MEM      引导内存 MiB(默认 8192;装机时要把镜像拉进 live 环境,4G 偏紧)
 #   VERIFY_BOOT_TIMEOUT   等 live 系统可 SSH 的秒数(默认 600)
 #   VERIFY_INSTALL_TIMEOUT 等装机完成的秒数(默认 2400)
-#   VERIFY_REQUIRE_INSTALL 置 1 时,P2-2b 未达成也判失败(默认 0:P2-2a 绿即绿)
+#   VERIFY_REQUIRE_INSTALL 默认 1:**装完能引导到 login: 是硬判据**(否则装机链任何一处退化
+#                   都会被 LIVE_OK 掩盖成绿)。只在本地排查 P2-2a 时才临时设 0。
 #   VERIFY_SSH_PORT live 自证的 hostfwd/ssh 端口(默认 2222;同一台宿主上并行跑多个
 #                   worker 时端口会撞,撞上就是 qemu "Could not set up host forwarding
 #                   rule" → QEMU 当场退出、整条验证假失败,故可配)
@@ -63,7 +64,7 @@ BOOT_TIMEOUT="${VERIFY_BOOT_TIMEOUT:-600}"
 INSTALL_TIMEOUT="${VERIFY_INSTALL_TIMEOUT:-2400}"
 DISK_SIZE="${VERIFY_DISK_SIZE:-20G}"
 BUILDER_IMAGE="${VERIFY_BUILDER_IMAGE:-ghcr.io/osbuild/image-builder-cli:latest}"
-REQUIRE_INSTALL="${VERIFY_REQUIRE_INSTALL:-0}"
+REQUIRE_INSTALL="${VERIFY_REQUIRE_INSTALL:-1}"
 # hostfwd 端口可配:同一台靶机上多个 worker 会同时跑 QEMU,写死就会互相撞
 # (症状是 qemu 抛 "Could not set up host forwarding rule" 后直接退出,很难定位)。
 SSH_PORT="${VERIFY_SSH_PORT:-2222}"
@@ -384,8 +385,8 @@ cat <<EOF
    工作目录     : $WORK
    SSH 公钥指纹 : $KEY_FP
 
-   已知边界:P2-2b 是尽力项。live 环境拿不到 source 镜像 / 装完起不来时,如实记 BLOCKED,
-   不改发布镜像、不换 Anaconda 路线;此时判定停在 LIVE_OK。
+   已知边界:段二(P2-2b)是默认硬判据 —— live 环境拿不到 source 镜像 / 装完起不来就是失败(非 0 退出),
+   实情会写进上面的「P2-2b 装机」一行。只在本地排查段一时用 VERIFY_REQUIRE_INSTALL=0 临时放宽。
 EOF
 
 if [ "$REQUIRE_INSTALL" = "1" ] && [ "$verdict" != "INSTALLED_LOGIN" ]; then

@@ -13,6 +13,7 @@
 #        (Task 1 实测:generic-iso 不消费 blueprint,那条路是死的)
 #   规则7 iso-verify.sh 每次新建目标盘 qcow2,并以 hostfwd 2222 做 live 自证
 #   规则8 Task 2 要求的装机成功独立证据齐备:串口完成行 + 装完后目标盘分区布局断言
+#   规则9 段二(P2-2b)是**默认硬判据**,且出货档 workflow 显式写死(不得默默可选)
 #
 # 用法:
 #   iso-autoinstall-test.sh          # 静态断言,全绿打印 RESULT: SELFTEST PASS
@@ -104,6 +105,15 @@ if [ -f "$VERIFY" ]; then
     hasre 'fdisk -l|sfdisk -d|parted -s' "$VERIFY"; st $? "规则8 独立断言目标盘有分区表"
     hasre 'INSTALLED_LOGIN|LIVE_OK' "$VERIFY"; st $? "规则8 判定态含 live 自证与装机完成两级"
     hasre 'findmnt' "$VERIFY"; st $? "规则7 live 自证断言根是 live 介质"
+    # 规则9:段二必须是**默认硬判据**,而且出货档 workflow 也要显式写死 ——
+    # 否则装机链(单元 / kernel args / dmsquash-live)任何一处退化都会被 LIVE_OK 掩盖成绿。
+    hasre 'VERIFY_REQUIRE_INSTALL:-1' "$VERIFY"; st $? "规则9 脚本默认要求装完能引导(不是可选)"
+    if [ -f "$REPO/.github/workflows/build.yml" ]; then
+        hasre 'VERIFY_REQUIRE_INSTALL: "?1"?' "$REPO/.github/workflows/build.yml"
+        st $? "规则9 出货档 workflow 显式设 VERIFY_REQUIRE_INSTALL: 1"
+    else
+        st 1 "规则9 出货档 workflow 存在:$REPO/.github/workflows/build.yml"
+    fi
 else
     st 1 "规则6 iso-verify.sh 存在:$VERIFY"
 fi
