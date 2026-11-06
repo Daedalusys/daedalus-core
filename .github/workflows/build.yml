@@ -753,9 +753,20 @@ jobs:
   # 本条走官方推荐的新 CLI + generic-iso,并把 ISO 载荷补在**一次性派生镜像**里 ——
   # 发布产物一格不动,故 qcow2 与其它门禁零影响。
   deploy-verify-iso:
-    name: Deploy Verify (ISO build + boot)
+    name: Deploy Verify (ISO boot + unattended install)
     # 与 deploy-verify-kvm / deploy-verify-bootc-switch 同宿主同标签,会串行;同样
     # 只对出货档开放 —— 自托管 runner 会执行构建产物。
+    #
+    # 判据(rev-2,依据 Task 1 探查结论):
+    #   段一 P2-2a(本 job 的绿线):ISO 引导出的 live 系统可用,用 SSH 自证 ——
+    #     hostfwd 2222 登入 → 根确为 live 介质 → 系统就是本镜像。live 内核参数没有
+    #     console=ttyS0,串口不可能有输出,所以判据只能落在 SSH 上。
+    #   段二 P2-2b(尽力项):live 环境里的 oneshot 单元对空虚拟盘 bootc install to-disk,
+    #     装完重启 → 引导该盘 → 串口 login: + 目标盘分区表。受阻时判定停在 LIVE_OK,
+    #     要它必须绿就设 VERIFY_REQUIRE_INSTALL=1。
+    #   注意:"可引导到安装器菜单"这种判据已被证明是假绿 —— generic-iso 不消费 blueprint
+    #   (传了也静默忽略),而且它根本不是安装器,只是 payload 容器 rootfs 的 live ISO;
+    #   探针证据见 docs/superpowers/plans/notes/2026-11-06-iso-blueprint.md。
     runs-on: [self-hosted, linux, x64, daedalus-kvm]
     needs: build-image
     if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
@@ -769,7 +780,7 @@ jobs:
           persist-credentials: false
           path: daedalus-core
 
-      - name: "ISO: derive payload -> build generic-iso -> boot to installer"
+      - name: "ISO: derive payload -> generic-iso -> live SSH 自证 + 无人值守装机"
         shell: bash
         working-directory: daedalus-core
         env:
