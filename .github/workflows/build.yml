@@ -652,7 +652,14 @@ jobs:
     runs-on: [self-hosted, linux, x64, daedalus-kvm]
     needs: build-qcow2
     if: ${{ !cancelled() && needs.build-qcow2.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
-    timeout-minutes: 45
+    # 单 runner 约束:三条实机腿在 DAG 上并行,但只有一台自托管 runner,而排队时间
+    # **计入** 本 job 的 timeout-minutes。三条腿各跑 20–40 分钟,后两条最坏要等前面的
+    # 跑完才轮到 —— 原来的 45/60 分钟会把还没轮到的腿判成 cancelled(2026-11-06 实测:
+    # 一次 run 里 deploy-verify-kvm 与 deploy-verify-bootc-switch 双双被判 cancelled)。
+    # 故统一抬到 180 分钟,只当"卡死"的兜底:腿真失败会立刻红,不会等满。
+    # 刻意**不改** needs: —— 不串成依赖链,是为了让一条腿红时另外两条仍各跑各的,
+    # 诊断信息不丢(串起来会让后面的腿被 skip)。
+    timeout-minutes: 180
     permissions:
       contents: read
       actions: read
@@ -704,7 +711,9 @@ jobs:
     runs-on: [self-hosted, linux, x64, daedalus-kvm]
     needs: build-image
     if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
-    timeout-minutes: 60
+    # timeout 说明见 deploy-verify-kvm 处的注释:单 runner 下排队时间计入 timeout,
+    # 三条腿统一 180 分钟,只当卡死兜底。needs 刻意不串成链:一条腿红不影响另外两条。
+    timeout-minutes: 180
     permissions:
       contents: read
     steps:
@@ -750,7 +759,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, daedalus-kvm]
     needs: build-image
     if: ${{ !cancelled() && needs.build-image.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
-    timeout-minutes: 60
+    timeout-minutes: 180
     permissions:
       contents: read
     steps:
