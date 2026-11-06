@@ -54,6 +54,11 @@ _inv="${SUDO_USER:-$USER}"
 _inv_home="$(getent passwd "$_inv" 2>/dev/null | cut -d: -f6)"; [ -n "${_inv_home:-}" ] || _inv_home="$HOME"
 WORK="${VERIFY_WORK:-$_inv_home/daedalus-switch-verify}"
 mkdir -p "$WORK" || { echo "无法创建工作目录 $WORK" >&2; exit 2; }
+# 本脚本以 root 跑(派生镜像/出 qcow2 要 rootful podman),但证据要能被**调用者**
+# 读走(CI 的 upload-artifact 以 runner 用户读;`.verify-pass` 还是 0600)。
+# 与 bootc-verify.sh 同一模式:把工作目录归还给发起 sudo 的用户。
+_owner="$_inv:$(id -gn "$_inv" 2>/dev/null || echo "$_inv")"
+chown -R "$_owner" "$WORK" 2>/dev/null || true
 LOG="$WORK/bootc-switch-verify.log"
 : > "$LOG"
 
@@ -65,10 +70,17 @@ warn() { printf '\033[1;33m   !! %s\033[0m\n' "$*"; log "   !! $*"; }
 bad()  { printf '\033[1;31m   XX %s\033[0m\n' "$*" >&2; log "   XX $*"; }
 die()  { bad "$*"; exit 1; }
 
+QEMU_PID=""
+cleanup() {
+    [ -n "${QEMU_PID:-}" ] && { kill "$QEMU_PID" 2>/dev/null; sleep 1; kill -9 "$QEMU_PID" 2>/dev/null; }
+    # 归还工作目录给调用者(证据要能被非 root 读走;失败路径也要还)。
+    chown -R "$_owner" "$WORK" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 VM="$WORK/verify-image"      # 派生镜像的构建上下文
 OUT="$WORK/output"
 PASS_FILE="$WORK/.verify-pass"
-QEMU_PID=""
 
 # ------------------------------------------------------------------ 前置体检 --
 say "Phase 0 · preflight"
@@ -85,9 +97,6 @@ ok "qemu / podman / qemu-img / ssh / scp 就位"
 info "工作目录: $WORK"
 if [ "$ONLY_PREFLIGHT" = 1 ]; then say "只体检模式,停止"; exit 0; fi
 [ "$(id -u)" -eq 0 ] || { bad "需要 root(派生镜像/出 qcow2 都要 rootful podman):请 sudo"; exit 2; }
-
-cleanup() { [ -n "$QEMU_PID" ] && { kill "$QEMU_PID" 2>/dev/null; sleep 1; kill -9 "$QEMU_PID" 2>/dev/null; }; }
-trap cleanup EXIT
 
 # ------------------------------------------------------- Phase 1 · 派生镜像 ----
 # 复刻 78-dev-user.sh 的要点:video/render 组病态半初始化必须先补 /etc/group;
@@ -249,4 +258,7 @@ cat <<EOF
    工作目录      : $WORK
 EOF
 advise "证据:serial-console.log(三次引导)、bootc-switch-verify.log;digest 三段见上。"
+# 收尾:把工作目录(含 600 的 .verify-pass 与 root 建的日志)归还给调用者,
+# 否则 CI 的 upload-artifact 以 runner 用户读会 Permission denied。
+chown -R "$_owner" "$WORK" 2>/dev/null || true
 exit 0
