@@ -273,11 +273,15 @@ jobs:
         # 门禁脚本自身的逻辑也要被验证:否则「改断言」这一步不可验证,脚本退化
         # (少跑一条断言、判定函数变瞎)不会被任何东西发现。
         # workflow-hygiene.sh 的 selftest 在它自己的步骤里跑(与真实扫描同处)。
+        # release-promote-test.sh 把两条发布腿的 run 块抽出来用假 gh 驱动 —— 那些腿
+        # 只在出货档触发,不在这里守的话就只能等下一次真出货才发现退化。
         shell: bash
         working-directory: daedalus-core
         run: |
           bash tests/build/image-lint.sh --selftest
           bash tests/ci/credential-surface-check.sh --selftest
+          bash tests/ci/release-asset-name-test.sh
+          bash tests/ci/release-promote-test.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
@@ -659,7 +663,13 @@ jobs:
         # 只对出货档上传:PR 与 feat/* 分支绝不写 Release(job 级 if 已过滤,这里
         # 再挡一次,免得将来有人把 job 的 if 放宽)。本 job 在 GitHub 托管的
         # ubuntu-24.04 上跑,contents:write 只在本 job 内授予。
-        if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+        #
+        # 用 success() 而不是 !cancelled():后者的字面意思是"前一步挂了也继续"。
+        # 对发布腿而言那正是要避免的 —— 产物没通过前面的构建/上传链路就不该进
+        # Release,否则会出现"前面红、发布绿"的假绿,让人以为这一版发成功了。
+        # (GitHub Actions 里 if 一旦写了状态检查函数,隐式的 success() 就失效,
+        # 所以必须显式写出来;括号不能省,否则 || 会把 success() 短路掉。)
+        if: ${{ success() && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
         shell: bash
         working-directory: daedalus-core
         env:
@@ -691,11 +701,26 @@ jobs:
           ln "$qcow2" "$staged" 2>/dev/null || cp "$qcow2" "$staged"
           trap 'rm -f "$staged"' EXIT
           # --target 把 tag 钉在本 run 的 commit 上:不给它,gh 会把新 tag 建在默认
-          # 分支当时的头上,于是"货"与 tag 未必对得上(正是 Review Focus #5 的形态)。
+          # 分支当时的头上,于是"货"与 tag 未必对得上。
+          # Release 已存在时必须确认它指向的就是本 run 的 commit —— 绝不在"指向
+          # 别人的 commit 的 Release"上补资产,那会造出跨 commit 的混合发布。
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $tag 已存在:只补同名资产,不动别人的 Release"
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha || true)"
+            if [ -z "$existing" ]; then
+              echo "ERROR: Release $tag 已存在,却读不回它指向的 commit,拒绝在上面补资产" >&2
+              exit 1
+            fi
+            if [ "$existing" != "$GITHUB_SHA" ]; then
+              echo "ERROR: Release $tag 指向 $existing,不是本次 run 的 $GITHUB_SHA" >&2
+              exit 1
+            fi
+            echo "Release $tag 已存在且指向本 run 的 commit:只补同名资产"
           else
-            gh release create "$tag" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "$tag" --notes "daedalus-os $tag"
+            # 另一条腿可能在同一瞬间建同一个 tag:建失败但 Release 已存在,即视为成功
+            # (幂等),否则两条腿会因竞态随机红一条。
+            gh release create "$tag" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "$tag" --notes "daedalus-os $tag" \
+              || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || { echo "ERROR: 创建 Release $tag 失败" >&2; exit 1; }
           fi
           # --clobber:同一 ref 重跑 workflow 时覆盖同名资产,而不是报 already exists 变红
           gh release upload "$tag" "$staged" --clobber --repo "$GITHUB_REPOSITORY"
@@ -856,7 +881,10 @@ jobs:
 
       - name: Promote ISO to GitHub Release
         # 与 build-qcow2 那条腿同型:只对出货档上传,提权只在 job 内、只在出货 ref 上。
-        if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+        # success() 不能省:这条腿前面正是 **ISO 的引导验证**,而 iso-verify.sh 引导
+        # 失败时 exit 1 但 ISO 文件仍在盘上 —— 用 !cancelled() 会把一个没通过验证的
+        # ISO 发出去,且发布步骤显示绿。括号同样不能省(见另一条腿的说明)。
+        if: ${{ success() && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
         shell: bash
         working-directory: daedalus-core
         env:
@@ -883,10 +911,22 @@ jobs:
           rm -f "$staged"
           ln "$iso" "$staged" 2>/dev/null || cp "$iso" "$staged"
           trap 'rm -f "$staged"' EXIT
+          # Release 已存在时必须确认它指向的就是本 run 的 commit(理由见 qcow2 那条腿)。
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $tag 已存在:只补同名资产,不动别人的 Release"
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha || true)"
+            if [ -z "$existing" ]; then
+              echo "ERROR: Release $tag 已存在,却读不回它指向的 commit,拒绝在上面补资产" >&2
+              exit 1
+            fi
+            if [ "$existing" != "$GITHUB_SHA" ]; then
+              echo "ERROR: Release $tag 指向 $existing,不是本次 run 的 $GITHUB_SHA" >&2
+              exit 1
+            fi
+            echo "Release $tag 已存在且指向本 run 的 commit:只补同名资产"
           else
-            gh release create "$tag" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "$tag" --notes "daedalus-os $tag"
+            gh release create "$tag" --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --title "$tag" --notes "daedalus-os $tag" \
+              || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || { echo "ERROR: 创建 Release $tag 失败" >&2; exit 1; }
           fi
           # --clobber:同一 ref 重跑 workflow 时覆盖同名资产,而不是报 already exists 变红
           gh release upload "$tag" "$staged" --clobber --repo "$GITHUB_REPOSITORY"

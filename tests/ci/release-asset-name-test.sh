@@ -64,10 +64,11 @@ RELEASE_TAG=v0.4.0 GITHUB_SHA="$SHA40" run release_asset_name qcow2 "$TMP/big.qc
 st 2 "$rc" "超 2GiB → 退出码 2"
 st "" "$out" "超 2GiB → 不打印文件名(不得静默放行)"
 
-# --- 情形 5:恰好 2GiB → 允许(上限是"超过才拒") ---
+# --- 情形 5:恰好 2GiB → 拒绝(GitHub 的措辞是"must be under 2 GiB",
+#     即上界不含 2147483648;守卫守的是"上传前拦住",宁可严一字节) ---
 RELEASE_TAG=v0.4.0 GITHUB_SHA="$SHA40" run release_asset_name qcow2 "$TMP/exact.qcow2"
-st 0 "$rc" "恰好 2GiB → 退出码 0"
-st "qcow2-v0.4.0.qcow2" "$out" "恰好 2GiB → 正常输出资产名"
+st 2 "$rc" "恰好 2GiB → 退出码 2(under 2GiB 不含边界)"
+st "" "$out" "恰好 2GiB → 不打印文件名"
 
 # --- 情形 6:参数缺失 → 退出码 1 ---
 run release_asset_name

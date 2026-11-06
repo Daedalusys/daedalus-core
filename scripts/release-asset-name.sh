@@ -23,9 +23,11 @@ if [ ! -f "$path" ]; then
 fi
 
 # stat 而非 du:占位/稀疏产物的真实长度由字节数决定,块数会漏判上限。
+# 边界取"under 2 GiB"(避免 -le 把恰好 2147483648 放行) —— 守卫的职责是上传前拦住,
+# 严一个字节的代价是零,漏放一个字节的代价是上传步骤在出货档上红。
 size="$(stat -c %s "$path")"
-if [ "$size" -gt 2147483648 ]; then
-    echo "产物 ${size} 字节超过 GitHub Release 单文件上限 2GiB(2147483648)" >&2
+if [ "$size" -ge 2147483648 ]; then
+    echo "产物 ${size} 字节达到或超过 GitHub Release 单文件上限 2GiB(under 2147483648)" >&2
     exit 2
 fi
 
