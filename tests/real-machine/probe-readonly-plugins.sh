@@ -5,8 +5,8 @@
 # 证伪什么
 #   单测用 fixture/fake 撑起 service/pkg/sysinfo/proc/trace/dupe,期望值与**真
 #   数据源**的差异从未被观测。本探针在真 guest 里对每个插件跑一次真实调用,
-#   如实记录「真实输出 vs 现有 fixture 期望」的差异结论(退出码 0 = 六条都已
-#   如实记录;第 6 条若确认缺陷即开 issue 并记号码)。
+#   如实记录「真实输出 vs 现有 fixture 期望」的差异结论(退出码 0 = 六条判定
+#   全部为 PASS;A7-6 是硬链接误报的可判定断言,不是「记录一下」)。
 #
 # 六条
 #   1. service.query 对真 timer 的 next_elapse_usec / 对 masked 单元的 load_state;
@@ -14,7 +14,8 @@
 #   3. sysinfo.network_status 的 ip -j → ip → /proc/net/dev 三级兜底;
 #   4. proc 对他人进程 fd 的 EACCES 与 unowned_sockets;
 #   5. trace 读真 /var/log/daedalus/audit.jsonl;
-#   6. dupe 对**硬链接**的行为(同一 inode 是否被报成重复)。
+#   6. dupe 对**硬链接**的行为:同一 inode 的多个路径不得被报成重复,
+#      wasted_bytes 只算真实副本(断言随 plugins#76 的修复转 PASS)。
 #
 # 用法: sudo VERIFY_WORK=/tmp/probe-a7 bash tests/real-machine/probe-readonly-plugins.sh
 # =============================================================================
@@ -26,7 +27,7 @@ export DRIVER_LOG="$VERIFY_WORK/probe-readonly-plugins.log"
 source "$HERE/lib/guest-driver.sh"
 DRIVER_QEMU_SNAPSHOT=1
 
-# 第 6 条确认缺陷后填入 issue 号。
+# 硬链接误报的跟踪 issue:FAIL 消息里带上,便于证据直连缺陷单。
 A7_ISSUE="${A7_ISSUE:-Daedalusys/daedalus-plugins#76}"
 
 P=/opt/daedalus/plugins
@@ -116,16 +117,43 @@ gssh "rm -rf /tmp/a7-dupe; mkdir -p /tmp/a7-dupe; printf 'hardlink-payload-01234
 D1="$(call "/tmp/mcp-call.sh $DUP scan_dupes '{\"dirs\":[\"/tmp/a7-dupe\"],\"algo\":\"sha256\"}'")"
 printf '%s\n' "$D1" | head -c 600 | sed 's/^/      /'
 log "      dupe scan_dupes: $(printf '%s' "$D1" | head -c 600)"
-# a.txt/b.txt 是同一 inode(硬链接),c.txt 是独立 inode(真重复)。
-# scannedFile 只存 path/size/mtime、无 inode → 预期把 a/b/c 全归入同一组。
-if printf '%s' "$D1" | grep -q 'a.txt' && printf '%s' "$D1" | grep -q 'b.txt'; then
-    rec "结论: a.txt 与 b.txt 是同一 inode,却被一起报为重复 —— 硬链接被误报(wasted_bytes 虚高)"
-    rec "issue: $A7_ISSUE"
-    driver_verdict PASS "A7-6 如实记录(硬链接误报,详见输出与 issue)"
-elif [ -n "$D1" ]; then
-    driver_verdict PASS "A7-6 如实记录(未观察到硬链接同组,详见输出)"
-else
+# 夹具语义:a.txt 与 b.txt 是同一 inode(硬链接,只占一份空间),c.txt 是独立
+# inode 的同内容副本。因此真实可回收空间只有一份 27 字节;把 a/b/c 三者归成
+# 一组并报 54 字节就是把硬链接当成了重复。
+A7_PAYLOAD_LEN=27
+A7_DUPE_DIR=/tmp/a7-dupe
+if [ -z "$D1" ]; then
     driver_verdict FAIL "A7-6 scan_dupes 无响应"
+elif ! command -v jq >/dev/null 2>&1; then
+    # 宿主缺 jq 就无法把 JSON-RPC 响应还原成可判定事实,只能如实报无法判定。
+    driver_verdict FAIL "A7-6 无法判定:宿主缺 jq(原始响应见上)"
+else
+    # 响应是 JSON-RPC 信封,分组结果在 result.content[0].text 的字符串里。
+    A7_GROUPS="$(printf '%s' "$D1" | jq -r '.result.content[0].text // empty' 2>/dev/null)"
+    # 同一组里同时出现两个硬链接路径 = 硬链接被误报。
+    A7_HARDLINK_GROUPED="$(printf '%s' "$A7_GROUPS" | jq -r --arg a "$A7_DUPE_DIR/a.txt" --arg b "$A7_DUPE_DIR/b.txt" \
+        '[.[] | select((.files | index($a)) and (.files | index($b)))] | length' 2>/dev/null)"
+    A7_WASTED="$(printf '%s' "$A7_GROUPS" | jq -r '[.[] | .wasted_bytes] | add // 0' 2>/dev/null)"
+    A7_GROUPS_JSON="$(printf '%s' "$A7_GROUPS" | jq -c '.' 2>/dev/null)"
+    rec "分组结果(已还原 JSON): ${A7_GROUPS_JSON}"
+    log "      A7-6 groups=$A7_GROUPS_JSON hardlink_grouped=$A7_HARDLINK_GROUPED wasted=$A7_WASTED"
+    # 判定顺序:先看"同组"(硬链接被当成重复的直接证据),再看 wasted_bytes
+    # 的数值;解析不出数字时 A7_HARDLINK_GROUPED 为空串,落到 FAIL 而非放行。
+    case "$A7_HARDLINK_GROUPED" in
+        ''|*[!0-9]*)
+            driver_verdict FAIL "A7-6 无法判定:响应不是可解析的 scan_dupes 分组 JSON(见原始响应)"
+            ;;
+        0)
+            if [ "$A7_WASTED" = "$A7_PAYLOAD_LEN" ]; then
+                driver_verdict PASS "A7-6 硬链接未被误报,wasted_bytes 只算真实副本(${A7_WASTED}B),分组=${A7_GROUPS_JSON}"
+            else
+                driver_verdict FAIL "A7-6 wasted_bytes=${A7_WASTED:-<解析失败>},期望 ${A7_PAYLOAD_LEN}(只算一份真实副本;硬链接不多占空间),分组=${A7_GROUPS_JSON}"
+            fi
+            ;;
+        *)
+            driver_verdict FAIL "A7-6 硬链接仍被报成重复:a.txt 与 b.txt(同 inode)出现在同一组,分组=${A7_GROUPS_JSON} — $A7_ISSUE"
+            ;;
+    esac
 fi
 
 driver_exit
