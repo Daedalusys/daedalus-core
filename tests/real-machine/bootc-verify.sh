@@ -57,6 +57,9 @@ BOOT_TIMEOUT="${VERIFY_BOOT_TIMEOUT:-180}"
 . "$(dirname -- "${BASH_SOURCE[0]}")/lib/ssh-port.sh"
 SSH_PORT="$(ssh_port_resolve 2222)" || exit 2
 QCOW2=""
+# --qcow2 显式传入的产物是调用方自己给的,不复用判据管辖:它的来源在脚本看来是
+# 未知的,拿本脚本笔下的镜像去校验它只会把好产物判死。
+QCOW2_EXTERNAL=0
 ONLY_PREFLIGHT=0
 NO_KVM=0
 
@@ -79,13 +82,23 @@ resolve_qemu() {
     return 1
 }
 
+# 指纹工具与被测镜像绑定:复用 qcow2 前必须先确认它是由**当前**镜像构建的。
+# 脚本可能被单独拷到别处跑(日志里就有 scp 到 /tmp 再 sudo 的用法),那时判定
+# 函数不在 —— 那种情形按「没有复用能力」处理(退化为不复用),绝不按「比对通过」处理。
+_here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [ -r "$_here/lib/artifact-fingerprint.sh" ]; then
+    # shellcheck source=lib/artifact-fingerprint.sh
+    . "$_here/lib/artifact-fingerprint.sh"
+fi
+artifact_fp_available() { [ "$(type -t artifact_fingerprint 2>/dev/null)" = function ]; }
+
 
 usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --qcow2)          QCOW2="${2:-}"; shift 2 ;;
-        --qcow2=*)        QCOW2="${1#*=}"; shift ;;
+        --qcow2)          QCOW2="${2:-}"; QCOW2_EXTERNAL=1; shift 2 ;;
+        --qcow2=*)        QCOW2="${1#*=}"; QCOW2_EXTERNAL=1; shift ;;
         --only-preflight) ONLY_PREFLIGHT=1; shift ;;
         --no-kvm)         NO_KVM=1; shift ;;
         -h|--help)        usage ;;
@@ -222,11 +235,32 @@ say "Phase 2 · 取得 qcow2"
 if [ -n "$QCOW2" ]; then
     [ -f "$QCOW2" ] || { bad "--qcow2 指向的文件不存在: $QCOW2"; exit 2; }
     info "使用外部指定的 qcow2: $QCOW2"
+    info "外部产物不做镜像指纹校验(来源由调用方负责)"
 else
     QCOW2="$WORK/disk.qcow2"
-    if [ -f "$QCOW2" ]; then
-        ok "复用已有 $QCOW2($(du -h "$QCOW2" | cut -f1))"
-    elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    # 复用判据必须包含「这份 qcow2 是由当前 $IMAGE 构建的」:自托管 runner 的
+    # 工作目录跨 run 持久化,只看文件在不在会让上一次 run 的产物冒充本次结果。
+    FP_FILE="$WORK/.qcow2-fingerprint"
+    QCOW2_SOURCE=""
+    if artifact_fp_available; then
+        fp_now="$(artifact_fingerprint "$IMAGE")" || { bad "取不到被测镜像 $IMAGE 的指纹"; exit 2; }
+        if [ "${VERIFY_FORCE_REBUILD:-0}" = "1" ]; then
+            say "VERIFY_FORCE_REBUILD=1 → 丢弃旧产物重建"
+            rm -f "$QCOW2"
+        elif artifact_fp_match "$FP_FILE" "$fp_now" && [ -s "$QCOW2" ]; then
+            ok "复用已有 $QCOW2($(du -h "$QCOW2" | cut -f1),与被测镜像指纹一致: $fp_now)"
+            QCOW2_SOURCE="local-build"
+        else
+            [ -s "$QCOW2" ] && say "产物指纹不一致 → 重建。旧=$(artifact_fp_describe "$FP_FILE") 新=$fp_now"
+            rm -f "$QCOW2"
+        fi
+    else
+        # 拿不到指纹工具就退化成「不复用」:绝不能退化成「比对不了就当一致」。
+        warn "找不到指纹工具(artifact-fingerprint.sh)→ 本次不复用任何旧产物"
+        rm -f "$QCOW2"
+    fi
+
+    if [ -z "$QCOW2_SOURCE" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
         rid="$RUN_ID"
         if [ -z "$rid" ]; then
             info "查询最近一次成功产出 qcow2 的 CI run …"
@@ -243,6 +277,7 @@ else
                 if [ -n "$found" ]; then
                     mv "$found" "$QCOW2"
                     ok "已取得 $QCOW2($(du -h "$QCOW2" | cut -f1))"
+                    QCOW2_SOURCE="ci-artifact"
                 else
                     bad "artifact 里没有 .qcow2(目录:$(ls -A "$WORK/dl" 2>/dev/null | head -5 | tr '\n' ' '))"
                 fi
@@ -252,7 +287,7 @@ else
         else
             warn "找不到可用的成功 run id"
         fi
-    else
+    elif [ -z "$QCOW2_SOURCE" ]; then
         warn "gh 不可用或未登录"
     fi
 
@@ -275,6 +310,9 @@ else
         [ -n "$found" ] || { bad "builder 报成功但没有产出 .qcow2"; exit 2; }
         [ "$found" = "$QCOW2" ] || mv "$found" "$QCOW2"
         ok "已构建 $QCOW2($(du -h "$QCOW2" | cut -f1))"
+        # 只有本脚本亲手从 $IMAGE 构建出来的产物才有可声明的来源;下载来的
+        # artifact 来自哪次 run 的哪个镜像无从得知,给它写指纹等于伪造证据。
+        artifact_fp_available && artifact_fp_write "$FP_FILE" "$fp_now"
     fi
 fi
 info "qcow2 sha256: $(sha256sum "$QCOW2" | cut -d' ' -f1)"
