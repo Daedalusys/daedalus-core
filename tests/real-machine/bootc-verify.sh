@@ -39,6 +39,7 @@
 #   0  引导成功(串口出现 login 提示符,且无 kernel panic)
 #   1  引导失败(panic / 无输出 / 超时未见 login)
 #   2  前置不满足(非 x86-64-v3、无 /dev/kvm、磁盘不足、缺工具且装不上)
+#   3  hostfwd 端口冲突(宿主端口已被占;环境问题,与产物无关,未起 qemu)
 # =============================================================================
 
 set -uo pipefail
@@ -50,7 +51,11 @@ MEM="${VERIFY_MEM:-4096}"
 BOOT_TIMEOUT="${VERIFY_BOOT_TIMEOUT:-180}"
 # hostfwd 端口可配(默认仍是历史的 2222):多台/多个 worker 在同一宿主上跑 QEMU
 # 时靠它错开,避免抢同一个宿主端口。本脚本只读串口,不依赖 SSH。
-SSH_PORT="${VERIFY_SSH_PORT:-2222}"
+# 端口解析与占用探测走共享库:端口被占时必须在起 qemu 之前报出来,
+# 否则只会退到 QEMU_EXITED,让查的人先怀疑 qcow2 坏了。
+# shellcheck source=/dev/null
+. "$(dirname -- "${BASH_SOURCE[0]}")/lib/ssh-port.sh"
+SSH_PORT="$(ssh_port_resolve 2222)" || exit 2
 QCOW2=""
 ONLY_PREFLIGHT=0
 NO_KVM=0
@@ -286,6 +291,9 @@ info "内存 ${MEM} MiB,等待 login 提示符最长 ${BOOT_TIMEOUT}s"
 # snapshot=on:guest 的写落到临时 overlay,不碰交付的 qcow2 本身。
 # 不加的话 guest 一启动就把镜像写脏,末尾算出的 digest 不再是交付产物的 digest,
 # 证据链断一环(TMPDIR 指到工作目录,避免临时文件落爆 /tmp)。
+# 端口占用必须先于 qemu 报出来:否则 qemu 退出会落到 QEMU_EXITED,
+# 与「产物引导不起来」混成同一个结论,而真因只是宿主端口被占。
+ssh_port_guard "$SSH_PORT" || exit 3
 TMPDIR="$WORK" "$QEMU_BIN" \
     -machine q35,accel=kvm \
     -cpu host \

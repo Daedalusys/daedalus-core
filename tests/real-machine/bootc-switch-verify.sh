@@ -36,12 +36,17 @@
 #   0  全链通过(引导 → switch 生效 → rollback 复原)
 #   1  验证失败(某一步的期望不成立)
 #   2  前置不满足
+#   3  hostfwd 端口冲突(宿主端口已被占;环境问题,与产物无关,未起 qemu)
 # =============================================================================
 set -uo pipefail
 
 # 端口与工作目录的历史默认值由本脚本钉住(探针套件默认 2223/daedalus-guest-driver,
 # 两者互不干扰);派生镜像/qcow2/引导/SSH 全部委托共享驱动。
-VERIFY_SSH_PORT="${VERIFY_SSH_PORT:-2222}"
+# 端口解析与占用探测走共享库:端口被占时要在起 qemu 之前报出来,
+# 否则只会落到「等 SSH 超时」,与「产物引导失败」混成同一个结论。
+# shellcheck source=/dev/null
+. "$(dirname -- "${BASH_SOURCE[0]}")/lib/ssh-port.sh"
+VERIFY_SSH_PORT="$(ssh_port_resolve 2222)" || exit 2
 export VERIFY_SSH_PORT
 _inv="${SUDO_USER:-$USER}"
 _inv_home="$(getent passwd "$_inv" 2>/dev/null | cut -d: -f6)"; [ -n "${_inv_home:-}" ] || _inv_home="$HOME"
@@ -105,6 +110,10 @@ ADV="$WORK/advice.log"
 advise() { printf '%s\n' "$*" | tee -a "$ADV"; }
 
 say "Phase 3 · 引导 qcow2(可写,允许重启)+ 等 SSH"
+# 端口占用必须先于 qemu 报出来:否则 qemu 起不来只会表现成「等 SSH 超时」,
+# 与「qcow2 引导不起来」混成同一个结论,而真因是宿主端口被别的进程占了。
+# 这里只报不清:共享宿主上同端口的监听者可能是别人的 qemu,不该由本门禁杀掉。
+ssh_port_guard "$VERIFY_SSH_PORT" || exit 3
 driver_boot
 QCOW2="$DRIVER_QCOW2"
 
