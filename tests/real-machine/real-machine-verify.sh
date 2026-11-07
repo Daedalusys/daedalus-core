@@ -23,6 +23,15 @@
 #   ./real-machine-verify.sh qcow2           # 只造 qcow2
 #   ./real-machine-verify.sh boot            # 只开机验串口
 #
+# 环境变量:
+#   VERIFY_SSH_PORT   hostfwd 的宿主端口(默认 2222;多 worker 共用宿主时错开)
+#
+# 退出码:
+#   0  判定通过
+#   1  判定不通过(引导失败等)
+#   2  前置不满足 / VERIFY_SSH_PORT 非法
+#   3  hostfwd 端口冲突(宿主端口已被占;环境问题,与产物无关,未起 qemu)
+#
 # 安全约定:
 #   - 只在专用工作目录 $WORK 下作业,不动既有容器/镜像。
 #   - 不执行 bootc install 到宿主盘;qcow2 只落在 $WORK。
@@ -59,6 +68,11 @@ QCOW2="$WORK/$QCOW2_NAME"
 LOG="$WORK/verify.log"
 QEMU_MEM="${DAEDALUS_VERIFY_MEM:-4096}"
 BOOT_TIMEOUT="${DAEDALUS_VERIFY_BOOT_TIMEOUT:-180}"
+# hostfwd 端口与冲突探测走共享库:端口写死时,宿主 2222 被占会让 qemu 起不来,
+# 而 Phase 3 只能报出「没抓到 login」—— 那是环境问题,不是产物问题。
+# shellcheck source=/dev/null
+. "$(dirname -- "${BASH_SOURCE[0]}")/lib/ssh-port.sh"
+SSH_PORT="$(ssh_port_resolve 2222)" || exit 2
 
 mkdir -p "$WORK"
 touch "$LOG"
@@ -294,6 +308,10 @@ phase_boot() {
   # -cpu host 把宿主全部特性透传给 guest,KVM 下由硬件虚拟化加速。
   info "CPU 模型: -cpu host(默认 qemu64 会让 guest 停在 x86-64-v1)"
 
+  # 端口占用必须先于 qemu 报出来:否则 qemu 退出后只会落到「没抓到 login」,
+  # 查的人会先怀疑 qcow2 坏了,而真因是宿主端口被别的进程占了。
+  ssh_port_guard "$SSH_PORT" || exit 3
+
   timeout --foreground "${BOOT_TIMEOUT}" \
     "$qemu" \
       -name daedalus-serial-verify \
@@ -304,7 +322,7 @@ phase_boot() {
       -nographic \
       -no-reboot \
       -drive "file=$QCOW2,if=virtio,format=qcow2" \
-      -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+      -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
       -device virtio-net-pci,netdev=net0 \
       > "$console_log" 2>&1
   local rc=$?
@@ -341,8 +359,8 @@ phase_boot() {
     tail -60 "$console_log"
   } >> "$LOG"
 
-  say "Phase 3.4 · sshd 旁证(2222 是上面 hostfwd 的端口)"
-  info "在另一个终端执行: ssh -p 2222 <user>@localhost"
+  say "Phase 3.4 · sshd 旁证(${SSH_PORT} 是上面 hostfwd 的端口)"
+  info "在另一个终端执行: ssh -p ${SSH_PORT} <user>@localhost"
   info "headless 镜像已确认 sshd enabled 且监听 22(rescue-path.sh 全绿),"
   info "所以串口若不通, ssh 是第二条救砖路径 —— 这正是 plan RF2 的设计意图。"
 
