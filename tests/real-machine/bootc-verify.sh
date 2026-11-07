@@ -233,16 +233,18 @@ fi
 
 # ---------------------------------------------------------------------------
 say "Phase 2 · 取得 qcow2"
+# 产物来源贯穿到 Summary:判定必须能说清「引导的是谁的镜像」。
+QCOW2_SOURCE=""
 if [ -n "$QCOW2" ]; then
     [ -f "$QCOW2" ] || { bad "--qcow2 指向的文件不存在: $QCOW2"; exit 2; }
     info "使用外部指定的 qcow2: $QCOW2"
     info "外部产物不做镜像指纹校验(来源由调用方负责)"
+    QCOW2_SOURCE="external"
 else
     QCOW2="$WORK/disk.qcow2"
     # 复用判据必须包含「这份 qcow2 是由当前 $IMAGE 构建的」:自托管 runner 的
     # 工作目录跨 run 持久化,只看文件在不在会让上一次 run 的产物冒充本次结果。
     FP_FILE="$WORK/.qcow2-fingerprint"
-    QCOW2_SOURCE=""
     if artifact_fp_available; then
         fp_now="$(artifact_fingerprint "$IMAGE")" || { bad "取不到被测镜像 $IMAGE 的指纹"; exit 2; }
         if [ "${VERIFY_FORCE_REBUILD:-0}" = "1" ]; then
@@ -316,6 +318,7 @@ else
         [ -n "$found" ] || { bad "builder 报成功但 $WORK 下没有产出 .qcow2"; exit 2; }
         [ "$found" = "$QCOW2" ] || mv "$found" "$QCOW2"
         ok "已构建 $QCOW2($(du -h "$QCOW2" | cut -f1))"
+        QCOW2_SOURCE="local-build"
         # 只有本脚本亲手从 $IMAGE 构建出来的产物才有可声明的来源;下载来的
         # artifact 来自哪次 run 的哪个镜像无从得知,给它写指纹等于伪造证据。
         artifact_fp_available && artifact_fp_write "$FP_FILE" "$fp_now"
