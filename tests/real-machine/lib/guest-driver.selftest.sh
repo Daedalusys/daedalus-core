@@ -53,6 +53,10 @@ podman() {
             # 模拟 bootc-image-builder 的产出:没有它就走到「builder 没产出 qcow2」。
             # EXTRA_QCOW2=1 时额外留一个「删不掉的」旧产物,用来钉住「按名字取第一个
             # 可能取到旧的」这条失效路径。
+            # STUB_BUILDER_FAIL=1 时模拟构建失败(留下半成品/不产出)。
+            if [ "${STUB_BUILDER_FAIL:-0}" = 1 ]; then
+                return 1
+            fi
             mkdir -p "$VERIFY_WORK/output/qcow2"
             printf 'qcow2' > "$VERIFY_WORK/output/qcow2/disk.qcow2"
             [ "${EXTRA_QCOW2:-0}" = 1 ] && printf 'old' > "$VERIFY_WORK/output/qcow2/stale.qcow2"
@@ -110,8 +114,34 @@ rc=0
 ( EXTRA_QCOW2=1 driver_init ) >/dev/null 2>&1 || rc=$?
 ck "产物目录有多个 qcow2 → 拒跑" 1 "$rc"
 ck "多个 qcow2 时没有写指纹(不能给不确定的产物盖章)" \
-   1 "$([ -f "$VERIFY_WORK/.qcow2-fingerprint" ] && echo 1 || echo 0)"
+   0 "$([ -f "$VERIFY_WORK/.qcow2-fingerprint" ] && echo 1 || echo 0)"
 rm -f "$VERIFY_WORK/output/qcow2/stale.qcow2"
+
+# 9) 复用分支同样要守住「恰好一个 qcow2」:指纹一致但目录里有两个产物时,
+#    按名字取第一个就可能取到旧的 —— 复用必须重建,不能挑一个用。
+PODMAN_DIGEST="sha256:reuse2"
+mkdir -p "$VERIFY_WORK/output/qcow2"
+printf 'qcow2' > "$VERIFY_WORK/output/qcow2/disk.qcow2"
+head -c6 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$VERIFY_WORK/.verify-pass"
+artifact_fp_write "$VERIFY_WORK/.qcow2-fingerprint" "$PODMAN_DIGEST"
+printf 'old' > "$VERIFY_WORK/output/qcow2/stale.qcow2"
+build_n=0
+driver_init >/dev/null 2>&1
+ck "复用路径:目录里有多个 qcow2 → 不复用(重建)" 1 "$build_n"
+rm -f "$VERIFY_WORK/output/qcow2/stale.qcow2"
+
+# 10) 重建失败时,旧指纹必须已经删掉:否则下一轮同镜像会拿「半成品」当产物复用,
+#     并给它盖上本次镜像的指纹。
+#     这里刻意让指纹**不匹配**(才会走重建路径),再让 builder 失败。
+PODMAN_DIGEST="sha256:failbuild"
+mkdir -p "$VERIFY_WORK/output/qcow2"
+printf 'qcow2' > "$VERIFY_WORK/output/qcow2/disk.qcow2"
+artifact_fp_write "$VERIFY_WORK/.qcow2-fingerprint" "sha256:previousimage"
+rc=0
+( STUB_BUILDER_FAIL=1 driver_init ) >/dev/null 2>&1 || rc=$?
+ck "builder 失败 → driver_init 非零" 1 "$rc"
+ck "builder 失败后旧指纹已被删(半成品不得被下一轮复用)" \
+   0 "$([ -f "$VERIFY_WORK/.qcow2-fingerprint" ] && echo 1 || echo 0)"
 
 printf '\n'
 if [ "$fail_n" -eq 0 ]; then echo "RESULT: SELFTEST PASS"; exit 0; fi

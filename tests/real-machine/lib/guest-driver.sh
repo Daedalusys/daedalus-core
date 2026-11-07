@@ -124,22 +124,30 @@ driver_init() {
     if fp_now="$(artifact_fingerprint "$DRIVER_IMAGE")"; then :; else
         bad "取不到被测镜像 $DRIVER_IMAGE 的指纹"; exit 1
     fi
+    # 产物必须是**唯一**的那一个:目录里有多个 .qcow2 时,按名字取第一个就可能
+    # 取到旧的,而指纹会被写到它头上。复用与重建两条路都守这条。
+    local qcow2_count
+    qcow2_count="$(find "$out/qcow2" -name '*.qcow2' -type f 2>/dev/null | wc -l | tr -d ' ')"
     if [ "${VERIFY_FORCE_REBUILD:-0}" = "1" ]; then
         say "VERIFY_FORCE_REBUILD=1 → 丢弃旧产物重建"
         rm -f "$DRIVER_QCOW2" 2>/dev/null || true
         podman rmi -f "$DRIVER_IMAGE_BASE" >/dev/null 2>&1 || true
         DRIVER_QCOW2=""
-    elif artifact_fp_match "$fp_file" "$fp_now" \
+        artifact_fp_remove "$fp_file"
+    elif artifact_fp_match "$fp_file" "$fp_now" && [ "$qcow2_count" = 1 ] \
          && [ -s "${DRIVER_QCOW2:-}" ] && [ -s "$DRIVER_PASS_FILE" ] \
          && podman image exists "$DRIVER_IMAGE_BASE"; then
         ok "复用已构建产物(qcow2 与被测镜像指纹一致: $fp_now)"
         DRIVER_VPASS="$(cat "$DRIVER_PASS_FILE")"
         return 0
     else
-        say "产物指纹不一致 → 重建。旧=$(artifact_fp_describe "$fp_file") 新=$fp_now"
+        say "产物指纹不一致或产物不唯一 → 重建。旧=$(artifact_fp_describe "$fp_file") 新=$fp_now 现有产物数=$qcow2_count"
         rm -f "$DRIVER_QCOW2" 2>/dev/null || true
         podman rmi -f "$DRIVER_IMAGE_BASE" >/dev/null 2>&1 || true
         DRIVER_QCOW2=""
+        # 决定重建就先把指纹删掉:万一构建中途失败,下一轮不能拿半成品当产物复用,
+        # 更不能给它盖上本次镜像的指纹。
+        artifact_fp_remove "$fp_file"
     fi
 
     mkdir -p "$vm" "$out/qcow2"

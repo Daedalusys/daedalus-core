@@ -55,6 +55,24 @@ st 2 "$rc" "前缀含通配符 → 拒跑"
 rc=0; bash "$SUT" --keep 1 "$tmp/nonexistent" verify-out- >/dev/null 2>&1 || rc=$?
 st 2 "$rc" "根目录不存在 → 拒跑"
 
+# 11) --keep 0 → 拒跑(0 会把当前 run 自己的目录也删掉)
+rc=0; timeout 5 bash "$SUT" --keep 0 "$tmp" verify-out- >/dev/null 2>&1 || rc=$?
+st 2 "$rc" "--keep 0 → 拒跑(不能删当前 run 自己的目录)"
+
+# 12) 删不掉时不得报成功:盘满是最需要这条的时候
+#     用 PATH 上的假 rm 制造失败(真机上 chmod 拦不住 rm,父目录可写就能删)。
+mkdir -p "$tmp/ro-1" "$tmp/ro-2" "$tmp/ro-3" "$tmp/fakebin"
+printf '#!/bin/sh\nexit 1\n' > "$tmp/fakebin/rm"; chmod +x "$tmp/fakebin/rm"
+rc=0
+PATH="$tmp/fakebin:$PATH" timeout 10 bash "$SUT" --keep 1 "$tmp" ro- >/dev/null 2>&1 || rc=$?
+st 1 "$rc" "有目录删不掉 → 非零退出"
+st 1 "$([ -d "$tmp/ro-3" ] && echo 1 || echo 0)" "删不掉时目录确实还在(不是假装删了)"
+
+# 13) 清理正常时退出 0
+mkdir -p "$tmp/ok-1" "$tmp/ok-2"
+rc=0; bash "$SUT" --keep 1 "$tmp" ok- >/dev/null 2>&1 || rc=$?
+st 0 "$rc" "清理成功 → 退出 0"
+
 printf '\n'
 if [ "$fail" -eq 0 ]; then echo "RESULT: CLEANUP SELFTEST PASS"; exit 0; fi
 echo "RESULT: CLEANUP SELFTEST FAIL ($fail)"; exit 1

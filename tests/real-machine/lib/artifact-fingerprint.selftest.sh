@@ -92,5 +92,14 @@ STUB_EXISTS_RC=1 STUB_ID="" STUB_INSPECT="" STUB_PULL_RC=1
 if artifact_fingerprint some-ref >/dev/null 2>&1; then rc=0; else rc=$?; fi
 st 1 "$rc" "本地无镜像且拉取失败 → 显式失败"
 
+# 8) 可变 tag 判定:哪些 ref 需要刷新,哪些不用
+st 0 "$(artifact_fp_ref_is_mutable ghcr.io/x/y:latest && echo 0 || echo 1)" "latest → 可变"
+st 0 "$(artifact_fp_ref_is_mutable ghcr.io/x/y:main && echo 0 || echo 1)" "main → 可变"
+st 1 "$(artifact_fp_ref_is_mutable ghcr.io/x/y:851bbcf8fa382aab2620126f2d2b5a95445e11c5 && echo 0 || echo 1)" "commit sha tag → 不可变"
+st 1 "$(artifact_fp_ref_is_mutable ghcr.io/x/y:v1.2.3 && echo 0 || echo 1)" "版本 tag → 不可变"
+st 1 "$(artifact_fp_ref_is_mutable ghcr.io/x/y@sha256:abc && echo 0 || echo 1)" "钉 digest → 不可变"
+st 0 "$(artifact_fp_ref_is_mutable ghcr.io:5000/x/y:latest && echo 0 || echo 1)" "带端口的 latest → 可变"
+st 1 "$(artifact_fp_ref_is_mutable ghcr.io:5000/x/y:851bbcf8fa382aab2620126f2d2b5a95445e11c5 && echo 0 || echo 1)" "带端口的 sha tag → 不可变"
+
 if [ "$fail" -eq 0 ]; then echo "RESULT: ARTIFACT-FP SELFTEST PASS"; exit 0; fi
 echo "RESULT: ARTIFACT-FP SELFTEST FAIL ($fail)"; exit 1

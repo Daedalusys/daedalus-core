@@ -28,6 +28,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$KEEP" in ''|*[!0-9]*) echo "--keep 必须是整数" >&2; exit 2 ;; esac
+# 0 会把当前 run 自己的目录也删掉(清理步骤跑在 always() 里,当前 run 正靠它上传证据)。
+[ "$KEEP" -ge 1 ] || { echo "--keep 必须 ≥ 1(0 会删掉当前 run 自己的目录)" >&2; exit 2; }
 ROOT="${1:-}"; shift || true
 [ -n "$ROOT" ] || { echo "用法: cleanup-verify-work.sh [--keep N] [--dry-run] <根目录> [<前缀> ...]" >&2; exit 2; }
 [ -d "$ROOT" ] || { echo "根目录不存在: $ROOT" >&2; exit 2; }
@@ -44,6 +46,7 @@ done
 
 removed=0
 kept=0
+failed=0
 for prefix in "$@"; do
     # 按 mtime 新→旧;目录名含 run_id,但 run_id 不保证单调(重跑/回填),用 mtime。
     mapfile -t dirs < <(
@@ -59,11 +62,18 @@ for prefix in "$@"; do
         fi
         if [ "$DRY_RUN" = 1 ]; then
             printf 'would remove %s\n' "$d"
+            removed=$((removed + 1))
+        elif rm -rf -- "$d"; then
+            printf 'removed %s\n' "$d"
+            removed=$((removed + 1))
         else
-            rm -rf -- "$d" && printf 'removed %s\n' "$d"
+            # 删不掉就是没删:盘满时最需要这条,绝不能打印成功让人以为清干净了。
+            printf 'FAILED to remove %s\n' "$d" >&2
+            failed=$((failed + 1))
         fi
-        removed=$((removed + 1))
     done
 done
 
-printf 'cleanup: removed=%d kept=%d keep=%d root=%s\n' "$removed" "$kept" "$KEEP" "$ROOT"
+printf 'cleanup: removed=%d kept=%d failed=%d keep=%d root=%s\n' \
+    "$removed" "$kept" "$failed" "$KEEP" "$ROOT"
+[ "$failed" -eq 0 ]
