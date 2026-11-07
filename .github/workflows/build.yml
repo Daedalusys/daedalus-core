@@ -294,6 +294,7 @@ jobs:
           # 缓存产物指纹的判定逻辑(镜像变了必须重建):实机腿靠在它上面判真假,
           # 它退化成 fail-open 会让所有实机结论失真。
           bash tests/real-machine/lib/artifact-fingerprint.selftest.sh
+          bash tests/real-machine/lib/guest-driver.selftest.sh
           bash tests/real-machine/lib/cleanup-verify-work.selftest.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
