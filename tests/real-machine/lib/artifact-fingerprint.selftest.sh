@@ -66,20 +66,29 @@ podman() {
     return 0
 }
 
-STUB_EXISTS_RC=0 STUB_INSPECT="sha256:good"
-st "sha256:good" "$(artifact_fingerprint some-ref)" "正常 digest → 原样打印"
+# 指纹键必须是内容标识(.Id):tag 会被重推,manifest digest 也随之变。
+STUB_EXISTS_RC=0 STUB_ID="sha256:configid" STUB_INSPECT="sha256:manifestdigest"
+st "sha256:configid" "$(artifact_fingerprint some-ref)" "指纹取 config digest(.Id),不是 manifest digest"
 
-STUB_INSPECT="<none>" STUB_ID="sha256:configid"
-st "sha256:configid" "$(artifact_fingerprint some-ref)" "digest=<none> → 回退 .Id(本地构建镜像不假红)"
+# 同一份镜像重推后 manifest digest 变了,指纹必须不变(这是真机实测到的漂移)。
+STUB_INSPECT="sha256:anothermanifest"
+st "sha256:configid" "$(artifact_fingerprint some-ref)" "manifest digest 漂移不影响指纹"
 
-STUB_INSPECT="" STUB_ID="sha256:configid"
-st "sha256:configid" "$(artifact_fingerprint some-ref)" "digest 为空但 .Id 在 → 回退 .Id"
+# 本地构建的镜像只有 .Id,没有 RepoDigests → 仍能取到指纹(不假红)。
+STUB_ID="sha256:localbuild" STUB_INSPECT="<none>"
+st "sha256:localbuild" "$(artifact_fingerprint local-ref)" "本地构建镜像(.Digest=<none>)→ 用 .Id"
 
-STUB_INSPECT="<none>" STUB_ID=""
+# 两个都取不到 → 显式失败(空指纹会让所有比对都"匹配")。
+STUB_ID="" STUB_INSPECT=""
 if artifact_fingerprint some-ref >/dev/null 2>&1; then rc=0; else rc=$?; fi
-st 1 "$rc" "digest=<none> 且 .Id 也空 → 显式失败"
+st 1 "$rc" ".Id 与 .Digest 都取不到 → 显式失败"
 
-STUB_EXISTS_RC=1 STUB_INSPECT="" STUB_ID="" STUB_PULL_RC=1
+STUB_ID="<none>" STUB_INSPECT="<none>"
+if artifact_fingerprint some-ref >/dev/null 2>&1; then rc=0; else rc=$?; fi
+st 1 "$rc" ".Id 与 .Digest 都是 <none> → 显式失败"
+
+# 拉不到镜像 → 显式失败
+STUB_EXISTS_RC=1 STUB_ID="" STUB_INSPECT="" STUB_PULL_RC=1
 if artifact_fingerprint some-ref >/dev/null 2>&1; then rc=0; else rc=$?; fi
 st 1 "$rc" "本地无镜像且拉取失败 → 显式失败"
 

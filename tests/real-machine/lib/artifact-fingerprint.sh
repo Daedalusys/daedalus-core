@@ -6,23 +6,29 @@
 # 于是"修复无效"的假结论会一直出现。指纹的键必须是镜像 digest,tag 会变。
 
 artifact_fingerprint() {
-    local ref="$1" digest
+    local ref="$1" id digest
     if ! podman image exists "$ref" >/dev/null 2>&1; then
         podman pull "$ref" >/dev/null 2>&1 || {
             echo "ERROR: 拉取 $ref 失败,无法取指纹" >&2
             return 1
         }
     fi
-    digest="$(podman image inspect --format '{{.Digest}}' "$ref" 2>/dev/null)"
-    # 本地 `podman build` 出来的镜像没有仓库 manifest,digest 是 <none>;退到 config
-    # digest(.Id)仍能唯一标识这份本地镜像的字节。少了这一步,被测镜像只要是本地
-    # 构建的就永远取不到指纹,门禁会假红 —— 与本工具要消灭的失效形态同类。
-    if [ -z "$digest" ] || [ "$digest" = "<none>" ]; then
-        digest="$(podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null)"
+    # 用 config digest(.Id)而不是 manifest digest(.Digest):
+    #   同一份内容被重推一次,manifest 字节会变(annotations/压缩方式),.Digest 就变了;
+    #   而实测同一个 tag 的本地镜像可以同时挂着两个 RepoDigests,.Digest 取的是其中
+    #   第一个,顺序还会随重新拉取变化 —— 拿它当指纹,同一份镜像会被判成"换过"。
+    #   .Id 由 config JSON 算出,config 里的 rootfs.diff_ids 覆盖了每一层内容,
+    #   所以它既是内容标识、又不会因重推而漂移。本地 `podman build` 出来的镜像只有
+    #   .Id,没有 RepoDigests —— 用 .Id 也就顺带把那条路径救回来了。
+    id="$(podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null)"
+    if [ -n "$id" ] && [ "$id" != "<none>" ]; then
+        printf '%s\n' "$id"
+        return 0
     fi
+    digest="$(podman image inspect --format '{{.Digest}}' "$ref" 2>/dev/null)"
     # 两个都取不到必须显式失败:空指纹会让所有后续比对都"匹配",正是要消灭的形态。
     if [ -z "$digest" ] || [ "$digest" = "<none>" ]; then
-        echo "ERROR: 取不到 $ref 的 digest(镜像可能已被 prune)" >&2
+        echo "ERROR: 取不到 $ref 的指纹(镜像可能已被 prune)" >&2
         return 1
     fi
     printf '%s\n' "$digest"
