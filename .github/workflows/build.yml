@@ -275,6 +275,8 @@ jobs:
         # workflow-hygiene.sh 的 selftest 在它自己的步骤里跑(与真实扫描同处)。
         # release-promote-test.sh 把两条发布腿的 run 块抽出来用假 gh 驱动 —— 那些腿
         # 只在出货档触发,不在这里守的话就只能等下一次真出货才发现退化。
+        # plugin-install-mode.sh 是插件安装态目录位的门禁(装不进普通用户就读不到
+        # manifest → 宿主判 degraded):selftest 验判定逻辑,真跑验打包产物的 mode。
         shell: bash
         working-directory: daedalus-core
         run: |
@@ -282,6 +284,8 @@ jobs:
           bash tests/ci/credential-surface-check.sh --selftest
           bash tests/ci/release-asset-name-test.sh
           bash tests/ci/release-promote-test.sh
+          bash tests/ci/plugin-install-mode.sh --selftest
+          bash tests/ci/plugin-install-mode.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
