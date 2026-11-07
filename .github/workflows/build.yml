@@ -277,6 +277,8 @@ jobs:
         # 只在出货档触发,不在这里守的话就只能等下一次真出货才发现退化。
         # plugin-install-mode.sh 是插件安装态目录位的门禁(装不进普通用户就读不到
         # manifest → 宿主判 degraded):selftest 验判定逻辑,真跑验打包产物的 mode。
+        # 端口守卫的自检也在这里:端口冲突一旦退化成「静默放行」或「当成引导失败」,
+        # 共享宿主上的环境冲突又会被误判成产物缺陷,而那正是这条门禁要消灭的假红。
         shell: bash
         working-directory: daedalus-core
         run: |
@@ -286,6 +288,9 @@ jobs:
           bash tests/ci/release-promote-test.sh
           bash tests/ci/plugin-install-mode.sh --selftest
           bash tests/ci/plugin-install-mode.sh
+          # 端口冲突要与「产物引导失败」区分开:那条判定退化(把冲突当成引导失败)
+          # 会让整条实机门禁红错方向,而这种退化只有自检能挡住。
+          bash tests/real-machine/lib/ssh-port.selftest.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
