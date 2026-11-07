@@ -426,6 +426,17 @@ cat <<EOF
    串口日志 : $SERIAL
    完整日志 : $LOG
    工作目录 : $WORK
+EOF
+
+# 产物来源要跟着判定一起报出去:从 CI artifact 下载的 qcow2 不是本机从 $IMAGE
+# 构建的,它的构建镜像无从得知 —— 把它算作「$IMAGE 可引导」的证据是不成立的。
+case "$QCOW2_SOURCE" in
+    local-build) echo "   产物来源: 本机从 $IMAGE 构建(指纹已校验)" ;;
+    ci-artifact) echo "   产物来源: CI run $RUN_ID 的 artifact —— **不是**本机从 $IMAGE 构建,"
+                  echo "              故本结论只证明「该 qcow2 可引导」,不证明「$IMAGE 可引导」" ;;
+    *)           echo "   产物来源: 调用方显式指定(--qcow2)—— 与 $IMAGE 的关联由调用方负责" ;;
+esac
+cat <<EOF
 
    把这个目录整个带回来(或只带 serial-console.log + bootc-verify.log + lsblk-*.txt)
    即可作为 Todo 9 的证据入库。
