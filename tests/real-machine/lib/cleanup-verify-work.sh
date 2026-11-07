@@ -15,7 +15,11 @@ KEEP=2
 DRY_RUN=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --keep)      KEEP="${2:-}"; shift 2 ;;
+        --keep)
+            # 值缺失时必须立刻拒跑:「shift 2」在 $#=1 时失败并原地打转,
+            # 而本脚本跑在 continue-on-error 的步骤里,死循环会吃满 job 的 timeout。
+            [ -n "${2:-}" ] || { echo "--keep 需要整数" >&2; exit 2; }
+            KEEP="$2"; shift 2 ;;
         --keep=*)    KEEP="${1#*=}"; shift ;;
         --dry-run)   DRY_RUN=1; shift ;;
         -h|--help)   sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -28,6 +32,15 @@ ROOT="${1:-}"; shift || true
 [ -n "$ROOT" ] || { echo "用法: cleanup-verify-work.sh [--keep N] [--dry-run] <根目录> [<前缀> ...]" >&2; exit 2; }
 [ -d "$ROOT" ] || { echo "根目录不存在: $ROOT" >&2; exit 2; }
 [ $# -gt 0 ] || { echo "至少要给一个前缀(否则会删到不该删的目录)" >&2; exit 2; }
+
+# 前缀是别人传进来的目录名片段,必须卡死边界:空串会变成 -name '*' 把根目录下
+# 每一个目录都当成目标;含通配符则会越过前缀去匹配别的东西。两种都直接拒跑。
+for prefix in "$@"; do
+    case "$prefix" in
+        '')    echo "空前缀:会匹配根目录下所有目录,拒跑" >&2; exit 2 ;;
+        *[*?[]*) echo "前缀含通配符($prefix):会越过前缀边界,拒跑" >&2; exit 2 ;;
+    esac
+done
 
 removed=0
 kept=0

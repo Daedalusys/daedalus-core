@@ -295,6 +295,11 @@ else
             || { bad "podman save 失败,详见 $LOG"; exit 2; }
         podman load -i "$WORK/daedalus-os.oci.tar" >>"$LOG" 2>&1 \
             || { bad "podman load 失败,详见 $LOG"; exit 2; }
+        # 构建会重新 pull $IMAGE,指纹要按 pull 之后的那份算,否则记下的是旧 digest。
+        if artifact_fp_available; then
+            fp_now="$(artifact_fingerprint "$IMAGE")" \
+                || { bad "取不到被测镜像 $IMAGE 的指纹"; exit 2; }
+        fi
         podman run --rm --privileged \
             -v "$WORK":/output \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
@@ -302,8 +307,13 @@ else
             quay.io/centos-bootc/bootc-image-builder:latest \
             --type qcow2 --local "$IMAGE" >>"$LOG" 2>&1 \
             || { bad "bootc-image-builder 失败,详见 $LOG"; exit 2; }
-        found="$(find "$WORK" -name '*.qcow2' -type f | head -1)"
-        [ -n "$found" ] || { bad "builder 报成功但没有产出 .qcow2"; exit 2; }
+        # 只认 $WORK 下、但不含 dl/ 的产出:旧的下载目录里可能躺着上一次
+        # VERIFY_RUN_ID 留下的 qcow2,被这里捡到就会被盖上当前镜像的指纹 ——
+        # 那正是本次事故的错配形态。(builder 把 /output 挂到 $WORK,产物落在
+        # $WORK/qcow2/… ,所以不能只搜 output/ 子目录。)
+        rm -rf "$WORK/dl" 2>/dev/null || true
+        found="$(find "$WORK" -name '*.qcow2' -type f -not -path "$WORK/dl/*" 2>/dev/null | head -1)"
+        [ -n "$found" ] || { bad "builder 报成功但 $WORK 下没有产出 .qcow2"; exit 2; }
         [ "$found" = "$QCOW2" ] || mv "$found" "$QCOW2"
         ok "已构建 $QCOW2($(du -h "$QCOW2" | cut -f1))"
         # 只有本脚本亲手从 $IMAGE 构建出来的产物才有可声明的来源;下载来的

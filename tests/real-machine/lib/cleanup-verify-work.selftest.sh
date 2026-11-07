@@ -38,6 +38,23 @@ st 2 "$rc" "缺前缀 → 拒跑"
 rc=0; bash "$SUT" --keep abc "$tmp" verify-out- >/dev/null 2>&1 || rc=$?
 st 2 "$rc" "--keep 非整数 → 拒跑"
 
+# 7) --keep 不带值 → 拒跑(不能死循环:shift 2 在只剩一个参数时会失败)
+rc=0
+timeout 5 bash "$SUT" --keep "$tmp" verify-out- >/dev/null 2>&1 || rc=$?
+st 2 "$rc" "--keep 不带值 → 拒跑(且不死循环)"
+
+# 8) 空前缀 → 拒跑(空串会让 -name \"*\" 匹配到根目录下每一个目录)
+rc=0; timeout 5 bash "$SUT" --keep 1 "$tmp" "" >/dev/null 2>&1 || rc=$?
+st 2 "$rc" "空前缀 → 拒跑"
+
+# 9) 前缀含通配符 → 拒跑(会越过前缀边界去匹配别的东西)
+rc=0; timeout 5 bash "$SUT" --keep 1 "$tmp" "verify-*" >/dev/null 2>&1 || rc=$?
+st 2 "$rc" "前缀含通配符 → 拒跑"
+
+# 10) 根目录不存在 → 拒跑
+rc=0; bash "$SUT" --keep 1 "$tmp/nonexistent" verify-out- >/dev/null 2>&1 || rc=$?
+st 2 "$rc" "根目录不存在 → 拒跑"
+
 printf '\n'
 if [ "$fail" -eq 0 ]; then echo "RESULT: CLEANUP SELFTEST PASS"; exit 0; fi
 echo "RESULT: CLEANUP SELFTEST FAIL ($fail)"; exit 1
