@@ -25,6 +25,7 @@
 #   VERIFY_RUN_ID    直接指定 CI run id 去下 artifact(默认:自动找最近一次成功的)
 #   VERIFY_MEM       引导内存 MiB(默认 4096)
 #   VERIFY_BOOT_TIMEOUT  等 login 提示符的秒数(默认 180)
+#   VERIFY_SSH_PORT      hostfwd 的宿主端口(默认 2222;多 worker 共用宿主时错开)
 #
 # 安全边界
 #   - 只写 $VERIFY_WORK;不碰宿主任何块设备(不执行 bootc install,不 dd 任何盘)。
@@ -47,6 +48,9 @@ IMAGE="${VERIFY_IMAGE:-ghcr.io/daedalusys/daedalus-os:latest}"
 RUN_ID="${VERIFY_RUN_ID:-}"
 MEM="${VERIFY_MEM:-4096}"
 BOOT_TIMEOUT="${VERIFY_BOOT_TIMEOUT:-180}"
+# hostfwd 端口可配(默认仍是历史的 2222):多台/多个 worker 在同一宿主上跑 QEMU
+# 时靠它错开,避免抢同一个宿主端口。本脚本只读串口,不依赖 SSH。
+SSH_PORT="${VERIFY_SSH_PORT:-2222}"
 QCOW2=""
 ONLY_PREFLIGHT=0
 NO_KVM=0
@@ -288,7 +292,7 @@ TMPDIR="$WORK" "$QEMU_BIN" \
     -m "$MEM" -smp 2 \
     -nographic -no-reboot \
     -drive file="$QCOW2",if=virtio,format=qcow2,snapshot=on \
-    -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+    -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22 \
     -device virtio-net,netdev=net0 \
     </dev/null >>"$SERIAL" 2>&1 &
 qpid=$!
