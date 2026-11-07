@@ -99,9 +99,16 @@ echo "==> 4/5 校验 zip 并解压到安装态 $PLUGIN_DEST"
 # 先解到同一文件系统内的暂存空目录,verify + 解压全绿之后才改名换址:若先清空
 # 安装态再解压,校验失败就把上一次的好产物一并丢掉,仓库里留下一个空壳安装目录。
 mkdir -p "$INSTALL_DIR"
+# 安装态目录树随 rootfs 进镜像,普通用户要能读:镜像首层记录的目录 mode 就是
+# ostree 部署后的 mode,后续构建期 chmod 落在更晚的层,部署时不被采纳。
+chmod 0755 "$INSTALL_DIR"
 STAGE_DEST=$(mktemp -d "$INSTALL_DIR/.${PLUGIN_ID}.install-stage.XXXXXX")
 OLD_DEST="${STAGE_DEST}.old"
 "$PACK_BIN" -verify "$ZIP_OUT" --keep "$STAGE_DEST"
+# mktemp -d 建出的暂存目录是 0700,解压器只按 zip 条目 chmod 文件、不动解压根,
+# 而 mv 保留源目录 mode —— 0700 就这样变成安装态目录(以及镜像首层该目录)的 mode。
+# 这里把解压根与其下所有子目录统一成 0755,顺带消掉 umask 对解压器建目录的影响。
+find "$STAGE_DEST" -type d -exec chmod 0755 {} +
 if [ -d "$PLUGIN_DEST" ]; then
     mv "$PLUGIN_DEST" "$OLD_DEST"
     if ! mv "$STAGE_DEST" "$PLUGIN_DEST"; then
