@@ -17,7 +17,7 @@ guest 以 `snapshot=on` 引导:破坏性操作只落临时 overlay,QEMU 退出�
 | `probe-systemd-sandbox.sh` | A3 | **PASS(5/5)** | 五条反证全部观测到内核/系统的拒绝 |
 | `probe-audit-inode.sh` | A4 | **3 PASS / 1 FAIL** | 追加写保护成立;轮转被 `core#92` 挡住 |
 | `probe-destructive-plugins.sh` | A5 | **PASS(4/4)** | blueprint 回滚复原 sha256;disk.clean / organize.move 三段生命周期成立 |
-| `probe-fs-write-guard.sh` | A6 | **REPRO_DONE** | 缺陷复现成立 → `core#91`(复现任务恒退 0) |
+| `probe-fs-write-guard.sh` | A6 | **REPRO_DONE** | 缺陷复现成立 → `core#91`(本轮为复现任务恒退 0;现已升级为判据任务,修复后结果见 `../2026-11-08-a6-fs-write-guard/`) |
 | `probe-readonly-plugins.sh` | A7 | **PASS(6/6)** | 六条真数据源差异如实记录;dupe 硬链接误报 → `plugins#76` |
 | `probe-plugin-inventory.sh` | A12 | **PASS(2) + NOTE** | root 口径 12 插件全 ok;非 root 口径 copilot degraded → `core#89` |
 | `probe-copilot.sh` | copilot | **1 PASS / 1 FAIL / 2 BLOCKED** | Deno 边界成立;CLI 被 `core#89` 挡住;watchdog 与真 provider 缺 LLM key |
