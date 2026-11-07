@@ -830,7 +830,9 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         env:
-          VERIFY_WORK: ${{ github.workspace }}/switch-verify
+          # 按 run 隔离:同 guest-driver 的缓存污染面 —— 固定路径会让上一次 run 的
+          # qcow2 冒充本次镜像的产物。本腿只有一个消费者,复用收益小,隔离更值。
+          VERIFY_WORK: ${{ github.workspace }}/switch-verify-${{ github.run_id }}
         run: |
           # 验的就是本 run 刚构建的镜像(按 :<sha> 取)
           IMAGE="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/daedalus-os:${{ github.sha }}"
@@ -843,7 +845,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-bootc-switch-evidence
-          path: ${{ github.workspace }}/switch-verify
+          # 与 build step 的 VERIFY_WORK 同步:指向固定路径会收集不到本次 run 的证据。
+          path: ${{ github.workspace }}/switch-verify-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 30
 
