@@ -954,7 +954,7 @@ jobs:
           echo "已晋级 Release 资产: $name"
   # guest 实机探针门禁:把「只有真 guest 才能证伪」的面各做成一条可重跑、有判定、
   # 有证据的探针(A3 沙箱反证 / A4 audit 真 inode / A5 破坏性插件回滚 / A6 fs 写
-  # 守卫复现 / A7 只读插件真数据源 / A12 插件盘点 / copilot / A2 install+upgrade),
+  # 守卫判据 / A7 只读插件真数据源 / A12 插件盘点 / copilot / A2 install+upgrade),
   # 全部经共享驱动派生一次性 verify 镜像后进 guest 执行。
   # 与 deploy-verify-kvm / -bootc-switch / -iso 同宿主同标签,会串行;同样只对出货档
   # 开放 —— 自托管 runner 会执行构建产物,PR 与 feat/* 绝不触发。
@@ -979,7 +979,7 @@ jobs:
       - name: "Guest probes: systemd sandbox / audit inode / destructive / fs guard / readonly / inventory / copilot / bootc install+upgrade"
         # 八个探针串行跑:共享一个 VERIFY_WORK 目录 —— 首个探针派生一次性 verify
         # 镜像与 qcow2,其余复用(driver_init 幂等),否则每条都要重出 ~7GB 镜像。
-        # 任一探针非 0 即 job 红;fs 写守卫是复现任务,恒退 0。
+        # 任一探针非 0 即 job 红(含 fs 写守卫:它已是判据任务)。
         shell: bash
         working-directory: daedalus-core
         env:

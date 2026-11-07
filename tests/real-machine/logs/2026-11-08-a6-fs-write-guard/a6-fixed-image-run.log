@@ -1,0 +1,27 @@
+
+== driver_init · 派生一次性 verify 镜像(本地,不推 registry) ==
+   OK 派生镜像就绪: localhost/daedalus-verify:base(verify 用户: verify,密码随机)
+
+== driver_init · 出 qcow2(从 base 派生镜像) ==
+   OK qcow2: /home/udefine-dev/core91-verify/work-a6/output/qcow2/qcow2/disk.qcow2(1.3G)
+   qemu pid=2076737,串口 → /home/udefine-dev/core91-verify/work-a6/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2226)
+
+== A6-1 · 默认策略下写敏感路径(证据,不作判据) ==
+      /etc/shadow (默认策略)                     isError=yes source=一档 pathguard(AllowedDirs 白名单) text=Error: Access denied: path '/etc/shadow' (resolved: '/etc/shadow') is outside allowed directories (/home, /var/log, /tmp).
+      /proc/sys/kernel/hostname (默认策略)       isError=yes source=一档 pathguard(AllowedDirs 白名单) text=Error: Access denied: path '/proc/sys/kernel/hostname' (resolved: '/proc/sys/kernel/hostname') is outside allowed directories (/home, /var/log, /tmp).
+
+== A6-2 · 隔离实验:白名单临时放宽到含 /etc /proc(guest 内临时副本) ==
+      allowed_dirs = ["/home","/var/log","/tmp","/etc","/proc"]
+      /etc/pam.d/probe-a6-guard (白名单含 /etc)  isError=yes source=二档 ValidateWritePath(只读系统目录) text=Error: write denied: path resolves to read-only system dir \"/etc\"
+   落盘回读 /etc/pam.d/probe-a6-guard: cat: /etc/pam.d/probe-a6-guard: No such file or directory
+
+== A6-3 · 结论 ==
+PASS  A6 二档写守卫生效:/etc/pam.d/probe-a6-guard 在白名单含 /etc 时仍被拒(二档 ValidateWritePath(只读系统目录))
+      /etc/sudoers.d/probe-a6-guard (白名单含 /etc) isError=yes source=二档 ValidateWritePath(只读系统目录) text=Error: write denied: path resolves to read-only system dir \"/etc\"
+PASS  A6 二档写守卫生效:/etc/sudoers.d/probe-a6-guard 在白名单含 /etc 时仍被拒(二档 ValidateWritePath(只读系统目录))
+   issue: Daedalusys/daedalus-core#91
+
+判定: PASS
+exit=0
+DONE
