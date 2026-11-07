@@ -51,8 +51,11 @@ podman() {
         run)
             run_n=$((run_n + 1))
             # 模拟 bootc-image-builder 的产出:没有它就走到「builder 没产出 qcow2」。
+            # EXTRA_QCOW2=1 时额外留一个「删不掉的」旧产物,用来钉住「按名字取第一个
+            # 可能取到旧的」这条失效路径。
             mkdir -p "$VERIFY_WORK/output/qcow2"
             printf 'qcow2' > "$VERIFY_WORK/output/qcow2/disk.qcow2"
+            [ "${EXTRA_QCOW2:-0}" = 1 ] && printf 'old' > "$VERIFY_WORK/output/qcow2/stale.qcow2"
             ;;
         image)
             case "${2:-}" in
@@ -98,6 +101,17 @@ ck "无指纹文件 → 重建" 1 "$build_n"
 build_n=0
 VERIFY_FORCE_REBUILD=1 driver_init >/dev/null 2>&1
 ck "VERIFY_FORCE_REBUILD=1 → 重建" 1 "$build_n"
+
+# 8) 产物目录里多于一个 .qcow2 → 必须拒跑:按名字取第一个可能取到旧的,
+#    而指纹会写到它头上(拿旧产物冒充本次结果)。
+#    先换 digest 逼它走重建路径,否则会走复用分支直接返回。
+PODMAN_DIGEST="sha256:multi"
+rc=0
+( EXTRA_QCOW2=1 driver_init ) >/dev/null 2>&1 || rc=$?
+ck "产物目录有多个 qcow2 → 拒跑" 1 "$rc"
+ck "多个 qcow2 时没有写指纹(不能给不确定的产物盖章)" \
+   1 "$([ -f "$VERIFY_WORK/.qcow2-fingerprint" ] && echo 1 || echo 0)"
+rm -f "$VERIFY_WORK/output/qcow2/stale.qcow2"
 
 printf '\n'
 if [ "$fail_n" -eq 0 ]; then echo "RESULT: SELFTEST PASS"; exit 0; fi

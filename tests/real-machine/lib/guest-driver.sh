@@ -159,8 +159,14 @@ driver_init() {
         quay.io/centos-bootc/bootc-image-builder:latest \
         --local --type qcow2 --output /output "$DRIVER_IMAGE_BASE" >>"$DRIVER_LOG" 2>&1 \
         || { bad "bootc-image-builder 失败,见 $DRIVER_LOG"; exit 1; }
-    DRIVER_QCOW2="$(find "$out/qcow2" -name '*.qcow2' | head -1)"
+    # 产物必须是**这次** builder 出的那一个:目录里若还留着别的 .qcow2(删失败的
+    # 旧产物、builder 自己多产出的),按名字取第一个就可能取到旧的,而下面会把
+    # 本次镜像的指纹写到它头上 —— 那等于拿旧产物冒充本次结果。
+    qcow2_count="$(find "$out/qcow2" -name '*.qcow2' -type f | wc -l | tr -d ' ')"
+    [ "$qcow2_count" = 1 ] || { bad "产物目录里有 $qcow2_count 个 .qcow2,期望恰好 1 个(见 $DRIVER_LOG)"; exit 1; }
+    DRIVER_QCOW2="$(find "$out/qcow2" -name '*.qcow2' -type f | head -1)"
     [ -n "${DRIVER_QCOW2:-}" ] || { bad "builder 没产出 qcow2"; exit 1; }
+    [ -s "$DRIVER_QCOW2" ] || { bad "builder 产出的 qcow2 是空文件: $DRIVER_QCOW2"; exit 1; }
     ok "qcow2: $DRIVER_QCOW2($(du -h "$DRIVER_QCOW2" | cut -f1))"
     # 指纹最后写:中途失败不会留下「产物在但没建完」的指纹。
     artifact_fp_write "$fp_file" "$fp_now"
