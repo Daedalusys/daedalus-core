@@ -22,7 +22,7 @@
 # 环境变量
 #   VERIFY_WORK      工作目录(默认:发起 sudo 那个用户的 ~/daedalus-verify)
 #   VERIFY_IMAGE     用于构建 qcow2 的镜像(默认 ghcr.io/daedalusys/daedalus-os:latest)
-#   VERIFY_RUN_ID    直接指定 CI run id 去下 artifact(默认:自动找最近一次成功的)
+#   VERIFY_RUN_ID    指定 CI run id 去下 artifact(不指定则不下载,改为本地构建)
 #   VERIFY_MEM       引导内存 MiB(默认 4096)
 #   VERIFY_BOOT_TIMEOUT  等 login 提示符的秒数(默认 180)
 #   VERIFY_SSH_PORT      hostfwd 的宿主端口(默认 2222;多 worker 共用宿主时错开)
