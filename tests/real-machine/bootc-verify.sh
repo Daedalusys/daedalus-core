@@ -442,7 +442,7 @@ esac
 cat <<EOF
 
    把这个目录整个带回来(或只带 serial-console.log + bootc-verify.log + lsblk-*.txt)
-   即可作为 Todo 9 的证据入库。
+   即可作为引导证据入库。
 EOF
 
 # 产物被写脏同样算失败:判定不是只关于「能不能引导」,也关于「证据是否可信」。
