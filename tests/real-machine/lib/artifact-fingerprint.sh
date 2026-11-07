@@ -14,7 +14,13 @@ artifact_fingerprint() {
         }
     fi
     digest="$(podman image inspect --format '{{.Digest}}' "$ref" 2>/dev/null)"
-    # 取不到 digest 必须显式失败:空指纹会让所有后续比对都"匹配",正是要消灭的形态。
+    # 本地 `podman build` 出来的镜像没有仓库 manifest,digest 是 <none>;退到 config
+    # digest(.Id)仍能唯一标识这份本地镜像的字节。少了这一步,被测镜像只要是本地
+    # 构建的就永远取不到指纹,门禁会假红 —— 与本工具要消灭的失效形态同类。
+    if [ -z "$digest" ] || [ "$digest" = "<none>" ]; then
+        digest="$(podman image inspect --format '{{.Id}}' "$ref" 2>/dev/null)"
+    fi
+    # 两个都取不到必须显式失败:空指纹会让所有后续比对都"匹配",正是要消灭的形态。
     if [ -z "$digest" ] || [ "$digest" = "<none>" ]; then
         echo "ERROR: 取不到 $ref 的 digest(镜像可能已被 prune)" >&2
         return 1

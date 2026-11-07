@@ -97,7 +97,8 @@ usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --qcow2)          QCOW2="${2:-}"; QCOW2_EXTERNAL=1; shift 2 ;;
+        --qcow2)          [ -n "${2:-}" ] || { echo "--qcow2 需要文件路径(用 --help)" >&2; exit 2; }
+                          QCOW2="$2"; QCOW2_EXTERNAL=1; shift 2 ;;
         --qcow2=*)        QCOW2="${1#*=}"; QCOW2_EXTERNAL=1; shift ;;
         --only-preflight) ONLY_PREFLIGHT=1; shift ;;
         --no-kvm)         NO_KVM=1; shift ;;
@@ -260,33 +261,28 @@ else
         rm -f "$QCOW2"
     fi
 
-    if [ -z "$QCOW2_SOURCE" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    if [ -z "$QCOW2_SOURCE" ] && [ -n "$RUN_ID" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        # 只接受调用方显式指定的 run:自动挑「最近一次成功的 run」拿到的 qcow2 与
+        # $IMAGE 没有任何关联,却会被当成 $IMAGE 的引导证据 —— 那正是本次事故的
+        # 错配形态换了个位置。没指定就自己构建,产物的来源才可声明。
         rid="$RUN_ID"
-        if [ -z "$rid" ]; then
-            info "查询最近一次成功产出 qcow2 的 CI run …"
-            rid="$(gh run list --repo Daedalusys/daedalus-core --workflow build.yml \
-                    --status success --limit 20 --json databaseId \
-                    --jq '.[].databaseId' 2>/dev/null | head -1)"
-        fi
-        if [ -n "$rid" ]; then
-            info "下载 artifact daedalus-os-qcow2-headless(run $rid)"
-            rm -rf "$WORK/dl" 2>/dev/null || true
-            if gh run download "$rid" --repo Daedalusys/daedalus-core \
-                   -n daedalus-os-qcow2-headless -D "$WORK/dl" >>"$LOG" 2>&1; then
-                found="$(find "$WORK/dl" -name '*.qcow2' -type f | head -1)"
-                if [ -n "$found" ]; then
-                    mv "$found" "$QCOW2"
-                    ok "已取得 $QCOW2($(du -h "$QCOW2" | cut -f1))"
-                    QCOW2_SOURCE="ci-artifact"
-                else
-                    bad "artifact 里没有 .qcow2(目录:$(ls -A "$WORK/dl" 2>/dev/null | head -5 | tr '\n' ' '))"
-                fi
+        info "下载 artifact daedalus-os-qcow2-headless(run $rid)"
+        rm -rf "$WORK/dl" 2>/dev/null || true
+        if gh run download "$rid" --repo Daedalusys/daedalus-core \
+               -n daedalus-os-qcow2-headless -D "$WORK/dl" >>"$LOG" 2>&1; then
+            found="$(find "$WORK/dl" -name '*.qcow2' -type f | head -1)"
+            if [ -n "$found" ]; then
+                mv "$found" "$QCOW2"
+                ok "已取得 $QCOW2($(du -h "$QCOW2" | cut -f1))"
+                QCOW2_SOURCE="ci-artifact"
             else
-                bad "gh run download 失败,详见 $LOG"
+                bad "artifact 里没有 .qcow2(目录:$(ls -A "$WORK/dl" 2>/dev/null | head -5 | tr '\n' ' '))"
             fi
         else
-            warn "找不到可用的成功 run id"
+            bad "gh run download 失败,详见 $LOG"
         fi
+    elif [ -z "$QCOW2_SOURCE" ] && [ -z "$RUN_ID" ]; then
+        info "未指定 VERIFY_RUN_ID → 不取 CI artifact(其与 $IMAGE 无可声明的关联),改为自己构建"
     elif [ -z "$QCOW2_SOURCE" ]; then
         warn "gh 不可用或未登录"
     fi

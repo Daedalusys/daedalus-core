@@ -294,6 +294,7 @@ jobs:
           # 缓存产物指纹的判定逻辑(镜像变了必须重建):实机腿靠在它上面判真假,
           # 它退化成 fail-open 会让所有实机结论失真。
           bash tests/real-machine/lib/artifact-fingerprint.selftest.sh
+          bash tests/real-machine/lib/cleanup-verify-work.selftest.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
@@ -799,6 +800,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: Prune stale verify work dirs
+        # runner 是持久化的:按 run 隔离的目录每次留下 ~1.3GB,不清理会把盘吃满,
+        # 之后 qemu 建不出磁盘、podman 存不下镜像 —— 门禁会以"镜像坏了"的样子红。
+        # 只留最近两个(当前 + 上一次便于对照)。清理不是门禁,失败不该改判本 job。
+        if: always()
+        continue-on-error: true
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/cleanup-verify-work.sh --keep 2 \
+            "${{ github.workspace }}" "verify-out-"
+
   # bootc 部署链门禁:在真 KVM 里验证「换部署 + 回滚」真的生效。
   # 与 deploy-verify-kvm 的分工 —— 那条只验「能引导到 login 提示符」(第一跳);
   # 本条验「能切到别的部署、能回滚回来」(第二、三跳)。产品的「原子更新 + 一键回滚」
@@ -849,6 +862,16 @@ jobs:
           path: ${{ github.workspace }}/switch-verify-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Prune stale switch-verify work dirs
+        # 同 deploy-verify-kvm 的理由:runner 持久化,每次 run 留下 ~1.3GB。
+        if: always()
+        continue-on-error: true
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/cleanup-verify-work.sh --keep 2 \
+            "${{ github.workspace }}" "switch-verify-"
 
   # ISO 交付形态门禁:产出 ISO 并验证它真能引导到安装器。
   # 此前 `just iso`(legacy `bootc-image-builder --type iso`)根本构建不出 ISO ——
@@ -1030,4 +1053,14 @@ jobs:
           path: ${{ github.workspace }}/guest-probes-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Prune stale guest-probes work dirs
+        # 同 deploy-verify-kvm 的理由:runner 持久化,每次 run 留下 ~1.3GB。
+        if: always()
+        continue-on-error: true
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/cleanup-verify-work.sh --keep 2 \
+            "${{ github.workspace }}" "guest-probes-"
 

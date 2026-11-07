@@ -44,12 +44,21 @@ st "<无>" "$(artifact_fp_describe "$tmp/nonexistent")" "describe 对缺失文�
 STUB_EXISTS_RC=0
 STUB_INSPECT=""
 STUB_PULL_RC=0
+STUB_ID=""
 podman() {
     case "${1:-}" in
         image)
             case "${2:-}" in
                 exists) return "$STUB_EXISTS_RC" ;;
-                inspect) printf '%s\n' "$STUB_INSPECT" ;;
+                inspect)
+                    # podman inspect 的格式模板在参数里(不是最后一个参数):
+                    # `podman image inspect --format '{{.Digest}}' <ref>`。
+                    case "$*" in
+                        *{{.Id}}*)    printf '%s\n' "$STUB_ID" ;;
+                        *{{.Digest}}*) printf '%s\n' "$STUB_INSPECT" ;;
+                        *)            printf '%s\n' "$STUB_INSPECT" ;;
+                    esac
+                    ;;
             esac
             ;;
         pull) return "$STUB_PULL_RC" ;;
@@ -60,15 +69,17 @@ podman() {
 STUB_EXISTS_RC=0 STUB_INSPECT="sha256:good"
 st "sha256:good" "$(artifact_fingerprint some-ref)" "正常 digest → 原样打印"
 
-STUB_INSPECT="<none>"
-if artifact_fingerprint some-ref >/dev/null 2>&1; then rc=0; else rc=$?; fi
-st 1 "$rc" "digest=<none> → 显式失败(不许当空串成功)"
+STUB_INSPECT="<none>" STUB_ID="sha256:configid"
+st "sha256:configid" "$(artifact_fingerprint some-ref)" "digest=<none> → 回退 .Id(本地构建镜像不假红)"
 
-STUB_INSPECT=""
-if artifact_fingerprint some-ref >/dev/null 2>&1; then rc=0; else rc=$?; fi
-st 1 "$rc" "digest 为空 → 显式失败"
+STUB_INSPECT="" STUB_ID="sha256:configid"
+st "sha256:configid" "$(artifact_fingerprint some-ref)" "digest 为空但 .Id 在 → 回退 .Id"
 
-STUB_EXISTS_RC=1 STUB_INSPECT="" STUB_PULL_RC=1
+STUB_INSPECT="<none>" STUB_ID=""
+if artifact_fingerprint some-ref >/dev/null 2>&1; then rc=0; else rc=$?; fi
+st 1 "$rc" "digest=<none> 且 .Id 也空 → 显式失败"
+
+STUB_EXISTS_RC=1 STUB_INSPECT="" STUB_ID="" STUB_PULL_RC=1
 if artifact_fingerprint some-ref >/dev/null 2>&1; then rc=0; else rc=$?; fi
 st 1 "$rc" "本地无镜像且拉取失败 → 显式失败"
 

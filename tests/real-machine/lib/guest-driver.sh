@@ -33,8 +33,14 @@
 # =============================================================================
 
 # 指纹工具与被测镜像绑定:复用 qcow2 前必须先确认它是由**当前**镜像构建的。
+# 库不在时报「取不到指纹」会把人引向镜像问题,所以先显式判死。
+_fp_lib="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/artifact-fingerprint.sh"
+[ -r "$_fp_lib" ] || {
+    echo "缺少指纹工具库: $_fp_lib(本库必须与 guest-driver.sh 同目录)" >&2
+    exit 2
+}
 # shellcheck source=artifact-fingerprint.sh
-. "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/artifact-fingerprint.sh"
+. "$_fp_lib"
 
 # 组/用户/口令:与 78-dev-user.sh 的要点一致(见下方 driver_derive 注释)。
 DRIVER_USER="verify"
@@ -124,7 +130,7 @@ driver_init() {
         podman rmi -f "$DRIVER_IMAGE_BASE" >/dev/null 2>&1 || true
         DRIVER_QCOW2=""
     elif artifact_fp_match "$fp_file" "$fp_now" \
-         && [ -n "${DRIVER_QCOW2:-}" ] && [ -s "$DRIVER_PASS_FILE" ] \
+         && [ -s "${DRIVER_QCOW2:-}" ] && [ -s "$DRIVER_PASS_FILE" ] \
          && podman image exists "$DRIVER_IMAGE_BASE"; then
         ok "复用已构建产物(qcow2 与被测镜像指纹一致: $fp_now)"
         DRIVER_VPASS="$(cat "$DRIVER_PASS_FILE")"

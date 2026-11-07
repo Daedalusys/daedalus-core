@@ -52,7 +52,7 @@ podman() {
             run_n=$((run_n + 1))
             # 模拟 bootc-image-builder 的产出:没有它就走到「builder 没产出 qcow2」。
             mkdir -p "$VERIFY_WORK/output/qcow2"
-            : > "$VERIFY_WORK/output/qcow2/disk.qcow2"
+            printf 'qcow2' > "$VERIFY_WORK/output/qcow2/disk.qcow2"
             ;;
         image)
             case "${2:-}" in
@@ -63,13 +63,21 @@ podman() {
     return 0
 }
 mkdir -p "$VERIFY_WORK/output/qcow2"
-: > "$VERIFY_WORK/output/qcow2/disk.qcow2"
+# 产物必须非空:复用判据用 -s,空文件等于「没有产物」(零字节残留不许被当 qcow2)。
+printf 'qcow2' > "$VERIFY_WORK/output/qcow2/disk.qcow2"
 head -c6 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$VERIFY_WORK/.verify-pass"
 artifact_fp_write "$VERIFY_WORK/.qcow2-fingerprint" "$PODMAN_DIGEST"
 driver_init >/dev/null 2>&1
 ck "幂等 driver_init rc=0" 0 $?
 ck "幂等:已有产物时不重跑 podman build" 0 "$build_n"
 ck "幂等:qcow2 路径被识别" 1 "$([ -n "${DRIVER_QCOW2:-}" ] && echo 1 || echo 0)"
+
+# 4b) 零字节 qcow2 + 指纹一致 → 仍必须重建(指纹对得上不代表产物可用)。
+: > "$VERIFY_WORK/output/qcow2/disk.qcow2"
+build_n=0
+driver_init >/dev/null 2>&1
+ck "空 qcow2(指纹一致)→ 重建" 1 "$build_n"
+ck "空 qcow2 重建后产物非空" 1 "$([ -s "$VERIFY_WORK/output/qcow2/disk.qcow2" ] && echo 1 || echo 0)"
 
 # 5) 本次事故的回归钉子:镜像换了 digest(qcow2 还在)→ 必须重建,不许复用。
 #    旧判据只看「文件在 + 派生镜像在」,这样就会拿上一次 run 的产物冒充本次结果。
