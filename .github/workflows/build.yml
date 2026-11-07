@@ -291,6 +291,9 @@ jobs:
           # 端口冲突要与「产物引导失败」区分开:那条判定退化(把冲突当成引导失败)
           # 会让整条实机门禁红错方向,而这种退化只有自检能挡住。
           bash tests/real-machine/lib/ssh-port.selftest.sh
+          # 缓存产物指纹的判定逻辑(镜像变了必须重建):实机腿靠在它上面判真假,
+          # 它退化成 fail-open 会让所有实机结论失真。
+          bash tests/real-machine/lib/artifact-fingerprint.selftest.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
@@ -774,7 +777,9 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         env:
-          VERIFY_WORK: ${{ github.workspace }}/verify-out
+          # 按 run 隔离:自托管 runner 的工作目录跨 run 持久化,固定路径会让上一次
+          # run 的产物串到这一次。指纹机制管同一 run 内的复用,这里管跨 run。
+          VERIFY_WORK: ${{ github.workspace }}/verify-out-${{ github.run_id }}
         run: |
           qcow2="$(find "${{ github.workspace }}/qcow2" -name '*.qcow2' -type f | head -1)"
           [ -n "$qcow2" ] || { echo "ERROR: artifact 里没有 .qcow2"; exit 1; }
@@ -789,7 +794,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-kvm-evidence
-          path: ${{ github.workspace }}/verify-out
+          # 与 build step 的 VERIFY_WORK 同步:指向固定路径会收集不到本次 run 的证据。
+          path: ${{ github.workspace }}/verify-out-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 30
 
@@ -988,7 +994,9 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         env:
-          VERIFY_WORK: ${{ github.workspace }}/guest-probes
+          # 按 run 隔离:自托管 runner 的工作目录跨 run 持久化,固定路径会让上一次
+          # run 的 qcow2 冒充本次镜像的产物(2026-11-07 实测的假红就是这么来的)。
+          VERIFY_WORK: ${{ github.workspace }}/guest-probes-${{ github.run_id }}
         run: |
           IMAGE="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/daedalus-os:${{ github.sha }}"
           echo "被测镜像: $IMAGE"
@@ -1015,7 +1023,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-guest-probes-evidence
-          path: ${{ github.workspace }}/guest-probes
+          # 与探针步骤的 VERIFY_WORK 同步:指向固定路径会收集不到本次 run 的证据。
+          path: ${{ github.workspace }}/guest-probes-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 30
 
