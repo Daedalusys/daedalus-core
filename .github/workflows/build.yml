@@ -793,16 +793,11 @@ jobs:
           # 按 run 隔离:自托管 runner 的工作目录跨 run 持久化,固定路径会让上一次
           # run 的产物串到这一次。指纹机制管同一 run 内的复用,这里管跨 run。
           VERIFY_WORK: ${{ github.workspace }}/verify-out-${{ github.run_id }}
-          # 本次构建推出的 manifest digest。本腿通常用本 run 的 qcow2 artifact
-          # (不查指纹),但一旦 artifact 缺失退化为自己构建,就要靠它确认
-          # 拉下来的镜像是本次产物,而不是 runner 上残留的旧内容。
-          VERIFY_IMAGE_DIGEST: ${{ needs.build-image.outputs.image_digest }}
         run: |
           qcow2="$(find "${{ github.workspace }}/qcow2" -name '*.qcow2' -type f | head -1)"
           [ -n "$qcow2" ] || { echo "ERROR: artifact 里没有 .qcow2"; exit 1; }
-          # sudo 会清环境变量,VERIFY_* 必须显式透传
-          sudo VERIFY_WORK="$VERIFY_WORK" VERIFY_IMAGE_DIGEST="$VERIFY_IMAGE_DIGEST" \
-            bash tests/real-machine/bootc-verify.sh --qcow2 "$qcow2"
+          # sudo 会清环境变量,VERIFY_WORK 必须显式透传
+          sudo VERIFY_WORK="$VERIFY_WORK" bash tests/real-machine/bootc-verify.sh --qcow2 "$qcow2"
 
       - name: Upload boot evidence
         # 引导失败时证据照样回传:串口日志是排查 panic 的唯一线索。
@@ -944,9 +939,14 @@ jobs:
           # dmsquash-live 任何一处坏掉都必须红)。脚本自身的默认值也是 1,
           # 这里显式写出来是为了让「出货档必须硬门禁」这件事在 workflow 里可见、可审。
           VERIFY_REQUIRE_INSTALL: "1"
+          # 本次构建推出的 manifest digest。ISO 是拿 $IMAGE 派生 payload 再构建的,
+          # 本地缓存若还是旧内容,产出的「可引导 + 装完能 login」就是给旧镜像的假绿。
+          VERIFY_IMAGE_DIGEST: ${{ needs.build-image.outputs.image_digest }}
         run: |
           IMAGE="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/daedalus-os:${{ github.sha }}"
+          # sudo 会清环境变量,VERIFY_* 必须显式透传
           sudo VERIFY_IMAGE="$IMAGE" VERIFY_WORK="$VERIFY_WORK" \
+            VERIFY_IMAGE_DIGEST="$VERIFY_IMAGE_DIGEST" \
             bash tests/real-machine/iso-verify.sh
 
       - name: Upload ISO verify evidence

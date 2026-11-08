@@ -230,5 +230,18 @@ st 0 "$(VERIFY_IMAGE_DIGEST=sha256:expected artifact_fp_refresh ghcr.io/x/y:tag 
    "期望值命中 RepoDigests 中的一条 → 放行"
 st 0 "$(pull_calls)" "期望值命中 RepoDigests 中的一条 → 没有调用 podman pull"
 
+# 21) 静态防回归:全仓脚本不得再用「本地有同名 tag 就跳过拉取」的判据 ——
+#     那正是本次事故的形态(同 tag 被重推成不同内容,旧缓存被当成新镜像)。
+#     自检文件自身包含这条 grep 模式,故排除它,否则守门会扫到自己。
+REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
+st "" "$(grep -rn 'podman image exists[^|]*|| *podman pull' "$REPO_ROOT" \
+            --include='*.sh' --exclude='artifact-fingerprint.selftest.sh' 2>/dev/null || true)" \
+   "全仓脚本里没有「image exists || podman pull」形态的判据"
+
+# 22) iso 腿必须走同一条新鲜度判据:它拿 $IMAGE 派生 payload 再出 ISO,
+#     用旧镜像产出的「可引导 + 装完能 login」是假绿。
+st 0 "$(grep -q 'artifact_fp_refresh' "$REPO_ROOT/tests/real-machine/iso-verify.sh" 2>/dev/null && echo 0 || echo 1)" \
+   "iso-verify.sh 走共享的新鲜度判据"
+
 if [ "$fail" -eq 0 ]; then echo "RESULT: ARTIFACT-FP SELFTEST PASS"; exit 0; fi
 echo "RESULT: ARTIFACT-FP SELFTEST FAIL ($fail)"; exit 1
