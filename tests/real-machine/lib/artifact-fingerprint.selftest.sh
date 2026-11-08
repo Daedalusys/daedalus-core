@@ -50,6 +50,7 @@ stub_reset() {
     STUB_REMOTE_DIGEST=""
     STUB_REMOTE_RC=0
     STUB_LOCAL_DIGEST=""
+    STUB_PULL_STALE=0
     : > "$PULL_COUNT"
 }
 pull_calls() { wc -l < "$PULL_COUNT" | tr -d ' '; }
@@ -63,9 +64,16 @@ podman() {
                     # podman inspect 的格式模板在参数里(不是最后一个参数):
                     # `podman image inspect --format '{{.Digest}}' <ref>`。
                     case "$*" in
-                        *{{.Id}}*)     printf '%s\n' "$STUB_ID" ;;
-                        *{{.Digest}}*) printf '%s\n' "${STUB_LOCAL_DIGEST:-$STUB_INSPECT}" ;;
-                        *)             printf '%s\n' "$STUB_INSPECT" ;;
+                        *{{.Id}}*)         printf '%s\n' "$STUB_ID" ;;
+                        *{{.RepoDigests}}*) if [ -n "${STUB_REPO_DIGESTS:-}" ]; then
+                                               printf '%s\n' "$STUB_REPO_DIGESTS"
+                                           elif [ -n "${STUB_LOCAL_DIGEST:-${STUB_INSPECT}}" ]; then
+                                               printf '[example.invalid/x@%s]\n' "${STUB_LOCAL_DIGEST:-$STUB_INSPECT}"
+                                           else
+                                               printf '[]\n'
+                                           fi ;;
+                        *{{.Digest}}*)     printf '%s\n' "${STUB_LOCAL_DIGEST:-$STUB_INSPECT}" ;;
+                        *)                 printf '%s\n' "$STUB_INSPECT" ;;
                     esac
                     ;;
             esac
@@ -73,7 +81,11 @@ podman() {
         pull)
             # 计数落文件:调用方是命令替换里的子 shell,变量改不回去。
             printf 'pull\n' >> "$PULL_COUNT"
-            return "$STUB_PULL_RC"
+            [ "$STUB_PULL_RC" = "0" ] || return "$STUB_PULL_RC"
+            # 模拟真实拉取的结果:拉完本地就是远端那份内容。
+            # STUB_PULL_STALE=1 用来模拟「registry 里这个 tag 还不是期望的那份」。
+            [ "${STUB_PULL_STALE:-0}" = "1" ] || STUB_LOCAL_DIGEST="$STUB_REMOTE_DIGEST"
+            return 0
             ;;
     esac
     return 0
@@ -172,6 +184,51 @@ stub_reset
 STUB_REMOTE_DIGEST=sha256:new STUB_PULL_RC=1
 st 1 "$(artifact_fp_refresh ghcr.io/x/y:tag >/dev/null 2>&1 && echo 0 || echo 1)" \
    "本地无镜像且拉取失败 → 失败"
+
+# 16) 构建腿显式传下本次产出的 digest(VERIFY_IMAGE_DIGEST):有它就不问 registry,
+#     本地不一致直接拉 —— registry 还没生效也不会用旧镜像判定。
+#     桩里 STUB_REMOTE_DIGEST 表示「拉取之后本地会变成的那份内容」。
+stub_reset
+STUB_REMOTE_RC=1                       # 远端查询若被调用会失败,用它证明这条路径没查 registry
+STUB_LOCAL_DIGEST=sha256:stale
+STUB_REMOTE_DIGEST=sha256:expected
+st 0 "$(VERIFY_IMAGE_DIGEST=sha256:expected artifact_fp_refresh ghcr.io/x/y:tag 2>/dev/null && echo 0 || echo 1)" \
+   "VERIFY_IMAGE_DIGEST 与本地不一致 → 拉新后放行(未查 registry)"
+st 1 "$(pull_calls)" "VERIFY_IMAGE_DIGEST 与本地不一致 → 确实调用了 podman pull"
+
+# 17) 显式期望值覆盖「本地根本没有该镜像」:照样拉
+stub_reset
+STUB_REMOTE_RC=1
+STUB_REMOTE_DIGEST=sha256:expected
+st 0 "$(VERIFY_IMAGE_DIGEST=sha256:expected artifact_fp_refresh ghcr.io/x/y:tag 2>/dev/null && echo 0 || echo 1)" \
+   "VERIFY_IMAGE_DIGEST + 本地无镜像 → 拉新"
+st 1 "$(pull_calls)" "VERIFY_IMAGE_DIGEST + 本地无镜像 → 确实调用了 podman pull"
+
+# 18) 拉了之后仍对不上期望值 → 显式失败(registry 里还不是本次那份,
+#     继续判定等于拿别的镜像的结论冒充本次结果)
+stub_reset
+STUB_LOCAL_DIGEST=sha256:stale
+STUB_REMOTE_DIGEST=sha256:somethingelse
+STUB_PULL_STALE=1
+st 1 "$(VERIFY_IMAGE_DIGEST=sha256:expected artifact_fp_refresh ghcr.io/x/y:tag >/dev/null 2>&1 && echo 0 || echo 1)" \
+   "拉取后仍与 VERIFY_IMAGE_DIGEST 不一致 → 失败"
+
+# 19) 本地已经就是本次产出的那份 → 不拉(只做一次本地 inspect)
+stub_reset
+STUB_REMOTE_RC=1
+STUB_LOCAL_DIGEST=sha256:expected
+st 0 "$(VERIFY_IMAGE_DIGEST=sha256:expected artifact_fp_refresh ghcr.io/x/y:tag 2>/dev/null && echo 0 || echo 1)" \
+   "VERIFY_IMAGE_DIGEST 与本地一致 → 放行"
+st 0 "$(pull_calls)" "VERIFY_IMAGE_DIGEST 与本地一致 → 没有调用 podman pull"
+
+# 20) 同一个 tag 挂着多条 RepoDigests(重推后旧的不会消失),期望值只在其中一条上
+#     → 内容其实就是期望那份,不许因为 .Digest 取到另一条就又拉一遍 2.2GB。
+stub_reset
+STUB_LOCAL_DIGEST=sha256:other
+STUB_REPO_DIGESTS="[ghcr.io/x/y@sha256:other ghcr.io/x/y@sha256:expected]"
+st 0 "$(VERIFY_IMAGE_DIGEST=sha256:expected artifact_fp_refresh ghcr.io/x/y:tag 2>/dev/null && echo 0 || echo 1)" \
+   "期望值命中 RepoDigests 中的一条 → 放行"
+st 0 "$(pull_calls)" "期望值命中 RepoDigests 中的一条 → 没有调用 podman pull"
 
 if [ "$fail" -eq 0 ]; then echo "RESULT: ARTIFACT-FP SELFTEST PASS"; exit 0; fi
 echo "RESULT: ARTIFACT-FP SELFTEST FAIL ($fail)"; exit 1

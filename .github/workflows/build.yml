@@ -324,6 +324,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # 本次推上去的 manifest digest:实机腿用它做零网络的强校验(不必问 registry,
+    # 也不会被「registry 还没生效」骗过)。
+    outputs:
+      image_digest: ${{ steps.push.outputs.digest }}
     strategy:
       fail-fast: false
       matrix:
@@ -534,6 +538,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push OCI image to ghcr.io
+        id: push
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.PUSH }}
         shell: bash
         working-directory: daedalus-core
@@ -548,8 +553,14 @@ jobs:
           # attempt 4/5 在 899f820c… 层稳定复现)。用 zstd 重压缩推送 → 所有层
           # digest 全新 → HEAD 一律 404 → 正常上传。本地镜像不受影响,
           # 仅改变推送时的压缩格式。
-          podman push --compression-format zstd "${IMAGE}:${{ github.sha }}"
+          # 把本次推上去的 manifest digest 交给实机腿:它们据此做零网络的强校验,
+          # 不必再问 registry(也就不会撞上「registry 尚未生效」的短暂不一致)。
+          # 取 push 自己写出的 digestfile,而不是事后 inspect 镜像:zstd 重压缩
+          # 会改层 digest,只有推送动作自己知道最终写进 registry 的 manifest 是哪个。
+          podman push --compression-format zstd --digestfile "$RUNNER_TEMP/pushed.digest" \
+            "${IMAGE}:${{ github.sha }}"
           echo "Pushed: ${IMAGE}:${{ github.sha }}"
+          echo "digest=$(cat "$RUNNER_TEMP/pushed.digest")" >> "$GITHUB_OUTPUT"
 
       - name: Promote image to :latest and :upstream
         # 出货档:main 与 tag 是既成事实,dispatch 需显式 PUSH=true(input 默认 false)。
@@ -782,11 +793,16 @@ jobs:
           # 按 run 隔离:自托管 runner 的工作目录跨 run 持久化,固定路径会让上一次
           # run 的产物串到这一次。指纹机制管同一 run 内的复用,这里管跨 run。
           VERIFY_WORK: ${{ github.workspace }}/verify-out-${{ github.run_id }}
+          # 本次构建推出的 manifest digest。本腿通常用本 run 的 qcow2 artifact
+          # (不查指纹),但一旦 artifact 缺失退化为自己构建,就要靠它确认
+          # 拉下来的镜像是本次产物,而不是 runner 上残留的旧内容。
+          VERIFY_IMAGE_DIGEST: ${{ needs.build-image.outputs.image_digest }}
         run: |
           qcow2="$(find "${{ github.workspace }}/qcow2" -name '*.qcow2' -type f | head -1)"
           [ -n "$qcow2" ] || { echo "ERROR: artifact 里没有 .qcow2"; exit 1; }
-          # sudo 会清环境变量,VERIFY_WORK 必须显式透传
-          sudo VERIFY_WORK="$VERIFY_WORK" bash tests/real-machine/bootc-verify.sh --qcow2 "$qcow2"
+          # sudo 会清环境变量,VERIFY_* 必须显式透传
+          sudo VERIFY_WORK="$VERIFY_WORK" VERIFY_IMAGE_DIGEST="$VERIFY_IMAGE_DIGEST" \
+            bash tests/real-machine/bootc-verify.sh --qcow2 "$qcow2"
 
       - name: Upload boot evidence
         # 引导失败时证据照样回传:串口日志是排查 panic 的唯一线索。
@@ -847,10 +863,15 @@ jobs:
           # 按 run 隔离:同 guest-driver 的缓存污染面 —— 固定路径会让上一次 run 的
           # qcow2 冒充本次镜像的产物。本腿只有一个消费者,复用收益小,隔离更值。
           VERIFY_WORK: ${{ github.workspace }}/switch-verify-${{ github.run_id }}
+          # 本次构建推出的 manifest digest:本地那份对不上就必须重拉,
+          # 不需要（也不信任）registry 的即时状态。
+          VERIFY_IMAGE_DIGEST: ${{ needs.build-image.outputs.image_digest }}
         run: |
           # 验的就是本 run 刚构建的镜像(按 :<sha> 取)
           IMAGE="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/daedalus-os:${{ github.sha }}"
+          # sudo 会清环境变量,两个 VERIFY_* 都要显式透传
           sudo VERIFY_IMAGE="$IMAGE" VERIFY_WORK="$VERIFY_WORK" \
+            VERIFY_IMAGE_DIGEST="$VERIFY_IMAGE_DIGEST" \
             bash tests/real-machine/bootc-switch-verify.sh
 
       - name: Upload switch/rollback evidence
@@ -1024,9 +1045,13 @@ jobs:
           # 按 run 隔离:自托管 runner 的工作目录跨 run 持久化,固定路径会让上一次
           # run 的 qcow2 冒充本次镜像的产物(2026-11-07 实测的假红就是这么来的)。
           VERIFY_WORK: ${{ github.workspace }}/guest-probes-${{ github.run_id }}
+          # 本次构建推出的 manifest digest:八个探针共用同一个 VERIFY_WORK,
+          # 首个探针据此把本地镜像对齐到本次产物,后续探针命中同一指纹直接复用。
+          VERIFY_IMAGE_DIGEST: ${{ needs.build-image.outputs.image_digest }}
         run: |
           IMAGE="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/daedalus-os:${{ github.sha }}"
           echo "被测镜像: $IMAGE"
+          echo "本次构建 digest: ${VERIFY_IMAGE_DIGEST:-<未传>}"
           fail=0
           for p in \
             probe-systemd-sandbox \
@@ -1039,7 +1064,9 @@ jobs:
             probe-bootc-install-upgrade \
           ; do
             echo "########## $p ##########"
+            # sudo 会清环境变量,VERIFY_* 全都要显式透传
             sudo VERIFY_IMAGE="$IMAGE" VERIFY_WORK="$VERIFY_WORK" \
+              VERIFY_IMAGE_DIGEST="$VERIFY_IMAGE_DIGEST" \
               bash "tests/real-machine/$p.sh" || fail=1
           done
           exit "$fail"

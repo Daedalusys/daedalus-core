@@ -30,6 +30,28 @@ artifact_fp_remote_digest() {
     printf '%s\n' "$d"
 }
 
+# 本地这份 ref 的 manifest digest。取不到返回空串:调用方据「空 != 期望值」判为需要拉新。
+artifact_fp_local_digest() {
+    podman image inspect --format '{{.Digest}}' "$1" 2>/dev/null || true
+}
+
+# 本地这份 ref 记录的所有 RepoDigests。同一个 tag 可以同时挂着两条(重推后旧的
+# 那条不会消失),而 .Digest 只取其中一个 —— 只认 .Digest 会把「内容其实就是期望值」
+# 的镜像误判成旧内容,进而拉一遍 2.2GB 再报错。
+artifact_fp_local_repo_digests() {
+    podman image inspect --format '{{.RepoDigests}}' "$1" 2>/dev/null || true
+}
+
+# 本地这份内容是否就是 expected 那版。判据取「任一 RepoDigest 或 .Digest 命中」。
+artifact_fp_has_digest() {
+    local ref="$1" want="$2" d
+    [ "$(artifact_fp_local_digest "$ref")" = "$want" ] && return 0
+    for d in $(artifact_fp_local_repo_digests "$ref" | tr -d '[],' ); do
+        [ "${d#*@}" = "$want" ] && return 0
+    done
+    return 1
+}
+
 # 只比对 manifest digest 决定要不要拉:tag 形态不承载「内容是否变过」的信息 ——
 # CI 用 :${github.sha} 也会在 workflow_dispatch 重跑时被重推成不同内容。
 artifact_fp_refresh() {
@@ -41,12 +63,30 @@ artifact_fp_refresh() {
         echo "WARN: VERIFY_OFFLINE=1 —— 未校验 $ref 的新鲜度,可能在旧镜像上判定" >&2
         return 0
     fi
+    # 构建腿把本次推出的 digest 显式传下来:有它就不必问 registry,也避免
+    # 「registry 恰好还没生效」造成的短暂不一致。
+    if [ -n "${VERIFY_IMAGE_DIGEST:-}" ]; then
+        if ! artifact_fp_has_digest "$ref" "$VERIFY_IMAGE_DIGEST"; then
+            echo "本地镜像 digest 与本次构建产出的不一致 → 拉新。ref=$ref 期望=$VERIFY_IMAGE_DIGEST 本地=$(artifact_fp_local_digest "$ref" | sed 's/^$/ <无>/')" >&2
+            podman pull "$ref" >/dev/null 2>&1 || {
+                echo "ERROR: 拉取 $ref 失败" >&2
+                return 1
+            }
+            # 拉完仍对不上:registry 里这个 tag 的内容还不是本次构建的那份。
+            # 继续判定就是拿别的镜像的结论冒充本次结果,故显式失败。
+            if ! artifact_fp_has_digest "$ref" "$VERIFY_IMAGE_DIGEST"; then
+                echo "ERROR: 拉取后 $ref 的 digest 是 $(artifact_fp_local_digest "$ref" | sed 's/^$/ <无>/'),不是本次构建产出的 $VERIFY_IMAGE_DIGEST" >&2
+                return 1
+            fi
+        fi
+        return 0
+    fi
     remote="$(artifact_fp_remote_digest "$ref")" || {
         echo "ERROR: 查不到 $ref 的远端 digest,拒绝在未确认新鲜度的镜像上判定" >&2
         return 1
     }
-    local_digest="$(podman image inspect --format '{{.Digest}}' "$ref" 2>/dev/null || true)"
-    if [ "$remote" != "$local_digest" ]; then
+    local_digest="$(artifact_fp_local_digest "$ref")"
+    if ! artifact_fp_has_digest "$ref" "$remote"; then
         echo "镜像内容已变 → 拉新。ref=$ref 远端=$remote 本地=${local_digest:-<无>}" >&2
         podman pull "$ref" >/dev/null 2>&1 || {
             echo "ERROR: 拉取 $ref 失败" >&2
