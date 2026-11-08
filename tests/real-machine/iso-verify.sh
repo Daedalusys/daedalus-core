@@ -94,6 +94,15 @@ die()  { bad "$*"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# 被测镜像的新鲜度与 guest-driver 走同一条判据(远端 manifest digest),不另立一套:
+# 本地缓存的同名 tag 可能是旧内容,而 ISO 是拿它派生 payload 再构建的 ——
+# 用旧镜像产出的「可引导 + 装完能 login」是假绿,比假红更危险。
+# 脚本被单独拷走时判定函数不在:那种情形退化为「无条件重拉」而不是「本地有就跳过」。
+if [ -r "$SCRIPT_DIR/lib/artifact-fingerprint.sh" ]; then
+    # shellcheck source=lib/artifact-fingerprint.sh
+    . "$SCRIPT_DIR/lib/artifact-fingerprint.sh"
+fi
+
 QEMU_PID=""
 cleanup() {
     [ -n "${QEMU_PID:-}" ] && { kill "$QEMU_PID" 2>/dev/null; sleep 1; kill -9 "$QEMU_PID" 2>/dev/null; }
@@ -184,7 +193,16 @@ RUN set -eux; \\
         /etc/systemd/system/multi-user.target.wants/daedalus-iso-autoinstall.service; \\
     echo iso-payload-ok
 EOF
-podman image exists "$IMAGE" || podman pull "$IMAGE" >>"$LOG" 2>&1 || die "拉取 $IMAGE 失败"
+# 新鲜度判定必须在派生 payload 之前:payload 镜像复刻的是这一步之后的那份内容。
+if [ "$(type -t artifact_fp_refresh 2>/dev/null)" = function ]; then
+    artifact_fp_refresh "$IMAGE" || die "无法确认 $IMAGE 的新鲜度(远端 digest 查不到或拉取失败)"
+    podman image exists "$IMAGE" >/dev/null 2>&1 || die "$IMAGE 在本地不存在且未能拉取"
+else
+    # 判定函数缺失(脚本被单独拷到别处跑):不能退回「本地有就跳过」——
+    # 那正是用旧镜像产出假绿的那条路径,宁可多拉一次。
+    warn "找不到 artifact-fingerprint.sh → 无条件重拉 $IMAGE(不做新鲜度比对)"
+    podman pull "$IMAGE" >>"$LOG" 2>&1 || die "拉取 $IMAGE 失败"
+fi
 podman build --security-opt label=disable -t localhost/daedalus-iso-payload -f "$VM/Containerfile" "$VM" >>"$LOG" 2>&1 \
     || { bad "派生 payload 镜像失败,见 $LOG"; exit 1; }
 ok "payload 镜像就绪: localhost/daedalus-iso-payload"

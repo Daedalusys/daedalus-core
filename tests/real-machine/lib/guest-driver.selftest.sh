@@ -45,6 +45,9 @@ ck "全 PASS → driver_exit 零" 0 $?
 PODMAN_DIGEST="sha256:cur"
 build_n=0
 run_n=0
+# skopeo 桩:新鲜度判据要问远端 digest,而这里测的是复用逻辑,不是联网行为。
+# 远端报与本地相同的 digest → 判为「已是最新」,不触发 pull。
+skopeo() { printf '%s\n' "$PODMAN_DIGEST"; }
 podman() {
     case "${1:-}" in
         build) build_n=$((build_n + 1)) ;;

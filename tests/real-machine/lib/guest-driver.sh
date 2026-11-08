@@ -155,7 +155,8 @@ driver_init() {
     DRIVER_VPASS="$(cat "$DRIVER_PASS_FILE")"
 
     say "driver_init · 派生一次性 verify 镜像(本地,不推 registry)"
-    podman image exists "$DRIVER_IMAGE" || podman pull "$DRIVER_IMAGE" >>"$DRIVER_LOG" 2>&1 || { bad "拉取 $DRIVER_IMAGE 失败"; exit 1; }
+    # 被测镜像的新鲜度由上面的 artifact_fingerprint 统一负责;这里再判一次
+    # 「本地有没有」就会绕过远端比对,让旧内容冒充本次镜像。
     driver_derive "$DRIVER_IMAGE" "$DRIVER_IMAGE_BASE" ""
     ok "派生镜像就绪: $DRIVER_IMAGE_BASE(verify 用户: $DRIVER_USER,密码随机)"
 
