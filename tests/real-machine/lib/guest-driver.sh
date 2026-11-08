@@ -32,6 +32,16 @@
 #   DRIVER_QEMU_EXTRA_ARGS  追加到 qemu 命令行的原始参数串(如再挂一块盘)
 # =============================================================================
 
+# 指纹工具与被测镜像绑定:复用 qcow2 前必须先确认它是由**当前**镜像构建的。
+# 库不在时报「取不到指纹」会把人引向镜像问题,所以先显式判死。
+_fp_lib="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/artifact-fingerprint.sh"
+[ -r "$_fp_lib" ] || {
+    echo "缺少指纹工具库: $_fp_lib(本库必须与 guest-driver.sh 同目录)" >&2
+    exit 2
+}
+# shellcheck source=artifact-fingerprint.sh
+. "$_fp_lib"
+
 # 组/用户/口令:与 78-dev-user.sh 的要点一致(见下方 driver_derive 注释)。
 DRIVER_USER="verify"
 
@@ -95,8 +105,9 @@ EOF
         || { bad "派生镜像 $tag 构建失败,见 $DRIVER_LOG"; driver_cleanup; exit 1; }
 }
 
-# driver_init —— 幂等:qcow2 与派生镜像已就绪则直接复用(重跑探针时省掉 ~7GB 构建)。
-# 导出:DRIVER_QCOW2 / DRIVER_IMAGE_BASE(派生基线 tag)
+# driver_init —— 幂等:qcow2 与派生镜像已就绪**且由当前被测镜像构建**时复用
+# (重跑探针时省掉 ~7GB 构建)。
+# 导出:DRIVER_QCOW2 / DRIVER_IMAGE_BASE
 driver_init() {
     local vm="$DRIVER_WORK/verify-image"
     local out="$DRIVER_WORK/output"
@@ -107,11 +118,36 @@ driver_init() {
     : > "$DRIVER_SERIAL"
     DRIVER_QCOW2="$(find "$out/qcow2" -name '*.qcow2' 2>/dev/null | head -1)"
 
-    if [ -n "${DRIVER_QCOW2:-}" ] && [ -s "$DRIVER_PASS_FILE" ] \
-       && podman image exists "$DRIVER_IMAGE_BASE"; then
-        ok "复用已构建产物: qcow2=$DRIVER_QCOW2"
+    # 复用判据必须包含「产物与当前被测镜像同源」:只看文件在不在,会让上一次
+    # run 留下的旧 qcow2 冒充本次镜像的产物,门禁结论因此失真。
+    local fp_file="$DRIVER_WORK/.qcow2-fingerprint" fp_now
+    if fp_now="$(artifact_fingerprint "$DRIVER_IMAGE")"; then :; else
+        bad "取不到被测镜像 $DRIVER_IMAGE 的指纹"; exit 1
+    fi
+    # 产物必须是**唯一**的那一个:目录里有多个 .qcow2 时,按名字取第一个就可能
+    # 取到旧的,而指纹会被写到它头上。复用与重建两条路都守这条。
+    local qcow2_count
+    qcow2_count="$(find "$out/qcow2" -name '*.qcow2' -type f 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "${VERIFY_FORCE_REBUILD:-0}" = "1" ]; then
+        say "VERIFY_FORCE_REBUILD=1 → 丢弃旧产物重建"
+        rm -f "$DRIVER_QCOW2" 2>/dev/null || true
+        podman rmi -f "$DRIVER_IMAGE_BASE" >/dev/null 2>&1 || true
+        DRIVER_QCOW2=""
+        artifact_fp_remove "$fp_file"
+    elif artifact_fp_match "$fp_file" "$fp_now" && [ "$qcow2_count" = 1 ] \
+         && [ -s "${DRIVER_QCOW2:-}" ] && [ -s "$DRIVER_PASS_FILE" ] \
+         && podman image exists "$DRIVER_IMAGE_BASE"; then
+        ok "复用已构建产物(qcow2 与被测镜像指纹一致: $fp_now)"
         DRIVER_VPASS="$(cat "$DRIVER_PASS_FILE")"
         return 0
+    else
+        say "产物指纹不一致或产物不唯一 → 重建。旧=$(artifact_fp_describe "$fp_file") 新=$fp_now 现有产物数=$qcow2_count"
+        rm -f "$DRIVER_QCOW2" 2>/dev/null || true
+        podman rmi -f "$DRIVER_IMAGE_BASE" >/dev/null 2>&1 || true
+        DRIVER_QCOW2=""
+        # 决定重建就先把指纹删掉:万一构建中途失败,下一轮不能拿半成品当产物复用,
+        # 更不能给它盖上本次镜像的指纹。
+        artifact_fp_remove "$fp_file"
     fi
 
     mkdir -p "$vm" "$out/qcow2"
@@ -131,9 +167,17 @@ driver_init() {
         quay.io/centos-bootc/bootc-image-builder:latest \
         --local --type qcow2 --output /output "$DRIVER_IMAGE_BASE" >>"$DRIVER_LOG" 2>&1 \
         || { bad "bootc-image-builder 失败,见 $DRIVER_LOG"; exit 1; }
-    DRIVER_QCOW2="$(find "$out/qcow2" -name '*.qcow2' | head -1)"
+    # 产物必须是**这次** builder 出的那一个:目录里若还留着别的 .qcow2(删失败的
+    # 旧产物、builder 自己多产出的),按名字取第一个就可能取到旧的,而下面会把
+    # 本次镜像的指纹写到它头上 —— 那等于拿旧产物冒充本次结果。
+    qcow2_count="$(find "$out/qcow2" -name '*.qcow2' -type f | wc -l | tr -d ' ')"
+    [ "$qcow2_count" = 1 ] || { bad "产物目录里有 $qcow2_count 个 .qcow2,期望恰好 1 个(见 $DRIVER_LOG)"; exit 1; }
+    DRIVER_QCOW2="$(find "$out/qcow2" -name '*.qcow2' -type f | head -1)"
     [ -n "${DRIVER_QCOW2:-}" ] || { bad "builder 没产出 qcow2"; exit 1; }
+    [ -s "$DRIVER_QCOW2" ] || { bad "builder 产出的 qcow2 是空文件: $DRIVER_QCOW2"; exit 1; }
     ok "qcow2: $DRIVER_QCOW2($(du -h "$DRIVER_QCOW2" | cut -f1))"
+    # 指纹最后写:中途失败不会留下「产物在但没建完」的指纹。
+    artifact_fp_write "$fp_file" "$fp_now"
 }
 
 # driver_oci_archive <tag> <out-path> —— 把镜像打成 OCI 归档(scp 进 guest 用)。

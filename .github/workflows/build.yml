@@ -291,6 +291,11 @@ jobs:
           # 端口冲突要与「产物引导失败」区分开:那条判定退化(把冲突当成引导失败)
           # 会让整条实机门禁红错方向,而这种退化只有自检能挡住。
           bash tests/real-machine/lib/ssh-port.selftest.sh
+          # 缓存产物指纹的判定逻辑(镜像变了必须重建):实机腿靠在它上面判真假,
+          # 它退化成 fail-open 会让所有实机结论失真。
+          bash tests/real-machine/lib/artifact-fingerprint.selftest.sh
+          bash tests/real-machine/lib/guest-driver.selftest.sh
+          bash tests/real-machine/lib/cleanup-verify-work.selftest.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
@@ -774,7 +779,9 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         env:
-          VERIFY_WORK: ${{ github.workspace }}/verify-out
+          # 按 run 隔离:自托管 runner 的工作目录跨 run 持久化,固定路径会让上一次
+          # run 的产物串到这一次。指纹机制管同一 run 内的复用,这里管跨 run。
+          VERIFY_WORK: ${{ github.workspace }}/verify-out-${{ github.run_id }}
         run: |
           qcow2="$(find "${{ github.workspace }}/qcow2" -name '*.qcow2' -type f | head -1)"
           [ -n "$qcow2" ] || { echo "ERROR: artifact 里没有 .qcow2"; exit 1; }
@@ -789,9 +796,22 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-kvm-evidence
-          path: ${{ github.workspace }}/verify-out
+          # 与 build step 的 VERIFY_WORK 同步:指向固定路径会收集不到本次 run 的证据。
+          path: ${{ github.workspace }}/verify-out-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Prune stale verify work dirs
+        # runner 是持久化的:按 run 隔离的目录每次留下 ~1.3GB,不清理会把盘吃满,
+        # 之后 qemu 建不出磁盘、podman 存不下镜像 —— 门禁会以"镜像坏了"的样子红。
+        # 只留最近两个(当前 + 上一次便于对照)。清理不是门禁,失败不该改判本 job。
+        if: always()
+        continue-on-error: true
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/cleanup-verify-work.sh --keep 2 \
+            "${{ github.workspace }}" "verify-out-"
 
   # bootc 部署链门禁:在真 KVM 里验证「换部署 + 回滚」真的生效。
   # 与 deploy-verify-kvm 的分工 —— 那条只验「能引导到 login 提示符」(第一跳);
@@ -824,7 +844,9 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         env:
-          VERIFY_WORK: ${{ github.workspace }}/switch-verify
+          # 按 run 隔离:同 guest-driver 的缓存污染面 —— 固定路径会让上一次 run 的
+          # qcow2 冒充本次镜像的产物。本腿只有一个消费者,复用收益小,隔离更值。
+          VERIFY_WORK: ${{ github.workspace }}/switch-verify-${{ github.run_id }}
         run: |
           # 验的就是本 run 刚构建的镜像(按 :<sha> 取)
           IMAGE="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/daedalus-os:${{ github.sha }}"
@@ -837,9 +859,20 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-bootc-switch-evidence
-          path: ${{ github.workspace }}/switch-verify
+          # 与 build step 的 VERIFY_WORK 同步:指向固定路径会收集不到本次 run 的证据。
+          path: ${{ github.workspace }}/switch-verify-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Prune stale switch-verify work dirs
+        # 同 deploy-verify-kvm 的理由:runner 持久化,每次 run 留下 ~1.3GB。
+        if: always()
+        continue-on-error: true
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/cleanup-verify-work.sh --keep 2 \
+            "${{ github.workspace }}" "switch-verify-"
 
   # ISO 交付形态门禁:产出 ISO 并验证它真能引导到安装器。
   # 此前 `just iso`(legacy `bootc-image-builder --type iso`)根本构建不出 ISO ——
@@ -988,7 +1021,9 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         env:
-          VERIFY_WORK: ${{ github.workspace }}/guest-probes
+          # 按 run 隔离:自托管 runner 的工作目录跨 run 持久化,固定路径会让上一次
+          # run 的 qcow2 冒充本次镜像的产物(2026-11-07 实测的假红就是这么来的)。
+          VERIFY_WORK: ${{ github.workspace }}/guest-probes-${{ github.run_id }}
         run: |
           IMAGE="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/daedalus-os:${{ github.sha }}"
           echo "被测镜像: $IMAGE"
@@ -1015,7 +1050,18 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-guest-probes-evidence
-          path: ${{ github.workspace }}/guest-probes
+          # 与探针步骤的 VERIFY_WORK 同步:指向固定路径会收集不到本次 run 的证据。
+          path: ${{ github.workspace }}/guest-probes-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Prune stale guest-probes work dirs
+        # 同 deploy-verify-kvm 的理由:runner 持久化,每次 run 留下 ~1.3GB。
+        if: always()
+        continue-on-error: true
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/cleanup-verify-work.sh --keep 2 \
+            "${{ github.workspace }}" "guest-probes-"
 
