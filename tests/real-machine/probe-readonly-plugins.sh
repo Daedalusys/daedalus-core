@@ -113,14 +113,19 @@ else
 fi
 
 say "A7-6 · dupe 对硬链接(同一 inode)的行为"
-gssh "rm -rf /tmp/a7-dupe; mkdir -p /tmp/a7-dupe; printf 'hardlink-payload-0123456789' > /tmp/a7-dupe/a.txt; ln /tmp/a7-dupe/a.txt /tmp/a7-dupe/b.txt; printf 'hardlink-payload-0123456789' > /tmp/a7-dupe/c.txt; ls -li /tmp/a7-dupe" 2>&1 | sed 's/^/      /'
+# ls -li 的 inode 号是这条断言的事实基础,必须进证据日志(DRIVER_LOG):
+# 只打到 stdout 的话,事后无从核对 a/b 到底是不是同一 inode。
+A7_LS="$(gssh "rm -rf /tmp/a7-dupe; mkdir -p /tmp/a7-dupe; printf 'hardlink-payload-0123456789' > /tmp/a7-dupe/a.txt; ln /tmp/a7-dupe/a.txt /tmp/a7-dupe/b.txt; printf 'hardlink-payload-0123456789' > /tmp/a7-dupe/c.txt; ls -li /tmp/a7-dupe" 2>&1)"
+printf '%s\n' "$A7_LS" | sed 's/^/      /'
+log "      A7-6 夹具 ls -li: $(printf '%s' "$A7_LS" | tr '\n' '|')"
 D1="$(call "/tmp/mcp-call.sh $DUP scan_dupes '{\"dirs\":[\"/tmp/a7-dupe\"],\"algo\":\"sha256\"}'")"
 printf '%s\n' "$D1" | head -c 600 | sed 's/^/      /'
 log "      dupe scan_dupes: $(printf '%s' "$D1" | head -c 600)"
 # 夹具语义:a.txt 与 b.txt 是同一 inode(硬链接,只占一份空间),c.txt 是独立
-# inode 的同内容副本。因此真实可回收空间只有一份 27 字节;把 a/b/c 三者归成
-# 一组并报 54 字节就是把硬链接当成了重复。
-A7_PAYLOAD_LEN=27
+# inode 的同内容副本。期望恰好一组、组内恰好两个路径(一硬链接代表 + c.txt),
+# 且该组 wasted_bytes 等于一份真实副本 —— 三者缺一都不能算通过。
+A7_PAYLOAD="hardlink-payload-0123456789"
+A7_PAYLOAD_LEN=${#A7_PAYLOAD}
 A7_DUPE_DIR=/tmp/a7-dupe
 if [ -z "$D1" ]; then
     driver_verdict FAIL "A7-6 scan_dupes 无响应"
@@ -130,28 +135,43 @@ elif ! command -v jq >/dev/null 2>&1; then
 else
     # 响应是 JSON-RPC 信封,分组结果在 result.content[0].text 的字符串里。
     A7_GROUPS="$(printf '%s' "$D1" | jq -r '.result.content[0].text // empty' 2>/dev/null)"
-    # 同一组里同时出现两个硬链接路径 = 硬链接被误报。
-    A7_HARDLINK_GROUPED="$(printf '%s' "$A7_GROUPS" | jq -r --arg a "$A7_DUPE_DIR/a.txt" --arg b "$A7_DUPE_DIR/b.txt" \
-        '[.[] | select((.files | index($a)) and (.files | index($b)))] | length' 2>/dev/null)"
-    A7_WASTED="$(printf '%s' "$A7_GROUPS" | jq -r '[.[] | .wasted_bytes] | add // 0' 2>/dev/null)"
     A7_GROUPS_JSON="$(printf '%s' "$A7_GROUPS" | jq -c '.' 2>/dev/null)"
+    # 判"分组形状":恰好一组、组内恰好两个路径、含 c.txt 且不含 b.txt。
+    # 不能只看 wasted_bytes 的总和 —— 真副本被拆成多组、每组各自少算时,
+    # 总和可能仍然正确,那种退化会被漏判。
+    A7_SHAPE="$(printf '%s' "$A7_GROUPS" | jq -r \
+        --arg b "$A7_DUPE_DIR/b.txt" --arg c "$A7_DUPE_DIR/c.txt" '
+        {
+          n_groups: (. | length),
+          n_files: ([.[] | .files | length] | add // 0),
+          b_grouped: ([.[] | select(.files | index($b))] | length),
+          c_present: ([.[] | select(.files | index($c))] | length)
+        } | if .n_groups != 1 then "group_count=\(.n_groups)"
+          elif .b_grouped != 0 then "b_still_grouped=\(.b_grouped)"
+          elif .c_present != 1 then "c_missing"
+          elif .n_files != 2 then "files=\(.n_files)"
+          else "ok" end' 2>/dev/null)"
+    # 判"数值":唯一那组的 wasted_bytes 必须恰等于 载荷 × (成员数 - 1),
+    # 即组内只多留一份数据;字段缺失也算不通过。
+    A7_WASTED="$(printf '%s' "$A7_GROUPS" | jq -r --argjson len "$A7_PAYLOAD_LEN" '
+        .[0] | if (has("wasted_bytes") | not) then "missing"
+              elif (.wasted_bytes == ($len * ((.files | length) - 1))) then "ok"
+              else "wasted=\(.wasted_bytes) want=\($len * ((.files | length) - 1))" end' 2>/dev/null)"
     rec "分组结果(已还原 JSON): ${A7_GROUPS_JSON}"
-    log "      A7-6 groups=$A7_GROUPS_JSON hardlink_grouped=$A7_HARDLINK_GROUPED wasted=$A7_WASTED"
-    # 判定顺序:先看"同组"(硬链接被当成重复的直接证据),再看 wasted_bytes
-    # 的数值;解析不出数字时 A7_HARDLINK_GROUPED 为空串,落到 FAIL 而非放行。
-    case "$A7_HARDLINK_GROUPED" in
-        ''|*[!0-9]*)
-            driver_verdict FAIL "A7-6 无法判定:响应不是可解析的 scan_dupes 分组 JSON(见原始响应)"
-            ;;
-        0)
-            if [ "$A7_WASTED" = "$A7_PAYLOAD_LEN" ]; then
-                driver_verdict PASS "A7-6 硬链接未被误报,wasted_bytes 只算真实副本(${A7_WASTED}B),分组=${A7_GROUPS_JSON}"
+    log "      A7-6 groups=$A7_GROUPS_JSON shape=${A7_SHAPE:-<解析失败>} wasted=${A7_WASTED:-<解析失败>}"
+    case "$A7_SHAPE" in
+        ok)
+            if [ "$A7_WASTED" = ok ]; then
+                driver_verdict PASS "A7-6 硬链接未被误报:恰好一组、组内 2 个路径、wasted_bytes 只算一份真实副本(${A7_PAYLOAD_LEN}B),分组=${A7_GROUPS_JSON}"
             else
-                driver_verdict FAIL "A7-6 wasted_bytes=${A7_WASTED:-<解析失败>},期望 ${A7_PAYLOAD_LEN}(只算一份真实副本;硬链接不多占空间),分组=${A7_GROUPS_JSON}"
+                driver_verdict FAIL "A7-6 分组形状对但 wasted_bytes 不对(${A7_WASTED:-<解析失败>}),分组=${A7_GROUPS_JSON}"
             fi
             ;;
+        b_still_grouped=*|'')
+            driver_verdict FAIL "A7-6 硬链接仍被报成重复或响应不可解析(${A7_SHAPE:-<解析失败>}),分组=${A7_GROUPS_JSON} — $A7_ISSUE"
+            ;;
         *)
-            driver_verdict FAIL "A7-6 硬链接仍被报成重复:a.txt 与 b.txt(同 inode)出现在同一组,分组=${A7_GROUPS_JSON} — $A7_ISSUE"
+            driver_verdict FAIL "A7-6 折叠后的分组形状不对(${A7_SHAPE};期望 1 组 2 路径且含 c.txt),分组=${A7_GROUPS_JSON}"
             ;;
     esac
 fi
