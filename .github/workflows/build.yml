@@ -933,7 +933,7 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         env:
-          VERIFY_WORK: ${{ github.workspace }}/iso-verify
+          VERIFY_WORK: ${{ github.workspace }}/iso-verify-${{ github.run_id }}
           # 出货档必须验到「装完能引导到 login:」:段二(P2-2b)是硬判据,不允许
           # 用 LIVE_OK 掩盖装机链退化(autoinstall 单元 / kernel args / payload 的
           # dmsquash-live 任何一处坏掉都必须红)。脚本自身的默认值也是 1,
@@ -955,7 +955,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-iso-evidence
-          path: ${{ github.workspace }}/iso-verify
+          path: ${{ github.workspace }}/iso-verify-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 30
 
@@ -971,7 +971,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           # 与上方构建步骤同一个工作目录:晋级的就是这一条腿刚刚验证过的那份 ISO。
-          VERIFY_WORK: ${{ github.workspace }}/iso-verify
+          VERIFY_WORK: ${{ github.workspace }}/iso-verify-${{ github.run_id }}
         run: |
           set -euo pipefail
           tag="${RELEASE_TAG:-$(git rev-parse --short=12 HEAD)}"
