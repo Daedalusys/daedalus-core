@@ -296,6 +296,10 @@ jobs:
           bash tests/real-machine/lib/artifact-fingerprint.selftest.sh
           bash tests/real-machine/lib/guest-driver.selftest.sh
           bash tests/real-machine/lib/cleanup-verify-work.selftest.sh
+          # ISO 无人值守装机的静态门禁:装机脚本的底线(只按内核参数选盘、目标是整盘、
+          # 无明文凭据、单元只在 live 触发、加速源只当传输通道且按 digest 钉死、target
+          # 不指向加速源)。它此前没有任何 workflow 跑它 —— 静态门禁不接线就等于不存在。
+          bash tests/ci/iso-autoinstall-test.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
@@ -939,6 +943,13 @@ jobs:
           # dmsquash-live 任何一处坏掉都必须红)。脚本自身的默认值也是 1,
           # 这里显式写出来是为了让「出货档必须硬门禁」这件事在 workflow 里可见、可审。
           VERIFY_REQUIRE_INSTALL: "1"
+          # guest 装机的安装源加速镜像。guest 要从 registry 拉 1.26GB,而从自托管 runner
+          # 所在网络到 ghcr.io 实测只有 ~60KB/s(同一台机 codeload.github.com 有 16MB/s),
+          # 40 分钟的装机超时必然不够 —— 那是到 ghcr 这条路径的问题,不是本机链路的问题。
+          # 加速源只当**传输通道**:iso-verify.sh 会把源 ref 按本次构建的 manifest digest
+          # 钉死(containers/image 逐层校验内容),装好系统的 target ref 仍是规范 ghcr 地址,
+          # 更新通道不交给第三方;加速源不通时自动回落直连。留空 = 关闭。
+          VERIFY_INSTALL_MIRROR: ghcr.1ms.run
           # 本次构建推出的 manifest digest。ISO 是拿 $IMAGE 派生 payload 再构建的,
           # 本地缓存若还是旧内容,产出的「可引导 + 装完能 login」就是给旧镜像的假绿。
           VERIFY_IMAGE_DIGEST: ${{ needs.build-image.outputs.image_digest }}
@@ -947,6 +958,7 @@ jobs:
           # sudo 会清环境变量,VERIFY_* 必须显式透传
           sudo VERIFY_IMAGE="$IMAGE" VERIFY_WORK="$VERIFY_WORK" \
             VERIFY_IMAGE_DIGEST="$VERIFY_IMAGE_DIGEST" \
+            VERIFY_INSTALL_MIRROR="$VERIFY_INSTALL_MIRROR" \
             bash tests/real-machine/iso-verify.sh
 
       - name: Upload ISO verify evidence
