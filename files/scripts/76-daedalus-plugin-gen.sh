@@ -21,8 +21,8 @@
 #      不拦截读取;DynamicUser 能否读到 policy.toml 取决于文件 o+r 位与祖先目录 o+x 位,
 #      逐项验证即可,**无需**任何 BindReadOnlyPaths/ReadWritePaths 放宽(放宽反而破坏
 #      "整盘只读 + 单点策略"的沙箱语义)。不满足即构建失败,防止服务器开机 fail-closed。
-#   8. 对象模型资源门禁:CAPS 覆盖全部 11 个能力插件(fs/shell/pkg/sysinfo/service/
-#      blueprint/dupe/diskclean/organize/trace/proc,daedalus.service 单元同样经 render-unit
+#   8. 对象模型资源门禁:CAPS 覆盖全部 13 个能力插件(fs/shell/pkg/sysinfo/service/
+#      blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot,daedalus.service 单元同样经 render-unit
 #      渲染回写并幂等自校验);策略预检额外断言
 #      [objectmodel].enabled_kinds 非空且包含 service(service 资源的唯一授权来源,
 #      缺失/剔除即 fail-closed 拒构建);逐插件交叉核对 manifest.resources[].kind ⊆
@@ -51,7 +51,7 @@ POLICY="${ROOT%/}/opt/daedalus/shared/policy.toml"
 # tools/list 交叉核对 + landlock/credentials drop-in 沙箱语义防回归。blueprint 的
 # ReadWritePaths 输出目录由单元自带(76 脚本第 7 条只禁 shell/fs 的 /opt 遮蔽/重绑定,
 # ReadWritePaths 不拦 policy 读取,保留放行合法)。
-CAPS="fs shell pkg sysinfo service blueprint dupe diskclean organize trace proc"
+CAPS="fs shell pkg sysinfo service blueprint dupe diskclean organize trace proc osstate snapshot"
 # core 自身的 4 个 systemd 单元不是能力插件(不经插件 manifest 渲染),反向集合比对时排除。
 CORE_UNITS="audit audit-rotate env host-controller"
 
