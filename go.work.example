@@ -7,10 +7,12 @@ use (
 	../daedalus-plugins/dupe
 	../daedalus-plugins/fs
 	../daedalus-plugins/organize
+	../daedalus-plugins/osstate
 	../daedalus-plugins/pkg
 	../daedalus-plugins/proc
 	../daedalus-plugins/service
 	../daedalus-plugins/shell
+	../daedalus-plugins/snapshot
 	../daedalus-plugins/sysinfo
 	../daedalus-plugins/trace
 	../daedalus-sdk
