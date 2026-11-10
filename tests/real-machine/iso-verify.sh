@@ -41,6 +41,12 @@
 # 环境变量
 #   VERIFY_WORK     工作目录(默认:$SUDO_USER 家目录下 daedalus-iso-verify)
 #   VERIFY_IMAGE    基准镜像(默认 ghcr.io/daedalusys/daedalus-os:latest)
+#   VERIFY_INSTALL_MIRROR  guest 装机的**安装源加速镜像**(可选,形如 ghcr.1ms.run):
+#                   guest 要从 registry 拉 1.26GB,而从自托管 runner 所在网络到 ghcr.io
+#                   实测只有 ~60KB/s(同一台机 codeload.github.com 有 16MB/s),那是路径
+#                   问题不是代码问题。加速镜像只当**传输通道**:源 ref 按 manifest digest
+#                   钉死(逐层校验内容),装好系统的 target ref 仍是规范 ghcr 地址。
+#                   加速源不可用时自动回落直连。留空 = 不启用。
 #   VERIFY_MEM      引导内存 MiB(默认 8192;装机时要把镜像拉进 live 环境,4G 偏紧)
 #   VERIFY_BOOT_TIMEOUT   等 live 系统可 SSH 的秒数(默认 600)
 #   VERIFY_INSTALL_TIMEOUT 等装机完成的秒数(默认 2400)
@@ -59,6 +65,7 @@
 set -uo pipefail
 
 IMAGE="${VERIFY_IMAGE:-ghcr.io/daedalusys/daedalus-os:latest}"
+INSTALL_MIRROR="${VERIFY_INSTALL_MIRROR:-}"
 MEM="${VERIFY_MEM:-8192}"
 BOOT_TIMEOUT="${VERIFY_BOOT_TIMEOUT:-600}"
 INSTALL_TIMEOUT="${VERIFY_INSTALL_TIMEOUT:-2400}"
@@ -160,6 +167,31 @@ cp -f "$SCRIPT_DIR/iso-autoinstall.sh" "$SCRIPT_DIR/iso-autoinstall.service" "$V
 podman run --rm "$IMAGE" cat /etc/os-release > "$VM/os-release.expected" 2>/dev/null \
     || { echo "读基准镜像的 os-release 失败" >&2; exit 2; }
 
+# 安装源加速镜像(可选)。guest 装机要从 registry 拉 1.26GB,而自托管 runner 所在网络到
+# ghcr.io 实测只有 ~60KB/s —— 同一台机 codeload.github.com 有 16MB/s,所以这是「到 ghcr
+# 这条路径」的问题,不是本机链路的问题,也不是等一等就会恢复的抖动。
+# 加速镜像只当**传输通道**:源 ref 按 manifest digest 钉死,containers/image 会逐层校验
+# 内容;装好系统的 target ref 仍是规范地址(更新通道不能被第三方接管)。
+INSTALL_SOURCE_REF=""
+if [ -n "$INSTALL_MIRROR" ]; then
+    case "$IMAGE" in
+        localhost/*|./*|/*) warn "本地镜像 $IMAGE 不走加速源,忽略 VERIFY_INSTALL_MIRROR" ;;
+        *)
+            _rest="${IMAGE#*/}"; _repo="${_rest%%:*}"; _repo="${_repo%%@*}"
+            _digest="${VERIFY_IMAGE_DIGEST:-}"
+            if [ -z "$_digest" ] && [ "$(type -t artifact_fp_remote_digest 2>/dev/null)" = function ]; then
+                _digest="$(artifact_fp_remote_digest "$IMAGE" 2>/dev/null || true)"
+            fi
+            if [ -n "$_digest" ] && [ -n "$_repo" ]; then
+                INSTALL_SOURCE_REF="${INSTALL_MIRROR}/${_repo}@${_digest}"
+                info "安装源加速: $INSTALL_SOURCE_REF(digest 钉死;target 仍是 $IMAGE)"
+            else
+                warn "拿不到 $IMAGE 的 manifest digest → 不启用加速源(回落直连)"
+            fi
+            ;;
+    esac
+fi
+
 cat > "$VM/Containerfile" <<EOF
 FROM ${IMAGE}
 COPY authorized_keys /tmp/authorized_keys
@@ -187,6 +219,7 @@ RUN set -eux; \\
     printf 'label: "DAEDALUS_ISO"\\nkernel_args:\\n  - "console=ttyS0,115200n8"\\n  - "daedalus.install.disk=/dev/vda"\\ngrub2:\\n  default: 0\\n  timeout: 3\\n' \\
         > /usr/lib/image-builder/bootc/iso.yaml; \\
     printf 'DAEDALUS_INSTALL_IMGREF=%s\\n' "${IMAGE}" > /etc/daedalus/iso-install.conf; \\
+    printf 'DAEDALUS_INSTALL_SOURCE_IMGREF=%s\\n' "${INSTALL_SOURCE_REF}" >> /etc/daedalus/iso-install.conf; \\
     install -m 0755 /tmp/iso-autoinstall.sh /usr/local/bin/daedalus-iso-autoinstall; \\
     install -m 0644 /tmp/iso-autoinstall.service /usr/lib/systemd/system/daedalus-iso-autoinstall.service; \\
     ln -sf /usr/lib/systemd/system/daedalus-iso-autoinstall.service \\

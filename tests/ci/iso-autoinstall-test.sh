@@ -66,6 +66,24 @@ if [ -f "$INST" ]; then
     has '--source-imgref' "$INST"; st $? "规则1 显式给出 --source-imgref(live 环境无隐式来源)"
     hasre 'SRC_IMGREF="registry:|registry:' "$INST"
     st $? "规则1 source-imgref 带显式 transport 前缀(bootc 拒裸 ref)"
+    # 规则10:安装源可以与目标分离(加速源),但三条底线不能破:
+    #   (a) 源覆盖项必须被读出来并用于 --source-imgref
+    #   (b) --target-imgref 必须始终是规范 ref —— 它决定装好系统以后的更新通道,
+    #       指向加速镜像等于把更新权交给第三方
+    #   (c) 单个源要有时限:加速源不通时要能回落,而不是把整条门禁的时间预算耗光
+    has 'DAEDALUS_INSTALL_SOURCE_IMGREF' "$INST"
+    st $? "规则10 装机脚本读安装源覆盖项(加速源)"
+    hasre '--source-imgref "\$SRC_IMGREF"' "$INST"
+    st $? "规则10 --source-imgref 用的是源 ref"
+    hasre '--target-imgref "\$IMGREF"' "$INST"
+    st $? "规则10 --target-imgref 用的是规范 ref(更新通道不交给加速镜像)"
+    if hasre '--target-imgref "\$SRC' "$INST"; then
+        st 1 "规则10 --target-imgref 不得指向加速源"
+    else
+        st 0 "规则10 --target-imgref 不指向加速源"
+    fi
+    hasre 'timeout .*bootc install to-disk' "$INST"
+    st $? "规则10 单个安装源有独立时限(加速源不通可回落)"
 else
     st 1 "规则1 装机脚本存在:$INST"
 fi
@@ -108,6 +126,17 @@ if [ -f "$VERIFY" ]; then
     # 规则9:段二必须是**默认硬判据**,而且出货档 workflow 也要显式写死 ——
     # 否则装机链(单元 / kernel args / dmsquash-live)任何一处退化都会被 LIVE_OK 掩盖成绿。
     hasre 'VERIFY_REQUIRE_INSTALL:-1' "$VERIFY"; st $? "规则9 脚本默认要求装完能引导(不是可选)"
+    # 规则11:加速源是**传输通道**,不是信任锚 —— 写进 payload 的源 ref 必须按 digest 钉死
+    # (containers/image 逐层校验),否则加速镜像就能决定我们装进去的是什么。
+    hasre 'VERIFY_INSTALL_MIRROR' "$VERIFY"; st $? "规则11 加速源可配(VERIFY_INSTALL_MIRROR)"
+    hasre 'INSTALL_SOURCE_REF=.*@' "$VERIFY"
+    st $? "规则11 写进 payload 的加速源按 digest 钉死(@sha256:...)"
+    if [ -f "$REPO/.github/workflows/build.yml" ]; then
+        hasre 'VERIFY_INSTALL_MIRROR' "$REPO/.github/workflows/build.yml"
+        st $? "规则11 出货档 workflow 显式写明加速源(可审)"
+    else
+        st 1 "规则11 出货档 workflow 存在:$REPO/.github/workflows/build.yml"
+    fi
     if [ -f "$REPO/.github/workflows/build.yml" ]; then
         hasre 'VERIFY_REQUIRE_INSTALL: "?1"?' "$REPO/.github/workflows/build.yml"
         st $? "规则9 出货档 workflow 显式设 VERIFY_REQUIRE_INSTALL: 1"
