@@ -10,6 +10,8 @@
 #        (cache 按分支作用域共享,基础分支能读到 PR 分支写入的条目)
 #   规则4 全仓不得出现 pull_request_target
 #   规则5 所有 uses: 的 ref 必须是 40 位十六进制 SHA(拒 @v3 之类浮动标签)
+#   规则8 VERIFY_WORK 与证据上传路径必须带 github.run_id(按 run 隔离;固定路径会
+#        跨 run 串味,且旧目录没人收口)
 #
 # 判定必须是 **mapping 解析**,不是全文 grep:注释/文档里出现的 `actions/checkout`
 # 字样不是步骤。`--selftest` 用合成样本把这条负例钉住。
@@ -128,6 +130,11 @@ function flush_step() {
     # 因为 `on:` 可能写在文件任意位置(YAML 映射序自由)。
     if (has_cache && cur_cache == "true") cache_true_line[++n_cache_true] = cache_line
     check_ref(cur_uses, uses_line)
+    # 规则8 的另一半:证据从共享工作区上传时,路径也必须按 run 隔离 ——
+    # 「生产方按 run 写、上传方读固定路径」是最省事的复发形态。
+    if (cur_uses ~ /^actions\/upload-artifact@/ && cur_path ~ /github\.workspace/ \
+        && cur_path !~ /github\.run_id/)
+        report_at(path_line, "规则8 上传路径指向共享工作区却未按 run 隔离: " cur_path)
     in_step = 0
 }
 
@@ -137,6 +144,7 @@ BEGIN {
     cur_uses = ""; uses_line = 0; cur_line = 0
     has_pc = 0; cur_pc = ""; pc_line = 0
     has_cache = 0; cur_cache = ""; cache_line = 0
+    cur_path = ""; path_line = 0
     step_indent = -1
 }
 
@@ -156,6 +164,17 @@ BEGIN {
         block_indent = -1
     }
     if (code ~ /^[ \t]*$/) next
+
+    # 规则8:VERIFY_WORK 必须按 run 隔离 —— 键形式一律检查(step env / job env 都算)。
+    # 值里没有 github.run_id 就是固定路径:自托管 runner 的工作区跨 run 持久化,
+    # 上一次 run 的产物会冒充这一次的。`run: |` 块里的 VERIFY_WORK=... 不是键
+    # (上方块标量已整段跳过),注释里的字样已在 strip 阶段去掉,故不误报。
+    # 这里不能 `next`:job 级 KEY: 同时是步骤边界,跳过会让 flush_step() 失效。
+    if (key_of(code) == "VERIFY_WORK") {
+        v = strip_quotes(val(code))
+        if (v !~ /github\.run_id/)
+            report_at(NR, "规则8 VERIFY_WORK 未按 run 隔离(缺 github.run_id): " v)
+    }
 
     # 规则3 的文件级前提:on: 段含 pull_request。三种合法写法都要认 ——
     # 块式键 / 流式(`on: [push, pull_request]`)/ 标量 / 块式列表项。
@@ -181,6 +200,7 @@ BEGIN {
         cur_uses = ""
         has_pc = 0; cur_pc = ""; pc_line = 0
         has_cache = 0; cur_cache = ""; cache_line = 0
+        cur_path = ""; path_line = 0
         in_with = 0; with_indent = -1
         inline = code
         sub(/^[ \t]*-[ \t]*/, "", inline)
@@ -212,6 +232,7 @@ BEGIN {
     if (in_with) {
         if (k == "persist-credentials") { cur_pc = val(code); has_pc = 1; pc_line = NR }
         else if (k == "cache")         { cur_cache = val(code); has_cache = 1; cache_line = NR }
+        else if (k == "path")          { cur_path = strip_quotes(val(code)); path_line = NR }
         next
     }
 
@@ -407,7 +428,63 @@ jobs:
           cache: true")"
     st 1 "$(printf '%s' "$out" | grep -c '规则3')" "规则3:非 setup-go 的 action 也受约束 → 违规"
 
-    # 16) 覆盖度下限:四仓目录都在、但一个站点都没有 → 不得报 OK
+    # 16) 规则8:VERIFY_WORK 是固定字面量(当前 main 的真实形状)→ 违规
+    out="$(probe rule8-fixed-verify-work "$HDR
+      - name: iso
+        env:
+          VERIFY_WORK: \${{ github.workspace }}/iso-verify
+        run: echo hi")"
+    st 1 "$(printf '%s' "$out" | grep -c '规则8')" "规则8:固定 VERIFY_WORK → 违规"
+
+    # 17) 规则8:带 run_id 的 VERIFY_WORK → 不违规
+    out="$(probe rule8-runid-verify-work "$HDR
+      - name: iso
+        env:
+          VERIFY_WORK: \${{ github.workspace }}/iso-verify-\${{ github.run_id }}
+        run: echo hi")"
+    st 0 "$(printf '%s' "$out" | grep -c '规则8')" "规则8:按 run 隔离的 VERIFY_WORK → 不违规"
+
+    # 18) 规则8:`run: |` 块里的 VERIFY_WORK 不是键(本仓 :799-800 就是这个形状)
+    out="$(probe rule8-run-block "$HDR
+      - name: gen
+        run: |
+          sudo VERIFY_WORK=\"\${{ github.workspace }}/iso-verify\" bash x.sh")"
+    st 0 "$(printf '%s' "$out" | grep -c '规则8')" "规则8:块标量里的 VERIFY_WORK 不是键(不误报)"
+
+    # 19) 规则8:别的 workflow 文件里的固定 VERIFY_WORK 同样判红
+    #     (规则8 不做文件名限定 —— 新腿加在别的文件里也不许逃)
+    out="$(probe other-workflow-fixed-verify-work "$HDR
+      - name: iso
+        env:
+          VERIFY_WORK: \${{ github.workspace }}/iso-verify
+        run: echo hi")"
+    st 1 "$(printf '%s' "$out" | grep -c '规则8')" "规则8:非 build.yml 的文件里的固定值 → 违规"
+
+    # 20) 规则8:上传路径是固定字面量 → 违规(生产方按 run 写、上传方读固定路径)
+    out="$(probe rule8-upload-fixed "$HDR
+      - uses: actions/upload-artifact@$SHA
+        with:
+          name: e
+          path: \${{ github.workspace }}/iso-verify")"
+    st 1 "$(printf '%s' "$out" | grep -c '规则8')" "规则8:上传路径是固定字面量 → 违规"
+
+    # 21) 规则8:上传路径按 run 隔离 → 不违规
+    out="$(probe rule8-upload-runid "$HDR
+      - uses: actions/upload-artifact@$SHA
+        with:
+          name: e
+          path: \${{ github.workspace }}/iso-verify-\${{ github.run_id }}")"
+    st 0 "$(printf '%s' "$out" | grep -c '规则8')" "规则8:按 run 隔离的上传路径 → 不违规"
+
+    # 22) 规则8:上传路径指向共享工作区里的**别的**目录(拼错/指错) → 违规
+    out="$(probe rule8-upload-outside "$HDR
+      - uses: actions/upload-artifact@$SHA
+        with:
+          name: e
+          path: \${{ github.workspace }}/qcow2")"
+    st 1 "$(printf '%s' "$out" | grep -c '规则8')" "规则8:上传路径指向产物目录之外 → 违规"
+
+    # 23) 覆盖度下限:四仓目录都在、但一个站点都没有 → 不得报 OK
     #     (否则「workflow 被删/改名」会静默变绿 —— 与 `|| true` 同一种假绿)。
     rm -f "$wf"/*.yml
     for r in daedalus-sdk daedalus-plugins daedalus-agent; do mkdir -p "$tmp/$r/.github/workflows"; done
@@ -416,7 +493,7 @@ jobs:
     st 1 "$rc" "覆盖度:站点数为 0 → 规则7 拒(不得静默变绿)"
     rm -f "$empty_counts"
 
-    # 17) 缺一个仓的 workflow 目录 → 规则6 拒(守门没看那份文件就不能说"全部显式")。
+    # 24) 缺一个仓的 workflow 目录 → 规则6 拒(守门没看那份文件就不能说"全部显式")。
     rm -rf "$tmp/daedalus-agent/.github/workflows"
     rc=0; check_coverage "$tmp" >/dev/null 2>&1 || rc=$?
     st 1 "$rc" "覆盖度:缺 daedalus-agent 的 workflow 目录 → 规则6 拒"
@@ -433,7 +510,7 @@ ok=1
 scan_root "$ROOT" "$COUNTS" || ok=0
 cov="$(check_coverage "$ROOT" "$COUNTS")" || ok=0
 if [ "$ok" -eq 1 ]; then
-    echo "OK: 四仓 workflow 的 persist-credentials / cache / 钉 SHA 全部显式(仓 4 个 / $cov)"
+    echo "OK: 四仓 workflow 的 persist-credentials / cache / 钉 SHA / VERIFY_WORK 按 run 隔离全部显式(仓 4 个 / $cov)"
 else
     echo "ERROR: workflow 凭据/缓存不变式被破坏或守门覆盖不全(见上方逐条定位)" >&2
     exit 1
