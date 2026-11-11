@@ -199,7 +199,7 @@ func TestRecoveryFor_AgentNodeCluesPerIntentKind(t *testing.T) {
 	}{
 		{"package", "包管理器"},
 		{"service", "systemctl 停掉对应单元"},
-		{"file", "事务内还原该文件"},
+		{"file", "把快照拷回原路径"},
 		{"container", "没有自动还原手段"},
 	}
 	for _, tc := range cases {

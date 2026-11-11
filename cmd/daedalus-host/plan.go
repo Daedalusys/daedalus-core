@@ -427,7 +427,10 @@ func agentRecoveryCommand(intentKind string) string {
 	case string(objectmodel.KindService):
 		return "在目标机上用 systemctl 停掉对应单元,细节见 agent 审计日志"
 	case string(objectmodel.KindFile):
-		return "agent 已在事务内还原该文件,细节见 agent 审计日志"
+		// 这条线索只出现在「本节点已成功落地、Plan 因别的节点转 dirty」时,
+		// 所以不能说"已还原"——agent 改成功之后并没有回滚,只是 apply 前留了
+		// 单文件快照。人要知道的是怎么把它拷回去。
+		return "该文件在 apply 前已由 agent 快照(路径见 agent 审计日志),需回退时在目标机上把快照拷回原路径"
 	}
 	return "该变更在 agent 上没有自动还原手段,细节见 agent 审计日志"
 }

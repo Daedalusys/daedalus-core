@@ -35,7 +35,7 @@
   <text x="620.0" y="369" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">怎么改、怎么恢复</text>
   <text x="620.0" y="386" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">begin → propose → preview → y/n → apply</text>
   <text x="620.0" y="403" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">事务日志 + before/after 快照 + 回滚计划</text>
-  <text x="620.0" y="420" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">网关:enabled_kinds 放行 service / package</text>
+  <text x="620.0" y="420" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">网关:enabled_kinds 放行 service / package / file</text>
   <rect x="845" y="325" width="350" height="145" rx="8" fill="#eceff1" stroke="#546e7a" stroke-width="1.5" opacity="1.0"/>
   <text x="1020.0" y="347" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="15" font-weight="bold" fill="#212121" text-anchor="middle">真实系统  (OS 即事实源)</text>
   <text x="1020.0" y="369" font-family="Noto Sans CJK SC, Noto Sans SC, sans-serif" font-size="12" fill="#546e7a" text-anchor="middle">systemd 单元 · dnf/rpm · 文件系统</text>
