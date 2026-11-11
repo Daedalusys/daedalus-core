@@ -527,3 +527,98 @@ func TestScheduler_LowRiskStillRunsOnUnknownSnapshotCapability(t *testing.T) {
 		t.Errorf("Status = %q, want complete", run.Status)
 	}
 }
+
+// TestIntentHasRollbackPoint 钉住回滚点的两个维度:file 在 agent 节点上有
+// 内建单文件 copy(与宿主快照无关);package/service 只能靠宿主自带的快照
+// 机制;atomic 节点不能借 agent 的内建 copy 替自己承诺回滚。
+func TestIntentHasRollbackPoint(t *testing.T) {
+	agentNone := Node{Kind: objectmodel.MachineKindAgent, SnapshotCap: "SNAPSHOT_CAPABILITY_NONE"}
+	agentBtrfs := Node{Kind: objectmodel.MachineKindAgent, SnapshotCap: "SNAPSHOT_CAPABILITY_BTRFS_SUBVOLUME"}
+	atomicNone := Node{Kind: objectmodel.MachineKindAtomic, SnapshotCap: "SNAPSHOT_CAPABILITY_NONE"}
+
+	if !intentHasRollbackPoint(agentNone, objectmodel.KindFile) {
+		t.Error("agent 节点的 file intent 有内建单文件 copy 回滚点")
+	}
+	if intentHasRollbackPoint(agentNone, objectmodel.KindPackage) {
+		t.Error("agent 节点的 package intent 没有回滚点")
+	}
+	if !intentHasRollbackPoint(agentBtrfs, objectmodel.KindPackage) {
+		t.Error("有宿主快照机制的节点,package intent 有回滚点")
+	}
+	if intentHasRollbackPoint(atomicNone, objectmodel.KindFile) {
+		t.Error("atomic 节点不能借 agent 的内建 copy 承诺回滚")
+	}
+}
+
+// highFileIntent 是声明为高危的 file intent:目标落在 /etc,判定表与显式声明
+// 都判 high。
+func highFileIntent() objectmodel.Intent {
+	return objectmodel.Intent{
+		Kind:      objectmodel.KindFile,
+		Target:    "/etc/nginx/nginx.conf",
+		RiskClass: objectmodel.RiskClassHigh,
+	}
+}
+
+// atomicMachine 造一台 atomic 形态的目标机。
+func atomicMachine(nodeID string) objectmodel.Machine {
+	return objectmodel.Machine{
+		MachineID:    nodeID,
+		Kind:         objectmodel.MachineKindAtomic,
+		SupportLevel: objectmodel.SupportLevelSupported,
+	}
+}
+
+// TestScheduler_HighRiskFileIntentRunsOnAgentWithoutSnapshot 是端到端的那一半:
+// 高危 file intent 打到上报 NONE 的 agent 节点时不得被控制面提前吞掉 —— agent
+// 的单文件 copy 就是它的回滚点,该 intent 必须真的下发。
+func TestScheduler_HighRiskFileIntentRunsOnAgentWithoutSnapshot(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapNone))
+	plan := planOf(t, []objectmodel.Intent{highFileIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fake.calls) != 1 {
+		t.Errorf("高危 file intent 有 agent 内建 copy 回滚点,应下发一次,Dispatch 次数 = %d", len(fake.calls))
+	}
+	if len(run.Results) != 1 {
+		t.Fatalf("Results 数 = %d, want 1", len(run.Results))
+	}
+	if run.Results[0].Outcome != OutcomeN1 {
+		t.Errorf("Outcome = %v, want %v(不得被 snapshot 分支拒成 N3)", run.Results[0].Outcome, OutcomeN1)
+	}
+	if run.Status != objectmodel.PlanStatusComplete {
+		t.Errorf("Status = %q, want %q", run.Status, objectmodel.PlanStatusComplete)
+	}
+}
+
+// TestScheduler_HighRiskFileIntentRefusedOnAtomicWithoutSnapshot 是上面那条的
+// 反面:atomic 节点走 daedalus-tx,没有 file 适配器,不能替它承诺回滚,故仍须
+// 在下发前拒掉。
+func TestScheduler_HighRiskFileIntentRefusedOnAtomicWithoutSnapshot(t *testing.T) {
+	n := testNode("n1")
+	n.Kind = objectmodel.MachineKindAtomic
+	n.SnapshotCap = snapNone
+	r := newRegistryWithNodes(t, n)
+	plan := planOf(t, []objectmodel.Intent{highFileIntent()}, []objectmodel.Machine{atomicMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("atomic 节点无宿主快照时高危 file intent 不得下发,Dispatch 被调 %d 次", len(fake.calls))
+	}
+	if run.Results[0].Outcome != OutcomeN3 {
+		t.Errorf("Outcome = %v, want %v", run.Results[0].Outcome, OutcomeN3)
+	}
+	if run.Status != objectmodel.PlanStatusDirty {
+		t.Errorf("Status = %q, want %q", run.Status, objectmodel.PlanStatusDirty)
+	}
+}

@@ -47,6 +47,18 @@ func nodeHasRollbackPoint(n Node) bool {
 	return true
 }
 
+// intentHasRollbackPoint 报告这条 intent 在这个节点上有没有回滚点。
+// 两个维度合起来才算:
+//   - kind 维度:file 有 agent 内建的单文件 copy,与宿主无关;但只有 agent
+//     节点走这条路,atomic 节点走 daedalus-tx,不能替它承诺。
+//   - 节点维度:package / service 只能靠宿主自带的快照机制。
+func intentHasRollbackPoint(n Node, kind objectmodel.Kind) bool {
+	if kind == objectmodel.KindFile && n.Kind == objectmodel.MachineKindAgent {
+		return objectmodel.HasRollbackPoint(kind)
+	}
+	return nodeHasRollbackPoint(n)
+}
+
 // normalizeSnapshotCap 把 proto 枚举归一成控制面使用的字符串:UNSPECIFIED 按
 // NONE 落库(proto 的显式要求),避免"没探测到"被当成"有回滚点"。
 func normalizeSnapshotCap(cap agentv1.SnapshotCapability) string {
@@ -261,7 +273,7 @@ func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
 	risk := s.effectiveRisk(t.Intent)
 
 	// 高危 intent 打到没有(或未确证有)回滚点的节点:连 RPC 都不发。
-	if risk == objectmodel.RiskClassHigh && !nodeHasRollbackPoint(t.Node) {
+	if risk == objectmodel.RiskClassHigh && !intentHasRollbackPoint(t.Node, t.Intent.Kind) {
 		return s.fill(t, StepResult{
 			Outcome: OutcomeN3,
 			Result:  agentv1.ApplyIntentResult_APPLY_INTENT_RESULT_REFUSED_SNAPSHOT_CAPABILITY_NONE,
