@@ -354,7 +354,7 @@ func (s *Scheduler) effectiveRisk(in objectmodel.Intent) objectmodel.RiskClass {
 // 其余 kind 原样返回,由 ClassifyIntent 的 fail-closed 兜底判 high。
 func adapterKind(k objectmodel.Kind) string {
 	switch k {
-	case objectmodel.KindPackage, objectmodel.KindService:
+	case objectmodel.KindPackage, objectmodel.KindService, objectmodel.KindFile:
 		return string(k) + ".set"
 	}
 	return string(k)

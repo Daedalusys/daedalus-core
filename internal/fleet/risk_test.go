@@ -60,6 +60,23 @@ func TestClassifyIntent_OrdinaryLinuxPackagesStayLow(t *testing.T) {
 	}
 }
 
+// TestClassifyIntent_FileKindUsesPathTable 证明 file kind 经 adapterKind 桥接后
+// 落到路径判定表,而不是表外 fail-closed 恒判 high:/etc 下高危,其余低危。
+// (直接传 "file.set" 测不到桥接——判定表认的是适配器名,Kind→适配器名的映射
+// 由 adapterKind 负责。)
+func TestClassifyIntent_FileKindUsesPathTable(t *testing.T) {
+	adapter := adapterKind(objectmodel.KindFile)
+	if adapter != intentKindFileSet {
+		t.Fatalf("adapterKind(file) = %q, want %q", adapter, intentKindFileSet)
+	}
+	if got := ClassifyIntent(policy.Default(), adapter, "/etc/nginx/nginx.conf"); got != objectmodel.RiskClassHigh {
+		t.Errorf("/etc 下的 file = %q, want high", got)
+	}
+	if got := ClassifyIntent(policy.Default(), adapter, "/home/u/app.conf"); got != objectmodel.RiskClassLow {
+		t.Errorf("/home 下的 file = %q, want low", got)
+	}
+}
+
 // TestClassifyIntent_SystemdServiceIsHigh 证明关键单元按 HighRiskServices 前缀命中。
 func TestClassifyIntent_SystemdServiceIsHigh(t *testing.T) {
 	if got := ClassifyIntent(policy.Default(), "service.set", "systemd-logind"); got != objectmodel.RiskClassHigh {
