@@ -426,6 +426,28 @@ func TestScheduler_IntentIDIsStable(t *testing.T) {
 	}
 }
 
+// TestScheduler_StepResultCarriesNodeAndIntentKind 钉住运行记录的两个新字段:
+// 恢复线索要按节点形态分支(agent 与 atomic 的还原手段不同),记录里必须带得出
+// 节点 kind 与 intent kind,否则读侧重算时无从判断。
+func TestScheduler_StepResultCarriesNodeAndIntentKind(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapBtrfs))
+	plan := planOf(t, []objectmodel.Intent{lowIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res := run.Results[0]
+	if res.NodeKind != objectmodel.MachineKindAgent {
+		t.Errorf("NodeKind = %q, want %q(取注册节点的 Kind)", res.NodeKind, objectmodel.MachineKindAgent)
+	}
+	if res.IntentKind != string(objectmodel.KindPackage) {
+		t.Errorf("IntentKind = %q, want %q", res.IntentKind, objectmodel.KindPackage)
+	}
+}
+
 // TestScheduler_UnregisteredNodeFailsClosed 证明目标机不在 registry 时整批不启动。
 func TestScheduler_UnregisteredNodeFailsClosed(t *testing.T) {
 	r := newRegistryWithNodes(t)

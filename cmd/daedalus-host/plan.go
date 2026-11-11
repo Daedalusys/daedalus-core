@@ -48,14 +48,18 @@ type planStatusOutput struct {
 	Recovery []planRecovery `json:"recovery"`
 }
 
-// planResult 是单条 (intent, node) 的落地记录。
+// planResult 是单条 (intent, node) 的落地记录。NodeKind / IntentKind 是恢复线索
+// 的依据:节点形态决定还原手段(agent 侧没有 daedalus-tx),intent 种类决定给哪种
+// 恢复动作。旧记录缺这两个字段时按空值读入,恢复线索退回既有行为。
 type planResult struct {
-	NodeID   string `json:"node_id"`
-	IntentID string `json:"intent_id"`
-	Outcome  string `json:"outcome"`
-	Result   string `json:"result"`
-	TxID     string `json:"tx_id"`
-	Message  string `json:"message"`
+	NodeID     string `json:"node_id"`
+	IntentID   string `json:"intent_id"`
+	NodeKind   string `json:"node_kind"`
+	IntentKind string `json:"intent_kind"`
+	Outcome    string `json:"outcome"`
+	Result     string `json:"result"`
+	TxID       string `json:"tx_id"`
+	Message    string `json:"message"`
 }
 
 // planRecovery 是 dirty 时的本地恢复线索(控制面不代执行)。
@@ -357,12 +361,14 @@ func renderRun(run *fleet.PlanRun) planStatusOutput {
 	}
 	for _, res := range run.Results {
 		out.Results = append(out.Results, planResult{
-			NodeID:   res.NodeID,
-			IntentID: res.IntentID,
-			Outcome:  res.Outcome.String(),
-			Result:   protoResultWord(res.Result),
-			TxID:     res.TxID,
-			Message:  res.Message,
+			NodeID:     res.NodeID,
+			IntentID:   res.IntentID,
+			NodeKind:   string(res.NodeKind),
+			IntentKind: res.IntentKind,
+			Outcome:    res.Outcome.String(),
+			Result:     protoResultWord(res.Result),
+			TxID:       res.TxID,
+			Message:    res.Message,
 		})
 	}
 	out.Recovery = recoveryFor(out.Status, out.Results)

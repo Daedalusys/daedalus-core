@@ -150,6 +150,26 @@ func TestPlanStatus_RendersRecoveryCommandsOnDirty(t *testing.T) {
 	}
 }
 
+// TestPlanStatus_ResultsCarryNodeKind 证明运行记录里的 node_kind / intent_kind
+// 透传到 stdout 契约:恢复线索是读侧重算的派生字段,必须能从记录读出节点形态。
+func TestPlanStatus_ResultsCarryNodeKind(t *testing.T) {
+	root := setupFleetCLI(t)
+	plan := testPlan(t, "p-5", []objectmodel.Machine{testMachine("n1")}, []objectmodel.Intent{lowIntent()}, 1)
+	seedPlanRecord(t, root, planRecord{Plan: plan, Run: planStatusOutput{
+		PlanID: "p-5", Status: string(objectmodel.PlanStatusDirty), MaxRisk: string(objectmodel.RiskClassLow),
+		Results: []planResult{{NodeID: "n1", IntentID: "p-5/n1/0", Outcome: "success", Result: "success", TxID: "tx-1", NodeKind: "agent", IntentKind: "package"}},
+	}})
+	code, out, errOut := runCapture(t, "plan", "status", "p-5")
+	if code != exitOK {
+		t.Fatalf("退出码 = %d, want 0(stderr=%s)", code, errOut)
+	}
+	for _, want := range []string{`"node_kind":"agent"`, `"intent_kind":"package"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("输出应含 %s, got %s", want, out)
+		}
+	}
+}
+
 // TestPlanAdvance_SkipNodeRemovesItFromPendingBatch 证明 --skip 把人已接受的节点
 // 从待跑批次摘掉、把它的结果标成 skipped-by-human,并落一行新记录。
 func TestPlanAdvance_SkipNodeRemovesItFromPendingBatch(t *testing.T) {
