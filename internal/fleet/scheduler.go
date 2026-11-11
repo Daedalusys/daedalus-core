@@ -47,6 +47,18 @@ func nodeHasRollbackPoint(n Node) bool {
 	return true
 }
 
+// intentHasRollbackPoint 报告这条 intent 在这个节点上有没有回滚点。
+// 两个维度合起来才算:
+//   - kind 维度:file 有 agent 内建的单文件 copy,与宿主无关;但只有 agent
+//     节点走这条路,atomic 节点走 daedalus-tx,不能替它承诺。
+//   - 节点维度:package / service 只能靠宿主自带的快照机制。
+func intentHasRollbackPoint(n Node, kind objectmodel.Kind) bool {
+	if kind == objectmodel.KindFile && n.Kind == objectmodel.MachineKindAgent {
+		return objectmodel.HasRollbackPoint(kind)
+	}
+	return nodeHasRollbackPoint(n)
+}
+
 // normalizeSnapshotCap 把 proto 枚举归一成控制面使用的字符串:UNSPECIFIED 按
 // NONE 落库(proto 的显式要求),避免"没探测到"被当成"有回滚点"。
 func normalizeSnapshotCap(cap agentv1.SnapshotCapability) string {
@@ -110,14 +122,17 @@ func ClassifyApply(resp *agentv1.ApplyIntentResponse, err error) Outcome {
 	}
 }
 
-// StepResult 是一条 (intent, node) 的落地记录。
+// StepResult 是一条 (intent, node) 的落地记录。NodeKind / IntentKind 随记录落盘:
+// 恢复线索由控制面按「节点形态 + intent 种类」重算,读侧不能只凭 tx_id 猜。
 type StepResult struct {
-	NodeID   string
-	IntentID string
-	Outcome  Outcome
-	Result   agentv1.ApplyIntentResult
-	TxID     string
-	Message  string
+	NodeID     string
+	IntentID   string
+	NodeKind   objectmodel.MachineKind
+	IntentKind string
+	Outcome    Outcome
+	Result     agentv1.ApplyIntentResult
+	TxID       string
+	Message    string
 }
 
 // PlanRun 是一次 Plan 执行的完整记录。
@@ -258,7 +273,7 @@ func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
 	risk := s.effectiveRisk(t.Intent)
 
 	// 高危 intent 打到没有(或未确证有)回滚点的节点:连 RPC 都不发。
-	if risk == objectmodel.RiskClassHigh && !nodeHasRollbackPoint(t.Node) {
+	if risk == objectmodel.RiskClassHigh && !intentHasRollbackPoint(t.Node, t.Intent.Kind) {
 		return s.fill(t, StepResult{
 			Outcome: OutcomeN3,
 			Result:  agentv1.ApplyIntentResult_APPLY_INTENT_RESULT_REFUSED_SNAPSHOT_CAPABILITY_NONE,
@@ -354,17 +369,20 @@ func (s *Scheduler) effectiveRisk(in objectmodel.Intent) objectmodel.RiskClass {
 // 其余 kind 原样返回,由 ClassifyIntent 的 fail-closed 兜底判 high。
 func adapterKind(k objectmodel.Kind) string {
 	switch k {
-	case objectmodel.KindPackage, objectmodel.KindService:
+	case objectmodel.KindPackage, objectmodel.KindService, objectmodel.KindFile:
 		return string(k) + ".set"
 	}
 	return string(k)
 }
 
 // fill 补齐 StepResult 的标识字段:NodeID 取当下节点(可能已被 re-register 换成
-// 新 id),IntentID 恒为 <plan_id>/<machine_id>/<intent 下标>。
+// 新 id),IntentID 恒为 <plan_id>/<machine_id>/<intent 下标>。NodeKind 取注册表里
+// 的节点形态(目标机声明不可信),IntentKind 用 wire 裸值(与 agent 侧分派同源)。
 func (s *Scheduler) fill(t DispatchTarget, res StepResult) StepResult {
 	res.NodeID = t.Node.NodeID
 	res.IntentID = intentID(t)
+	res.NodeKind = t.Node.Kind
+	res.IntentKind = string(t.Intent.Kind)
 	return res
 }
 

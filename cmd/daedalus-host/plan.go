@@ -48,14 +48,18 @@ type planStatusOutput struct {
 	Recovery []planRecovery `json:"recovery"`
 }
 
-// planResult 是单条 (intent, node) 的落地记录。
+// planResult 是单条 (intent, node) 的落地记录。NodeKind / IntentKind 是恢复线索
+// 的依据:节点形态决定还原手段(agent 侧没有 daedalus-tx),intent 种类决定给哪种
+// 恢复动作。旧记录缺这两个字段时按空值读入,恢复线索退回既有行为。
 type planResult struct {
-	NodeID   string `json:"node_id"`
-	IntentID string `json:"intent_id"`
-	Outcome  string `json:"outcome"`
-	Result   string `json:"result"`
-	TxID     string `json:"tx_id"`
-	Message  string `json:"message"`
+	NodeID     string `json:"node_id"`
+	IntentID   string `json:"intent_id"`
+	NodeKind   string `json:"node_kind"`
+	IntentKind string `json:"intent_kind"`
+	Outcome    string `json:"outcome"`
+	Result     string `json:"result"`
+	TxID       string `json:"tx_id"`
+	Message    string `json:"message"`
 }
 
 // planRecovery 是 dirty 时的本地恢复线索(控制面不代执行)。
@@ -357,12 +361,14 @@ func renderRun(run *fleet.PlanRun) planStatusOutput {
 	}
 	for _, res := range run.Results {
 		out.Results = append(out.Results, planResult{
-			NodeID:   res.NodeID,
-			IntentID: res.IntentID,
-			Outcome:  res.Outcome.String(),
-			Result:   protoResultWord(res.Result),
-			TxID:     res.TxID,
-			Message:  res.Message,
+			NodeID:     res.NodeID,
+			IntentID:   res.IntentID,
+			NodeKind:   string(res.NodeKind),
+			IntentKind: res.IntentKind,
+			Outcome:    res.Outcome.String(),
+			Result:     protoResultWord(res.Result),
+			TxID:       res.TxID,
+			Message:    res.Message,
 		})
 	}
 	out.Recovery = recoveryFor(out.Status, out.Results)
@@ -383,23 +389,50 @@ func (o *planStatusOutput) normalize() {
 	}
 }
 
-// recoveryFor 只在 dirty 且已有成功落地的节点时给出本地恢复命令——控制面
+// recoveryFor 只在 dirty 且已有成功落地的节点时给出本地恢复线索——控制面
 // 不代执行远程回滚(proto v1 没有 rollback RPC,回滚是本地的)。
+//
+// 线索按**节点形态**分支:daedalus-tx 只装在 atomic 镜像里,给 agent 节点那条
+// 命令等于指向一套它根本没有的工具。旧运行记录没有 node_kind(读成空串)按
+// atomic 处理,保持既有命令逐字不变。
 func recoveryFor(status string, results []planResult) []planRecovery {
 	out := []planRecovery{}
 	if status != string(objectmodel.PlanStatusDirty) {
 		return out
 	}
 	for _, r := range results {
-		if r.Outcome == fleet.OutcomeN1.String() && r.TxID != "" {
-			out = append(out, planRecovery{
-				NodeID:  r.NodeID,
-				TxID:    r.TxID,
-				Command: "daedalus-tx rollback " + r.TxID,
-			})
+		if r.Outcome != fleet.OutcomeN1.String() || r.TxID == "" {
+			continue
 		}
+		cmd := "daedalus-tx rollback " + r.TxID
+		if r.NodeKind == string(objectmodel.MachineKindAgent) {
+			cmd = agentRecoveryCommand(r.IntentKind)
+		}
+		out = append(out, planRecovery{
+			NodeID:  r.NodeID,
+			TxID:    r.TxID,
+			Command: cmd,
+		})
 	}
 	return out
+}
+
+// agentRecoveryCommand 给 agent 节点上的**已落地**变更一条人工恢复线索。
+// agent 侧按 kind 划定回滚点:file 有单文件快照可还原,package / service 没有
+// 自动还原手段(spec §2),只能指回包管理器 / 服务管理器。
+func agentRecoveryCommand(intentKind string) string {
+	switch intentKind {
+	case string(objectmodel.KindPackage):
+		return "在目标机上用包管理器回退(dnf history undo <id> 或 apt-get -f install),细节见 agent 审计日志"
+	case string(objectmodel.KindService):
+		return "在目标机上用 systemctl 停掉对应单元,细节见 agent 审计日志"
+	case string(objectmodel.KindFile):
+		// 这条线索只出现在「本节点已成功落地、Plan 因别的节点转 dirty」时,
+		// 所以不能说"已还原"——agent 改成功之后并没有回滚,只是 apply 前留了
+		// 单文件快照。人要知道的是怎么把它拷回去。
+		return "该文件在 apply 前已由 agent 快照(路径见 agent 审计日志),需回退时在目标机上把快照拷回原路径"
+	}
+	return "该变更在 agent 上没有自动还原手段,细节见 agent 审计日志"
 }
 
 // protoResultWord 把 proto 枚举名归一成 SDK 侧冻结的小写词表

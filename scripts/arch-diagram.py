@@ -162,7 +162,7 @@ def build() -> str:
             "怎么改、怎么恢复",
             "begin → propose → preview → y/n → apply",
             "事务日志 + before/after 快照 + 回滚计划",
-            "网关:enabled_kinds 放行 service / package",
+            "网关:enabled_kinds 放行 service / package / file",
         ],
         title_size=15,
     )

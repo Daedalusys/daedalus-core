@@ -39,6 +39,44 @@ func TestClassifyIntent_FileUnderHomeIsLow(t *testing.T) {
 	}
 }
 
+// TestClassifyIntent_DebianUbuntuKernelPackagesAreHigh 证明 Debian / Ubuntu 的
+// 内核与 polkit 包名同样命中高危表(只看 RHEL 系包名会让这两类发行上的内核
+// 升级被判低危而被自动重试)。
+func TestClassifyIntent_DebianUbuntuKernelPackagesAreHigh(t *testing.T) {
+	for _, name := range []string{"linux-image-amd64", "linux-image-generic", "linux-headers-amd64", "policykit-1"} {
+		if got := ClassifyIntent(policy.Default(), "package.set", name); got != objectmodel.RiskClassHigh {
+			t.Errorf("package.set %s = %q, want high", name, got)
+		}
+	}
+}
+
+// TestClassifyIntent_OrdinaryLinuxPackagesStayLow 是上一条的反面控制组:
+// `linux-` 不能整体进表,否则 linux-base / linux-tools 这类无害包会被判高危。
+func TestClassifyIntent_OrdinaryLinuxPackagesStayLow(t *testing.T) {
+	for _, name := range []string{"linux-base", "linux-tools"} {
+		if got := ClassifyIntent(policy.Default(), "package.set", name); got != objectmodel.RiskClassLow {
+			t.Errorf("package.set %s = %q, want low", name, got)
+		}
+	}
+}
+
+// TestClassifyIntent_FileKindUsesPathTable 证明 file kind 经 adapterKind 桥接后
+// 落到路径判定表,而不是表外 fail-closed 恒判 high:/etc 下高危,其余低危。
+// (直接传 "file.set" 测不到桥接——判定表认的是适配器名,Kind→适配器名的映射
+// 由 adapterKind 负责。)
+func TestClassifyIntent_FileKindUsesPathTable(t *testing.T) {
+	adapter := adapterKind(objectmodel.KindFile)
+	if adapter != intentKindFileSet {
+		t.Fatalf("adapterKind(file) = %q, want %q", adapter, intentKindFileSet)
+	}
+	if got := ClassifyIntent(policy.Default(), adapter, "/etc/nginx/nginx.conf"); got != objectmodel.RiskClassHigh {
+		t.Errorf("/etc 下的 file = %q, want high", got)
+	}
+	if got := ClassifyIntent(policy.Default(), adapter, "/home/u/app.conf"); got != objectmodel.RiskClassLow {
+		t.Errorf("/home 下的 file = %q, want low", got)
+	}
+}
+
 // TestClassifyIntent_SystemdServiceIsHigh 证明关键单元按 HighRiskServices 前缀命中。
 func TestClassifyIntent_SystemdServiceIsHigh(t *testing.T) {
 	if got := ClassifyIntent(policy.Default(), "service.set", "systemd-logind"); got != objectmodel.RiskClassHigh {
