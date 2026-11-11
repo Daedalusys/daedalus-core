@@ -389,23 +389,47 @@ func (o *planStatusOutput) normalize() {
 	}
 }
 
-// recoveryFor 只在 dirty 且已有成功落地的节点时给出本地恢复命令——控制面
+// recoveryFor 只在 dirty 且已有成功落地的节点时给出本地恢复线索——控制面
 // 不代执行远程回滚(proto v1 没有 rollback RPC,回滚是本地的)。
+//
+// 线索按**节点形态**分支:daedalus-tx 只装在 atomic 镜像里,给 agent 节点那条
+// 命令等于指向一套它根本没有的工具。旧运行记录没有 node_kind(读成空串)按
+// atomic 处理,保持既有命令逐字不变。
 func recoveryFor(status string, results []planResult) []planRecovery {
 	out := []planRecovery{}
 	if status != string(objectmodel.PlanStatusDirty) {
 		return out
 	}
 	for _, r := range results {
-		if r.Outcome == fleet.OutcomeN1.String() && r.TxID != "" {
-			out = append(out, planRecovery{
-				NodeID:  r.NodeID,
-				TxID:    r.TxID,
-				Command: "daedalus-tx rollback " + r.TxID,
-			})
+		if r.Outcome != fleet.OutcomeN1.String() || r.TxID == "" {
+			continue
 		}
+		cmd := "daedalus-tx rollback " + r.TxID
+		if r.NodeKind == string(objectmodel.MachineKindAgent) {
+			cmd = agentRecoveryCommand(r.IntentKind)
+		}
+		out = append(out, planRecovery{
+			NodeID:  r.NodeID,
+			TxID:    r.TxID,
+			Command: cmd,
+		})
 	}
 	return out
+}
+
+// agentRecoveryCommand 给 agent 节点上的**已落地**变更一条人工恢复线索。
+// agent 侧按 kind 划定回滚点:file 有单文件快照可还原,package / service 没有
+// 自动还原手段(spec §2),只能指回包管理器 / 服务管理器。
+func agentRecoveryCommand(intentKind string) string {
+	switch intentKind {
+	case string(objectmodel.KindPackage):
+		return "在目标机上用包管理器回退(dnf history undo <id> 或 apt-get -f install),细节见 agent 审计日志"
+	case string(objectmodel.KindService):
+		return "在目标机上用 systemctl 停掉对应单元,细节见 agent 审计日志"
+	case string(objectmodel.KindFile):
+		return "agent 已在事务内还原该文件,细节见 agent 审计日志"
+	}
+	return "该变更在 agent 上没有自动还原手段,细节见 agent 审计日志"
 }
 
 // protoResultWord 把 proto 枚举名归一成 SDK 侧冻结的小写词表

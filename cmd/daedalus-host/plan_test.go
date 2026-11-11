@@ -170,6 +170,80 @@ func TestPlanStatus_ResultsCarryNodeKind(t *testing.T) {
 	}
 }
 
+// TestRecoveryFor_AgentNodeDoesNotOfferAtomicCommand 钉住 D7:恢复指令由控制面
+// 生成,且必须看节点形态。agent 节点上根本没有 daedalus-tx,给它那条命令等于
+// 指向一台机器上不存在的可执行文件。
+func TestRecoveryFor_AgentNodeDoesNotOfferAtomicCommand(t *testing.T) {
+	results := []planResult{
+		{NodeID: "n1", IntentID: "p-6/n1/0", Outcome: "success", Result: "success", TxID: "tx-abc", NodeKind: "agent", IntentKind: "package"},
+	}
+	got := recoveryFor(string(objectmodel.PlanStatusDirty), results)
+	if len(got) != 1 {
+		t.Fatalf("recovery 数 = %d, want 1", len(got))
+	}
+	if strings.Contains(got[0].Command, "daedalus-tx") {
+		t.Errorf("agent 节点不应给出 daedalus-tx 命令: %q", got[0].Command)
+	}
+	if !strings.Contains(got[0].Command, "包管理器") {
+		t.Errorf("package 的恢复线索应指向包管理器: %q", got[0].Command)
+	}
+}
+
+// TestRecoveryFor_AgentNodeCluesPerIntentKind 钉住 agent 节点的四类线索:
+// package / service 给人工动作,file 说明事务内已还原,表外 kind 明确说没有
+// 自动还原手段(不假装有)。
+func TestRecoveryFor_AgentNodeCluesPerIntentKind(t *testing.T) {
+	cases := []struct {
+		intentKind string
+		want       string
+	}{
+		{"package", "包管理器"},
+		{"service", "systemctl 停掉对应单元"},
+		{"file", "事务内还原该文件"},
+		{"container", "没有自动还原手段"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.intentKind, func(t *testing.T) {
+			results := []planResult{
+				{NodeID: "n1", IntentID: "p-6/n1/0", Outcome: "success", Result: "success", TxID: "tx-abc", NodeKind: "agent", IntentKind: tc.intentKind},
+			}
+			got := recoveryFor(string(objectmodel.PlanStatusDirty), results)
+			if len(got) != 1 {
+				t.Fatalf("recovery 数 = %d, want 1", len(got))
+			}
+			if strings.Contains(got[0].Command, "daedalus-tx") {
+				t.Errorf("agent 节点不应给出 daedalus-tx 命令: %q", got[0].Command)
+			}
+			if !strings.Contains(got[0].Command, tc.want) {
+				t.Errorf("intent kind %q 的线索应含 %q, got %q", tc.intentKind, tc.want, got[0].Command)
+			}
+		})
+	}
+}
+
+// TestRecoveryFor_NonAgentKeepsAtomicCommand 钉住向后兼容:旧运行记录没有
+// node_kind 字段(读成空串)与显式 atomic 的节点,命令都必须逐字不变 ——
+// `daedalus-tx rollback <txid>` 是既有契约。
+func TestRecoveryFor_NonAgentKeepsAtomicCommand(t *testing.T) {
+	for _, nodeKind := range []string{"", "atomic"} {
+		t.Run("kind="+nodeKind, func(t *testing.T) {
+			results := []planResult{
+				{NodeID: "n1", IntentID: "p-6/n1/0", Outcome: "success", Result: "success", TxID: "tx-abc", NodeKind: nodeKind, IntentKind: "package"},
+			}
+			got := recoveryFor(string(objectmodel.PlanStatusDirty), results)
+			if len(got) != 1 {
+				t.Fatalf("recovery 数 = %d, want 1", len(got))
+			}
+			if got[0].Command != "daedalus-tx rollback tx-abc" {
+				t.Errorf("command = %q, want 逐字不变", got[0].Command)
+			}
+			if got[0].NodeID != "n1" || got[0].TxID != "tx-abc" {
+				t.Errorf("恢复线索字段漂移: %+v", got[0])
+			}
+		})
+	}
+}
+
 // TestPlanAdvance_SkipNodeRemovesItFromPendingBatch 证明 --skip 把人已接受的节点
 // 从待跑批次摘掉、把它的结果标成 skipped-by-human,并落一行新记录。
 func TestPlanAdvance_SkipNodeRemovesItFromPendingBatch(t *testing.T) {
