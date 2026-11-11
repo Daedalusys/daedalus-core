@@ -17,7 +17,7 @@
 #       再单测本脚本自己的判定原语,含一个"说谎的 agent"负对照。
 #   tests/fleet/agent-e2e.sh --hosts ubuntu=<ssh别名>[@<可拨地址>] [debian12=... rhel9=...]
 #       真机矩阵:逐台装 agent → node add → node list → 低危 Plan + 目标机独立
-#       核实 → 高危 Plan(无回滚点节点)当场 dirty。
+#       核实 → 高危 Plan(package 在该节点无回滚点)当场 dirty。
 #       需要:
 #         - 控制面 mTLS 客户端凭证:DAEDALUS_FLEET_CLIENT_CERT / _KEY / DAEDALUS_FLEET_CA
 #         - agent 出货 tarball:DAEDALUS_AGENT_TARBALL=<path>(内含 bin/ 与 scripts/)
@@ -135,6 +135,27 @@ low_risk_verdict() {
     pkg_installed_from_output "$2" "$3" "$4"
 }
 
+# node_has_rollback_point <node-kind> <intent-kind> <snapshot-capability>:某条
+# intent 在这个节点上**有没有回滚点**。只用于真机矩阵选点,不参与判定。
+#
+# 与控制面 internal/fleet 的 intentHasRollbackPoint 同语义,两个维度合起来才算:
+#   - kind 维度:agent 内置单文件 copy 快照,但只对 file 成立 —— package/service
+#     改的是宿主状态,单文件还原救不了;
+#   - 节点维度:非 file 的 kind 只能靠宿主自带的快照机制,快照能力为空 / NONE /
+#     UNSPECIFIED 一律视为没有(proto 要求 UNSPECIFIED 按 NONE 处理)。
+#
+# 注意这不回答"低危能不能打":低危 intent 不因缺回滚点被拒,所以低危腿不筛点。
+node_has_rollback_point() {
+    local node_kind="$1" intent_kind="$2" snap_cap="${3:-}"
+    if [ "$intent_kind" = "file" ] && [ "$node_kind" = "agent" ]; then
+        return 0
+    fi
+    case "$snap_cap" in
+        ""|SNAPSHOT_CAPABILITY_NONE|SNAPSHOT_CAPABILITY_UNSPECIFIED) return 1 ;;
+    esac
+    return 0
+}
+
 # ------------------------------------------------------------ Plan 生成 ----
 
 # render_low_plan <pkg> <node_id:support_level>...:低危腿的 Plan。
@@ -149,8 +170,10 @@ render_low_plan() {
 
 # render_high_plan <node_id:support_level>...:高危腿的 Plan。
 #
-# 目标机必须**只含没有回滚点的节点**:有回滚点的节点会把高危 intent 真的下发
-# 出去(kernel-core 是真的会被装上的),那不是本脚本该做的动作。
+# 目标机必须**只含 package 在这个节点上没有回滚点的节点**(按 intent kind 判,
+# 不按风险等级判):有回滚点的节点会把高危 intent 真的下发出去(kernel-core 是
+# 真的会被装上的),那不是本脚本该做的动作。agent 节点上 package 没有内建回滚点
+# (内建 copy 点只给 file),只能靠宿主快照机制,所以选点看的是节点快照能力。
 render_high_plan() {
     render_plan "agent-e2e-high" high "kernel-core" "$@"
 }
@@ -269,6 +292,19 @@ check_probe() {
     fi
 }
 
+# check_point <描述> <node-kind> <intent-kind> <snapshot-capability> <has|none>
+check_point() {
+    local desc="$1" node_kind="$2" intent_kind="$3" cap="$4" want="$5" got=none
+    if node_has_rollback_point "$node_kind" "$intent_kind" "$cap"; then
+        got=has
+    fi
+    if [ "$got" = "$want" ]; then
+        ok "$desc"
+    else
+        bad "$desc(期望 $want,实际 $got)"
+    fi
+}
+
 # build_host_bin:确保有一份 daedalus-host 可执行(没有就地构建一份临时的)。
 build_host_bin() {
     if [ -x "$HOST_BIN" ]; then
@@ -310,6 +346,16 @@ run_selftest() {
         ubuntu "$WANT_PKG" absent ""
     check_probe "rpm 输出形状不认识 → 判没装上" \
         rhel "$WANT_PKG" absent "$(printf 'nginx-devel is not a package\n')"
+
+    step "回滚点判定:按 intent kind + 节点快照能力(不按风险等级)"
+    check_point "file on agent → 有内建单文件 copy 回滚点(与宿主快照无关)" \
+        agent file SNAPSHOT_CAPABILITY_NONE has
+    check_point "file on atomic → 不替 daedalus-tx 承诺,按节点快照能力判" \
+        atomic file SNAPSHOT_CAPABILITY_NONE none
+    check_point "package on agent + 快照能力 NONE → 无回滚点(高危腿的选点条件)" \
+        agent package SNAPSHOT_CAPABILITY_NONE none
+    check_point "package on agent + 快照能力 BTRFS → 有回滚点(高危腿不选它)" \
+        agent package SNAPSHOT_CAPABILITY_BTRFS_SUBVOLUME has
 
     step "负对照:说谎的 agent(控制面报 complete,目标机上并没有装上)"
     local lying='{"plan_id":"selftest","status":"complete","results":[{"node_id":"n1","outcome":"success","result":"success","tx_id":"tx-n1","message":""}]}'
@@ -440,30 +486,37 @@ run_matrix() {
         'all(.nodes[]; .support_level == "supported" or .support_level == "experimental")' "$json"
     echo "  node list: $json"
 
-    # 按回滚点把节点分成两组。agent 的 RF3 对**所有** ApplyIntent 生效(不限风险
-    # 等级),没有回滚点的节点连低危 intent 也会被拒 —— 所以低危腿只能打有回滚点
-    # 的节点,没回滚点的归高危腿(验"下发前就被拒")。这不是迁就测试,而是被验
-    # 对象的真实语义。按 node.addr 对齐回主机下标。
-    local -a caps=()
+    # 快照能力**只**用来判"非 file 的 kind 在这个节点上有没有回滚点"(见
+    # node_has_rollback_point),不再用来筛低危腿:RF3 只拦"高危且无回滚点"的
+    # intent,低危 intent 不会因为节点缺回滚点被拒。按 node.addr 对齐回主机下标。
+    local -a caps=() node_kinds=()
     for ((i = 0; i < n; i++)); do
-        caps[i]="$("$JQ" -r --arg a "${dials[i]}" \
-            '[.nodes[] | select(.addr == $a) | .snapshot_capability] | first // ""' <<<"$json")"
-        echo "  node ${keys[i]}: addr=${dials[i]} snapshot_capability=${caps[i]:-<无此节点>}"
+        local row
+        row="$("$JQ" -r --arg a "${dials[i]}" \
+            '[.nodes[] | select(.addr == $a) | "\(.kind) \(.snapshot_capability)"] | first // ""' <<<"$json")"
+        node_kinds[i]="${row%% *}"
+        caps[i]="${row##* }"
+        echo "  node ${keys[i]}: addr=${dials[i]} kind=${node_kinds[i]:-<无此节点>} snapshot_capability=${caps[i]:-<无>}"
     done
 
     step "低危腿:package.set ${WANT_PKG}(low)→ 目标机独立核实"
+    # node list 里的节点**全部**进低危腿:低危 intent 不因缺回滚点被拒,回滚点
+    # 按 intent kind 判是 agent 内部的事,不是低危腿的选点条件。
     local -a low_pairs=() low_keys=() low_sshs=() low_distros=()
     local low_json
     for ((i = 0; i < n; i++)); do
-        if [ -z "${caps[i]}" ] || [ "${caps[i]}" = "SNAPSHOT_CAPABILITY_NONE" ]; then
-            echo "  ${keys[i]}: 无回滚点,低危腿跳过(RF3 会拒;归高危腿)"
+        local pair
+        pair="$("$JQ" -r --arg a "${dials[i]}" \
+            '[.nodes[] | select(.addr == $a) | "\(.node_id):\(.support_level)"] | first // ""' <<<"$json")"
+        if [ -z "$pair" ]; then
+            bad "${keys[i]}: 不在 node list 里(登记失败?),低危腿跳过该节点"
             continue
         fi
-        low_pairs+=("$("$JQ" -r --arg a "${dials[i]}" '.nodes[] | select(.addr == $a) | "\(.node_id):\(.support_level)"' <<<"$json" | head -1)")
+        low_pairs+=("$pair")
         low_keys+=("${keys[i]}"); low_sshs+=("${sshs[i]}"); low_distros+=("${distros[i]}")
     done
     if [ "${#low_pairs[@]}" -eq 0 ]; then
-        bad "没有任何有回滚点的节点,低危腿无法执行"
+        bad "node list 里没有任何节点,低危腿无法执行"
     else
         local planfile
         planfile="$(mktemp)"
@@ -473,7 +526,8 @@ run_matrix() {
         # "零目标机的 Plan" 也会报 complete,所以只断 status 是空过:必须断言真的
         # 每台目标机都有一条落地记录,且带非空 tx_id。
         assert_jq "低危 Plan 每条目标机都有落地记录" ".results | length == ${#low_pairs[@]}" "$low_json"
-        assert_jq "每条落地记录都有非空 tx_id(本地有回滚点)" 'all(.results[]; .tx_id != "")' "$low_json"
+        assert_jq "每条落地记录都有非空 tx_id(事务 id,不等于\"有回滚点\")" \
+            'all(.results[]; .tx_id != "")' "$low_json"
         echo "  plan submit(package.set ${WANT_PKG}): $low_json"
         # ★ 不采信上面的 complete:回到每台目标机上,用包管理器独立核实。
         for ((i = 0; i < ${#low_pairs[@]}; i++)); do
@@ -482,22 +536,33 @@ run_matrix() {
         rm -f "$planfile"
     fi
 
-    step "高危腿:只打没有回滚点的节点 → 期望当场 dirty(且什么都没下发)"
+    step "高危腿:只打\"package 在该节点上没有回滚点\"的节点 → 期望当场 dirty(且什么都没下发)"
+    # 选点判据是"package 这个 kind 在这个节点上有没有回滚点",不是"节点的
+    # snapshot 能力强不强":agent 节点上 package 改宿主状态、没有内建回滚点
+    # (内建 copy 只给 file),只能靠宿主快照机制;agent 侧已停用宿主快照探测,
+    # 故 agent 节点对 package 一律无回滚点。
     local -a none_pairs=()
     for ((i = 0; i < n; i++)); do
-        if [ "${caps[i]}" = "SNAPSHOT_CAPABILITY_NONE" ]; then
-            none_pairs+=("$("$JQ" -r --arg a "${dials[i]}" '.nodes[] | select(.addr == $a) | "\(.node_id):\(.support_level)"' <<<"$json" | head -1)")
+        if [ -z "${node_kinds[i]}" ]; then
+            continue # 不在 node list 里的节点已在低危腿处记为失败
         fi
+        if node_has_rollback_point "${node_kinds[i]}" "package" "${caps[i]}"; then
+            echo "  ${keys[i]}: package 在该节点有回滚点,高危腿不打(否则 kernel-core 会真被装上)"
+            continue
+        fi
+        none_pairs+=("$("$JQ" -r --arg a "${dials[i]}" '.nodes[] | select(.addr == $a) | "\(.node_id):\(.support_level)"' <<<"$json" | head -1)")
     done
     if [ "${#none_pairs[@]}" -eq 0 ]; then
-        bad "没有 snapshot 能力为 NONE 的节点,高危腿无法按预期执行(不下发高危变更);记为偏差"
+        bad "没有任何\"package 无回滚点\"的节点,高危腿无法按预期执行(不下发高危变更);记为偏差"
     else
         local hfile high_json
         hfile="$(mktemp)"
         render_high_plan ${none_pairs[@]+"${none_pairs[@]}"} > "$hfile"
         high_json="$("$HOST_BIN" plan submit "$hfile")"
         assert_jq "高危 Plan status=dirty" '.status == "dirty"' "$high_json"
-        assert_jq "拒绝文案点名 snapshot 能力" \
+        # 拒绝原因是"package 在这个节点上没有回滚点"(控制面文案原样沿用
+        # snapshot capability 一词,文案不由本驱动决定,故仍按该词取证)。
+        assert_jq "拒绝文案点名回滚点缺失(逐字含 snapshot 能力字样)" \
             'any(.results[]; (.message | ascii_downcase | contains("snapshot")))' "$high_json"
         assert_jq "没有任何节点拿到 tx_id(高危 intent 未下发)" \
             'all(.results[]; .tx_id == "")' "$high_json"
