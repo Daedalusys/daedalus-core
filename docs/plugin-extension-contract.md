@@ -102,9 +102,19 @@ exec /usr/local/bin/deno run --allow-env --allow-net --allow-read=… "$(dirname
 
 `--allow-*` 从 manifest 移到两处,各司其职:
 
-- **OS 层**:`systemd-run --scope` + `DynamicUser` / `ProtectSystem=strict` /
-  `SystemCallFilter` / `IPAddressAllow`(见 #117)。这是权威边界,运行时换掉也还在。
+- **OS 层**:Landlock(路径白名单)+ seccomp(syscall 白名单),由入口前的 launcher 施加。
+  这是权威边界,运行时换掉也还在。
 - **插件包内**:入口脚本里的解释器旗标。降为 defense-in-depth,由 checksums 覆盖。
+
+**为什么不是 systemd 的 `ProtectSystem` / `DynamicUser` / `IPAddressDeny`**:copilot 是用户态
+CLI,不是 system 单元。`systemd.exec(5)` 明确说明文件系统命名空间相关设置"只对特权进程可用",
+用户服务里不可用;本机实测同样如此 —— `ProtectSystem=strict` 下 `/var/tmp` 仍可写,
+`ProtectHome=read-only` 下 `$HOME` 仍可写,`IPAddressDeny=any` 下 `127.0.0.1` 仍可连。
+用户态真正生效的是 seccomp 与 Landlock(kernel 5.14 已带该 LSM,ABI=6)。
+详见 #117 的实测记录。
+
+另有一条副作用:现有能力插件的 `SystemCallFilter=@system-service` 会**直接杀掉 Deno**
+(`SIGSYS`, status 31/SYS),因为 V8 需要该集合之外的 syscall。copilot 不能复用那份 drop-in。
 
 ### Deno 的位置
 
