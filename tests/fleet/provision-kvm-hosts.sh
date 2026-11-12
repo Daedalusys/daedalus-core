@@ -740,7 +740,7 @@ fleet_remote_verify() {
         case "${GUEST_FAMILY[i]}" in
             ubuntu|debian|almalinux)
                 if [ -n "$rs" ]; then
-                    echo "  ok   - $name:rsync 在位($rs)→ 有回滚点"
+                    echo "  ok   - $name:rsync 在位($rs)(宿主手段之一;回滚点仍按 kind 判,package/service 不因此有回滚点)"
                 else
                     echo "  FAIL - $name:缺 rsync(会退化成无回滚点)" >&2
                     not_ok=1
