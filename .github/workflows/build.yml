@@ -129,6 +129,7 @@ jobs:
         run: |
           # shellcheck source=/dev/null
           . files/scripts/deno-version.env
+          : "${DENO_VERSION:?deno-version.env 缺少 DENO_VERSION}"
           echo "version=${DENO_VERSION}" >> "$GITHUB_OUTPUT"
           echo "PINNED_DENO_VERSION=${DENO_VERSION}"
 
@@ -170,6 +171,13 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         run: just verify-units
+
+      - name: Deno runtime pin gate
+        # 运行时版本 / sha256 / 支持窗口三分量的一致性门禁。支持窗口过期时本步会红,
+        # 把「2027-01-31 之后没人记得重裁决」变成一次构建失败。
+        shell: bash
+        working-directory: daedalus-core
+        run: just verify-deno-pin
 
       - name: plugin inventory gate
         # 四份插件清单(76 CAPS / 插件单元 / 插件 manifest / plugins release 供料)必须相等。
