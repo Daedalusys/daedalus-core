@@ -611,3 +611,345 @@ v1
 - [x] `lvconvert --merge` 的生效条件有原始输出支撑:origin 占用时只"登记",卸载/重启后才落地(§8)。
 - [ ] **`agent-e2e.sh` 不是绿的**(7 通过 / 3 失败):低危腿因 **D1**(agent 侧真实回归)被拒,
       高危腿因 **D2**(驱动镜像逻辑过期)没打出去。两者都记在 §9,没有改代码、没有改驱动、没有改断言。
+
+---
+
+## 11. 修复后复跑(2026-11-12)
+
+> D1 / D2 / D3 三条修复落地后的复跑。§1–§10 原样保留(上一轮的失败留在原地,不删不改)。
+> 边界:本轮**不改 Go 源码、不改驱动、不改生成器、不改 `supportMatrix`**;仓库里只有本文件变。
+
+### 11.1 三条修复与本次二进制
+
+| 缺陷 | 修复 | commit |
+| --- | --- | --- |
+| D1 低危 `package` intent 被 `backend_unavailable` 误拒 | 无回滚点的 intent 不再选后端;有回滚点却拿不到后端时 fail-closed | `daedalus-agent` `92a6fa7` |
+| D2 驱动 `node_has_rollback_point` 仍是旧语义(宿主能力参与准入) | agent 节点只按 kind 判,与控制面 `392d779` 一致 | `daedalus-core` `95b71c0` |
+| D3 低危腿"独立核实"空过(不取执行前基线) | 低危腿执行前加包管理器基线闸门:已装着就不下发并记 FAIL | `daedalus-core` `95b71c0` |
+
+构建 / 同步(命令与 sha256 原文):
+
+```console
+$ cd ../daedalus-agent && go build -trimpath -o bin/daedalus-agent ./cmd/daedalus-agent
+BUILD_RC=0
+$ ./bin/daedalus-agent version
+daedalus-agent 0.1.0-dev
+$ sha256sum bin/daedalus-agent
+3ee13c39024ce7682e50d52e42adf2519588b67d6d49f1d34375818c94b74e94  bin/daedalus-agent
+
+$ sha=$(git rev-parse --short HEAD)     # 92a6fa7
+$ tar -czf dist/daedalus-agent-$sha.tar.gz -C /var/tmp/agentpack-$sha daedalus-agent-$sha
+$ tar -tzf dist/daedalus-agent-92a6fa7.tar.gz
+daedalus-agent-92a6fa7/
+daedalus-agent-92a6fa7/bin/
+daedalus-agent-92a6fa7/bin/daedalus-agent
+daedalus-agent-92a6fa7/scripts/
+daedalus-agent-92a6fa7/scripts/install.sh
+daedalus-agent-92a6fa7/scripts/install_test.sh
+daedalus-agent-92a6fa7/scripts/postinstall.sh
+daedalus-agent-92a6fa7/scripts/uninstall.sh
+$ sha256sum dist/daedalus-agent-92a6fa7.tar.gz
+629672508826fe004037601b67f5c80eea1a344882d9e11974f00e1a7386932b  dist/daedalus-agent-92a6fa7.tar.gz
+
+$ cd ../daedalus-core && just go-build        # rc=0
+$ sha256sum bin/daedalus-host
+cf702bab97602b927dae1ea6416d76db67b5800420bbc54cf9ac5a810d121a56  bin/daedalus-host
+$ git rev-parse --short HEAD
+95b71c0
+
+$ rsync -az bin/daedalus-host Masterwet_Server:~/daedalus-e2e/core/bin/                       # rc=0
+$ rsync -az --delete tests/fleet Masterwet_Server:~/daedalus-e2e/core/tests/                   # rc=0
+$ rsync -az ../daedalus-agent/dist/daedalus-agent-92a6fa7.tar.gz Masterwet_Server:~/daedalus-e2e/artifacts/  # rc=0
+$ ssh Masterwet_Server 'sha256sum ~/daedalus-e2e/artifacts/daedalus-agent-92a6fa7.tar.gz ~/daedalus-e2e/core/bin/daedalus-host'
+629672508826fe004037601b67f5c80eea1a344882d9e11974f00e1a7386932b  /home/udefine-dev/daedalus-e2e/artifacts/daedalus-agent-92a6fa7.tar.gz
+cf702bab97602b927dae1ea6416d76db67b5800420bbc54cf9ac5a810d121a56  /home/udefine-dev/daedalus-e2e/core/bin/daedalus-host
+```
+
+四台 guest 的**安装态**二进制与出货件逐字节一致(排除"跑的还是旧代码";每台第二行是该台的
+`tree` 探针,与 §11.5 的独立核实互证。`vmu`/`vmd` 的 `dpkg-query` 输出不带换行,原文因此与
+下一个 `==` 连在一起):
+
+```text
+== vmu
+3ee13c39024ce7682e50d52e42adf2519588b67d6d49f1d34375818c94b74e94  /opt/daedalus-agent/bin/daedalus-agent
+install ok installed 2.1.1-2ubuntu3.24.04.2== vmd
+3ee13c39024ce7682e50d52e42adf2519588b67d6d49f1d34375818c94b74e94  /opt/daedalus-agent/bin/daedalus-agent
+install ok installed 2.1.0-1== vmc
+3ee13c39024ce7682e50d52e42adf2519588b67d6d49f1d34375818c94b74e94  /opt/daedalus-agent/bin/daedalus-agent
+tree-1.8.0-10.el9.x86_64
+== vma
+3ee13c39024ce7682e50d52e42adf2519588b67d6d49f1d34375818c94b74e94  /opt/daedalus-agent/bin/daedalus-agent
+tree-1.8.0-10.el9.x86_64
+```
+
+### 11.2 驱动自检:`21 通过 / 0 失败`
+
+```console
+$ bash tests/fleet/agent-e2e.sh --selftest
+SELFTEST_EXIT=0
+```
+
+```text
+
+== 控制面判定(复用 core 既有本地 fake agent 判据,不重复实现控制面半)
+  === RUN   TestFleetE2E_LowRiskPlanCompletes
+  --- PASS: TestFleetE2E_LowRiskPlanCompletes (0.05s)
+  === RUN   TestFleetE2E_HighRiskPlanStopsOnNodeWithoutSnapshot
+  --- PASS: TestFleetE2E_HighRiskPlanStopsOnNodeWithoutSnapshot (0.01s)
+  PASS
+  ok  	github.com/Daedalusys/daedalus-core/tests/integration	0.066s
+  ok   - 低危 Plan 全量落地 + 高危遇无回滚点节点当场 dirty(真 mTLS + 真 Scheduler)
+
+== 目标机独立核实:包管理器输出判定(不采信任何自我汇报)
+  ok   - dpkg 报告 install ok installed → 判已装
+  ok   - dpkg 单行格式 install ok installed <版本> → 判已装
+  ok   - dpkg 字段占位符没被展开(写成 rpm 的 %{Status})→ 判没装上
+  ok   - dpkg 报告 no packages found → 判没装上
+  ok   - rpm 报告 nginx-1.24.0-2.el9.x86_64 → 判已装
+  ok   - rpm 报告 package nginx is not installed → 判没装上
+  ok   - rpm 报本地化提示(zh_CN 的"未安装软件包")→ 仍判没装上
+  ok   - 探测命令失败(空输出)→ 判没装上(fail-closed,不猜)
+  ok   - rpm 输出形状不认识 → 判没装上
+
+== 回滚点判定:agent 只按 kind 判;atomic 按节点快照能力
+  ok   - file on agent → 有内建单文件 copy 回滚点(与宿主快照无关)
+  ok   - file on atomic → 不替 daedalus-tx 承诺,按节点快照能力判
+  ok   - package on agent + 快照能力 NONE → 无回滚点(高危腿的选点条件)
+  ok   - package on agent + 快照能力 BTRFS → 仍无回滚点(能力不参与准入)
+  ok   - package on agent + 快照能力 LVM_SNAP → 仍无回滚点(merge 要卸载/重启)
+  ok   - package on agent + 快照能力 SNAPPER → 仍无回滚点
+  ok   - package on atomic + 快照能力 LVM_SNAP → atomic 仍按能力判
+
+== 负对照:说谎的 agent(控制面报 complete,目标机上并没有装上)
+  ok   - Plan complete 但目标机无此包 → 判定不通过(applyStub 的教训已钉住)
+  ok   - 正对照:Plan complete + 目标机确证已装 → 判定通过
+
+== 生成的 Plan 过真校验器(空注册表 ⇒ 只应在"节点未注册"处停)
+  ok   - 生成的低危 Plan 通过 Plan 校验(在"节点未注册"处才停,说明结构合法)
+  ok   - 反证:改坏 blast_radius.count 后校验器确实拒(说明上一条不是空过)
+
+agent-e2e: 21 通过 / 0 失败
+```
+
+D2 修掉后,驱动里"有没有回滚点"的判定与控制面同源,自检里
+`package on agent + 快照能力 BTRFS / LVM_SNAP / SNAPPER → 仍无回滚点` 三条**首次全绿**
+——上一轮的自检按旧语义写,跑了也只能证明驱动自洽,故没跑(§9「未覆盖项」)。
+
+### 11.3 矩阵命令、换包与执行前基线
+
+```console
+$ ssh Masterwet_Server 'bash -s' <<'EOS'
+  cd "$HOME/daedalus-e2e/core"
+  export DAEDALUS_FLEET_CLIENT_CERT="$HOME/daedalus-fleet-kvm/pki/client.pem"
+  export DAEDALUS_FLEET_CLIENT_KEY="$HOME/daedalus-fleet-kvm/pki/client.key"
+  export DAEDALUS_FLEET_CA="$HOME/daedalus-fleet-kvm/pki/ca.pem"
+  export DAEDALUS_AGENT_TARBALL="$HOME/daedalus-e2e/artifacts/daedalus-agent-92a6fa7.tar.gz"
+  bash tests/fleet/agent-e2e.sh \
+    --hosts ubuntu=vmu@localhost:9471 debian12=vmd@localhost:9472 centos9=vmc@localhost:9473 alma9=vma@localhost:9474 \
+    --package tree
+EOS
+MATRIX_EXIT=0
+```
+
+**为什么换包**:四台上的 `nginx` 是上一轮装上的(§5 / §9 D3),留着它会让 D3 新加的基线闸门
+把四台全部拦下 —— 那正是闸门要防的"空过"。`tree` 在四台上都 absent,本轮用它。
+
+矩阵开跑**之前**在四台上取的基线(原文;`tree` 之外的行是同一趟探针顺带取的
+os-release / TLS 目录 / agent_id,以及另一发行版探针的 `command not found` 噪声):
+
+```text
+== vmu
+  vmu
+  ID=ubuntu VER=24.04
+  agent.key
+  agent.pem
+  ca.pem
+  e2e-u24
+  bash: line 1: rpm: command not found
+  dpkg-query: no packages found matching tree
+== vmd
+  vmd
+  ID=debian VER=12
+  agent.key
+  agent.pem
+  ca.pem
+  e2e-d12
+  bash: line 1: rpm: command not found
+  dpkg-query: no packages found matching tree
+== vmc
+  vmc
+  ID=centos VER=9
+  agent.key
+  agent.pem
+  ca.pem
+  e2e-c9
+  package tree is not installed
+  bash: line 1: dpkg-query: command not found
+== vma
+  vma
+  ID=almalinux VER=9.8
+  agent.key
+  agent.pem
+  ca.pem
+  e2e-a9
+  package tree is not installed
+  bash: line 1: dpkg-query: command not found
+```
+
+四台全部 absent ⇒ 基线干净,闸门放行(D3 的闸门本身没有打印 ok,它只在拦下时打印 FAIL,
+这是它的设计)。
+
+### 11.4 `node list` 原文(驱动 Step 3)
+
+```text
+== node list 契约
+  ok   - 节点数 = 4
+  ok   - 每行 support_level ∈ {supported, experimental}
+  node list: {"nodes":[{"node_id":"e2e-a9-633a3815","agent_id":"e2e-a9","kind":"agent","addr":"localhost:9474","distro":"almalinux","distro_version":"9.8","kernel":"","arch":"","hostname":"vma","agent_version":"","snapshot_capability":"SNAPSHOT_CAPABILITY_LVM_SNAP","support_level":"experimental","cert_fingerprint":"","registered_at_unix":1794490411,"last_seen_unix":1794490411},{"node_id":"e2e-c9-0278240b","agent_id":"e2e-c9","kind":"agent","addr":"localhost:9473","distro":"centos","distro_version":"9","kernel":"","arch":"","hostname":"vmc","agent_version":"","snapshot_capability":"SNAPSHOT_CAPABILITY_NONE","support_level":"experimental","cert_fingerprint":"","registered_at_unix":1794490411,"last_seen_unix":1794490411},{"node_id":"e2e-d12-59ce7a9b","agent_id":"e2e-d12","kind":"agent","addr":"localhost:9472","distro":"debian","distro_version":"12","kernel":"","arch":"","hostname":"vmd","agent_version":"","snapshot_capability":"SNAPSHOT_CAPABILITY_RSYNC_TARGET","support_level":"supported","cert_fingerprint":"","registered_at_unix":1794490411,"last_seen_unix":1794490411},{"node_id":"e2e-u24-f3468e28","agent_id":"e2e-u24","kind":"agent","addr":"localhost:9471","distro":"ubuntu","distro_version":"24.04","kernel":"","arch":"","hostname":"vmu","agent_version":"","snapshot_capability":"SNAPSHOT_CAPABILITY_RSYNC_TARGET","support_level":"supported","cert_fingerprint":"","registered_at_unix":1794490411,"last_seen_unix":1794490411}]}
+  node ubuntu: addr=localhost:9471 kind=agent snapshot_capability=SNAPSHOT_CAPABILITY_RSYNC_TARGET
+  node debian12: addr=localhost:9472 kind=agent snapshot_capability=SNAPSHOT_CAPABILITY_RSYNC_TARGET
+  node centos9: addr=localhost:9473 kind=agent snapshot_capability=SNAPSHOT_CAPABILITY_NONE
+  node alma9: addr=localhost:9474 kind=agent snapshot_capability=SNAPSHOT_CAPABILITY_LVM_SNAP
+
+```
+
+| host | distro | support_level | snapshot_capability |
+| --- | --- | --- | --- |
+| `ubuntu` | ubuntu 24.04 | `supported` | `SNAPSHOT_CAPABILITY_RSYNC_TARGET` |
+| `debian12` | debian 12 | `supported` | `SNAPSHOT_CAPABILITY_RSYNC_TARGET` |
+| `centos9` | centos 9 | `experimental` | `SNAPSHOT_CAPABILITY_NONE` |
+| `alma9` | almalinux 9.8 | `experimental` | `SNAPSHOT_CAPABILITY_LVM_SNAP` |
+
+四台 `kind` 都是 `agent`;按 kind 判,`package` 在四台上都**没有**回滚点(与自报的快照能力无关),
+这正是高危腿的选点条件。
+
+### 11.5 低危腿:`package.set tree(low)` 四台 complete + 目标机独立核实
+
+```text
+== 低危腿:package.set tree(low)→ 目标机独立核实
+  ok   - 低危 Plan status=complete
+  ok   - 低危 Plan 每条目标机都有落地记录
+  ok   - 每条落地记录都有非空 tx_id(事务 id,不等于"有回滚点")
+  plan submit(package.set tree): {"plan_id":"agent-e2e-low","status":"complete","max_risk":"low","batches":[{"index":0,"node_ids":["e2e-u24-f3468e28"]},{"index":1,"node_ids":["e2e-d12-59ce7a9b"]},{"index":2,"node_ids":["e2e-c9-0278240b"]},{"index":3,"node_ids":["e2e-a9-633a3815"]}],"results":[{"node_id":"e2e-u24-f3468e28","intent_id":"agent-e2e-low/e2e-u24-f3468e28/0","node_kind":"agent","intent_kind":"package","outcome":"success","result":"success","tx_id":"tx-agent-e2e-low/e2e-u24-f3468e28/0","message":""},{"node_id":"e2e-d12-59ce7a9b","intent_id":"agent-e2e-low/e2e-d12-59ce7a9b/0","node_kind":"agent","intent_kind":"package","outcome":"success","result":"success","tx_id":"tx-agent-e2e-low/e2e-d12-59ce7a9b/0","message":""},{"node_id":"e2e-c9-0278240b","intent_id":"agent-e2e-low/e2e-c9-0278240b/0","node_kind":"agent","intent_kind":"package","outcome":"success","result":"success","tx_id":"tx-agent-e2e-low/e2e-c9-0278240b/0","message":""},{"node_id":"e2e-a9-633a3815","intent_id":"agent-e2e-low/e2e-a9-633a3815/0","node_kind":"agent","intent_kind":"package","outcome":"success","result":"success","tx_id":"tx-agent-e2e-low/e2e-a9-633a3815/0","message":""}],"recovery":[]}
+  [独立核实] ubuntu: $ LC_ALL=C dpkg-query -W -f='${Status} ${Version}' tree 2>&1 || true
+    install ok installed 2.1.1-2ubuntu3.24.04.2
+  ok   - ubuntu: 目标机上确证 tree 已装(独立于控制面/agent 的自我汇报)
+  [独立核实] debian12: $ LC_ALL=C dpkg-query -W -f='${Status} ${Version}' tree 2>&1 || true
+    install ok installed 2.1.0-1
+  ok   - debian12: 目标机上确证 tree 已装(独立于控制面/agent 的自我汇报)
+  [独立核实] centos9: $ LC_ALL=C rpm -q tree 2>&1 || true
+    tree-1.8.0-10.el9.x86_64
+  ok   - centos9: 目标机上确证 tree 已装(独立于控制面/agent 的自我汇报)
+  [独立核实] alma9: $ LC_ALL=C rpm -q tree 2>&1 || true
+    tree-1.8.0-10.el9.x86_64
+  ok   - alma9: 目标机上确证 tree 已装(独立于控制面/agent 的自我汇报)
+
+```
+
+`status=complete` 只是控制面自报,不作判据;判据是每台 `[独立核实]` 的包管理器输出 ——
+四台分别是 `install ok installed 2.1.1-2ubuntu3.24.04.2` / `install ok installed 2.1.0-1` /
+`tree-1.8.0-10.el9.x86_64` ×2,而执行前四台都是 absent(§11.3),所以"装上了"是本轮的**净变化**。
+每条落地记录的 `tx_id` 都非空(`tx-agent-e2e-low/<node_id>/0`)。
+
+### 11.6 高危腿:`package` 在四台上都没有回滚点 → 当场 dirty、一个 `tx_id` 都没有
+
+```text
+== 高危腿:只打"package 在该节点上没有回滚点"的节点 → 期望当场 dirty(且什么都没下发)
+  ok   - 高危 Plan status=dirty
+  ok   - 拒绝文案点名回滚点缺失(逐字含 snapshot 能力字样)
+  ok   - 没有任何节点拿到 tx_id(高危 intent 未下发)
+  ok   - 没有恢复命令(没有机器被动过)
+  plan submit(package.set kernel-core,high): {"plan_id":"agent-e2e-high","status":"dirty","max_risk":"high","batches":[{"index":0,"node_ids":["e2e-u24-f3468e28"]},{"index":1,"node_ids":["e2e-d12-59ce7a9b"]},{"index":2,"node_ids":["e2e-c9-0278240b"]},{"index":3,"node_ids":["e2e-a9-633a3815"]}],"results":[{"node_id":"e2e-u24-f3468e28","intent_id":"agent-e2e-high/e2e-u24-f3468e28/0","node_kind":"agent","intent_kind":"package","outcome":"persistent","result":"refused_snapshot_capability_none","tx_id":"","message":"节点 e2e-u24-f3468e28 无回滚点(snapshot capability=SNAPSHOT_CAPABILITY_NONE/\"SNAPSHOT_CAPABILITY_RSYNC_TARGET\"):high-risk intent 拒绝下发——无回滚点 ≠ 可继续"}],"recovery":[]}
+
+```
+
+`batches` 里列的是四台(`index` 0–3),`results` 只有一条 —— 控制面在第一个 dirty 批次就收尾,
+后续批次不再下发;这是控制面的编排行为,本轮如实记录、不作断言。
+
+### 11.7 汇总行
+
+```text
+agent-e2e: 25 通过 / 0 失败
+```
+
+25 条 = 基础信息 4 + install 4 + node add 4 + node list 契约 2 + 低危 Plan 断言 3 +
+独立核实 4 + 高危 Plan 断言 4。退出码 `0`。
+
+### 11.8 file 腿(D4 原样存在)
+
+```console
+$ ssh Masterwet_Server 'bash -s' <<'EOS'
+  cd "$HOME/daedalus-e2e/core"
+  export DAEDALUS_FLEET_CLIENT_CERT="$HOME/daedalus-fleet-kvm/pki/client.pem"
+  export DAEDALUS_FLEET_CLIENT_KEY="$HOME/daedalus-fleet-kvm/pki/client.key"
+  export DAEDALUS_FLEET_CA="$HOME/daedalus-fleet-kvm/pki/ca.pem"
+  export DAEDALUS_FLEET_DIR="$HOME/daedalus-e2e/fleet-file-vma-rerun"
+  bash tests/fleet/agent-file-e2e.sh --hosts alma9=vma@localhost:9474
+EOS
+FILE_E2E_EXIT=1
+```
+
+```text
+fleet 根目录:/home/udefine-dev/daedalus-e2e/fleet-file-vma-rerun
+
+== 被控机基础信息(目标机自己的 /etc/os-release 与根文件系统类型)
+  ok   - alma9(vma): ID=almalinux VERSION_ID=9.8 根文件系统=xfs
+
+== 登记被控机(daedalus-host node add → 拿 node_id)
+  ok   - alma9: node add localhost:9474(agent_id=e2e-a9) → node_id=e2e-a9-633a3815 support_level=experimental
+    node add: {"node":{"node_id":"e2e-a9-633a3815","agent_id":"e2e-a9","kind":"agent","addr":"localhost:9474","distro":"almalinux","distro_version":"9.8","kernel":"","arch":"","hostname":"vma","agent_version":"","snapshot_capability":"SNAPSHOT_CAPABILITY_LVM_SNAP","support_level":"experimental","cert_fingerprint":"","registered_at_unix":1794490444,"last_seen_unix":1794490444}}
+
+== 选腿:ext4 与 xfs 各一条低危腿
+  FAIL - 没有 ext4 宿主,低危腿(spec §7 要求 ext4 与 xfs 各跑一次)无法执行
+  [腿] xfs-alma9: target=/tmp/daedalus-e2e-file.conf content=  e   2   e   -   f   i   l   e   -   v   m   a  \n
+
+…([计划] JSON 全文在此省略,与上一轮同形;从 [控制面自报] 起的原文如下)…
+    [控制面自报(exit=0,不作判据)] {"plan_id":"agent-file-e2e-xfs-alma9","status":"complete","max_risk":"low","batches":[{"index":0,"node_ids":["e2e-a9-633a3815"]}],"results":[{"node_id":"e2e-a9-633a3815","intent_id":"agent-file-e2e-xfs-alma9/e2e-a9-633a3815/0","node_kind":"agent","intent_kind":"file","outcome":"success","result":"success","tx_id":"tx-agent-file-e2e-xfs-alma9/e2e-a9-633a3815/0","message":""}],"recovery":[]}
+    [独立核实] $ sudo stat -c '%a %s %F' /tmp/daedalus-e2e-file.conf
+      644 13 regular file
+    [独立核实] $ sudo sha256sum /tmp/daedalus-e2e-file.conf
+      4a2fbf0ede85dacc17800bf36e82cb8b7b3abf8020c5daed2c409e270b1da13e
+    [独立核实] $ sudo cat -A /tmp/daedalus-e2e-file.conf
+      e2e-file-vma$
+  ok   - xfs-alma9: 目标机上 /tmp/daedalus-e2e-file.conf 存在且是普通文件
+  ok   - xfs-alma9: 目标机上 /tmp/daedalus-e2e-file.conf 内容逐字节相符(sha256 4a2fbf0ede85dacc17800bf36e82cb8b7b3abf8020c5daed2c409e270b1da13e)
+  ok   - xfs-alma9: 目标机上 /tmp/daedalus-e2e-file.conf mode=644
+
+== 高危路径腿:/etc/daedalus-e2e.conf(file 在 agent 节点上有内建单文件快照,应放行)
+  FAIL - 没有可用的 ext4 宿主,高危路径腿无法执行
+
+== 收尾:删掉本驱动写下的文件(高危路径那条必须删)
+  alma9: $ sudo rm -f /etc/daedalus-e2e.conf → rc=0
+  alma9: $ sudo rm -f /tmp/daedalus-e2e-file.conf → rc=0
+
+agent-file-e2e: 5 通过 / 2 失败
+```
+
+xfs 腿三条断言全过(落地 / 内容逐字节 / mode=644);两条失败都是"没有 ext4 宿主",
+与 §9 D4 一字不差 —— 驱动硬要求 ext4 与 xfs 各一条腿,`vma` 只有 xfs(根文件系统
+`/dev/vda4 xfs`),单台必然不绿。**本轮没有为了凑绿去拉第二台机器**(那会让另一台
+guest 的 `/etc/daedalus-e2e.conf` 等文件被动到,超出本任务范围)。
+
+### 11.9 与期望的逐项对照
+
+| 项 | 期望 | 实测 | 结论 |
+| --- | --- | --- | --- |
+| 驱动自检 | `21 通过 / 0 失败` | `agent-e2e: 21 通过 / 0 失败`,退出码 0 | **符合**(D2 消除) |
+| 低危腿(四台,`tree`) | 基线干净 → `complete` + `tx_id` 非空 + 目标机确证已装 | 全中(§11.3 / §11.5) | **符合**(D1、D3 消除) |
+| 高危腿(四台) | 真的打出去 → `status=dirty`、`tx_id` 全空、文案含"无回滚点" | 全中(§11.6) | **符合**(D2 消除) |
+| 矩阵汇总行 | `N 通过 / 0 失败` | `agent-e2e: 25 通过 / 0 失败`,退出码 0 | **符合** |
+| file 腿(单台) | 驱动要求 ext4 + xfs 各一条 | `agent-file-e2e: 5 通过 / 2 失败`,退出码 1 | **仍不符合(D4 未修)** |
+
+**结论:D1 / D2 / D3 已消除;D4 仍存在。** D4 的成因与本轮修复无关,也没有变化 ——
+`agent-file-e2e.sh` 的选腿逻辑硬要求 ext4 与 xfs 各一条(`spec §7`),只给一台 xfs 宿主时
+必然记两条"没有 ext4 宿主"失败并退出 1;xfs 腿本身的断言全过,这不是产品缺陷,是驱动的
+单台适配缺口。
+
+### 11.10 本轮没动的东西(边界自查)
+
+- 没有卸任何已装包:`nginx` 在四台上仍在;换 `--package tree` 而不是 remove。
+- 没有改 Go 源码 / 驱动 / 生成器 / `supportMatrix`;`git status` 里只有本文件。
+- 临时产物只落在 KVM 宿主 `~/work/`(`matrix-rerun3.log` / `file-e2e-rerun.log` /
+  `probe-facts.sh`)和本机 `/var/tmp/`;没有用宿主 `/tmp`(tmpfs)。
+- 两条驱动日志(`matrix-rerun3.log` / `file-e2e-rerun.log`)留在宿主 `~/work/` 备查,
+  未入库。
