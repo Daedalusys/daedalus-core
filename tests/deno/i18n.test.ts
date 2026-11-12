@@ -7,8 +7,8 @@
  * - loadLocale fallback 链：zh_CN → zh → en_US;
  * - initI18n() 之后 t() 同步可用。
  *
- * 环境变量说明：本机 Deno 2.9.5 的 TestContext 上没有 t.Setenv
- * （该便利 API 在此版本不存在），因此用 Deno.env.set / delete +
+ * 环境变量说明：当前钉住的 Deno 的 TestContext 上没有 t.Setenv，
+ * 因此用 Deno.env.set / delete +
  * try/finally 手工实现每例隔离，语义与 t.Setenv 等价。
  */
 

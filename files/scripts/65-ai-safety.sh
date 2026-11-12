@@ -2,22 +2,43 @@
 
 set -xeuo pipefail
 
-# 确保安装先决条件
-dnf install -y unzip curl
+# 安装先决条件(unzip 解压 release 资产;sha256sum 来自已装的 coreutils)。
+# curl 不硬装:部分基础镜像由 curl-minimal 提供,`dnf install curl` 会撞包冲突
+# ("curl-minimal conflicts with curl"),而已有的 curl-minimal 足够本脚本使用。
+command -v curl >/dev/null || dnf install -y curl
+dnf install -y unzip
 
-# 将 Deno 二进制文件安装到 /usr/local/bin/deno
-# (2026-08-29 CI 修复: 新版 deno.land 安装器在装完二进制后会额外尝试从 jsr.io
-#  拉取 shell 补全组件(@deno/installer-shell-setup), 该步在 CI 网络下可能失败
-#  并以非零码退出导致整个构建炸掉——但它只是锦上添花, 非必需。
-#  处理: 安装器失败不立即致命(允许失败继续), 由下方 deno --version 硬校验兜底:
-#  真正的验收标准是二进制可用, 而非安装器退出码。)
+# Deno 版本 / 校验和的唯一事实源;与 CI 读同一份文件。
+# shellcheck source=/dev/null
+. "$(dirname "$0")/deno-version.env"
+
+# 只钉 x86_64:镜像仅构 --platform=linux/amd64。其它架构 fail-closed,
+# 不回退 latest —— 装错架构的二进制比构建失败更难查。
+case "$(uname -m)" in
+    x86_64) DENO_TARGET="x86_64-unknown-linux-gnu" ;;
+    *) echo "ERROR: 未钉 $(uname -m) 架构的 Deno 资产(当前只钉 x86_64)" >&2; exit 1 ;;
+esac
+
+DENO_BASE="https://dl.deno.land/release/v${DENO_VERSION}"
+DENO_ZIP="deno-${DENO_TARGET}.zip"
+DENO_WORK="$(mktemp -d)"
+trap 'rm -rf "$DENO_WORK"' EXIT
+
+# 下载 + 校验:判据是「字节等于钉死的那份」,不是安装器退出码。
+curl -fsSL -o "${DENO_WORK}/${DENO_ZIP}" "${DENO_BASE}/${DENO_ZIP}"
+printf '%s  %s\n' "${DENO_SHA256_X86_64}" "${DENO_WORK}/${DENO_ZIP}" | sha256sum -c -
+
+# 解包到 /usr/local/bin;unzip 保留 zip 条目权限,再显式 chmod 兜底。
+# 解包目标目录先显式建出:unzip -d 不会创建缺失的父目录,父目录不在时直接 rc=2 失败。
+# 真 bootc 基线上该目录通常已存在,但这条不依赖基线的隐式假设。
 mkdir -p /usr/local/bin
-curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- -y --no-modify-path \
-    || echo "NOTE: deno 安装器非零退出(多为 jsr.io shell-setup 网络抖动), 以下方版本校验为准"
+unzip -o -d /usr/local/bin "${DENO_WORK}/${DENO_ZIP}" >/dev/null
+chmod +x /usr/local/bin/deno
 
-# 硬校验: 二进制真实可用才算安装成功(这是唯一重要的验收)
-if ! /usr/local/bin/deno --version; then
-    echo "ERROR: deno 二进制安装失败(--version 校验不通过)" >&2
+# 硬校验:装上的必须正是钉住的那个版本(校验和管字节,这里管版本号自证)
+installed="$(/usr/local/bin/deno --version | head -n1 | awk '{print $2}')"
+if [ "$installed" != "$DENO_VERSION" ]; then
+    echo "ERROR: 安装的 Deno 版本 ${installed} != ${DENO_VERSION}" >&2
     exit 1
 fi
 

@@ -121,11 +121,23 @@ jobs:
           cache: false
           cache-dependency-path: daedalus-core/go.sum
 
+      - name: Read pinned Deno version
+        # 版本来自与镜像同一份事实源(files/scripts/deno-version.env),CI 不再写浮动版本。
+        id: deno-pin
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          # shellcheck source=/dev/null
+          . files/scripts/deno-version.env
+          : "${DENO_VERSION:?deno-version.env 缺少 DENO_VERSION}"
+          echo "version=${DENO_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "PINNED_DENO_VERSION=${DENO_VERSION}"
+
       - name: Set Up Deno Runtime
         # copilot 测试套件 (tests/deno/) 由 deno 跑。
         uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
         with:
-          deno-version: v2.x
+          deno-version: ${{ steps.deno-pin.outputs.version }}
 
       - name: Set up just
         # test job 的多个 gate(go-test / 后续 recipe)都用 just 编排;
@@ -159,6 +171,13 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         run: just verify-units
+
+      - name: Deno runtime pin gate
+        # 运行时版本 / sha256 / 支持窗口三分量的一致性门禁。支持窗口过期时本步会红,
+        # 把「2027-01-31 之后没人记得重裁决」变成一次构建失败。
+        shell: bash
+        working-directory: daedalus-core
+        run: just verify-deno-pin
 
       - name: plugin inventory gate
         # 四份插件清单(76 CAPS / 插件单元 / 插件 manifest / plugins release 供料)必须相等。
