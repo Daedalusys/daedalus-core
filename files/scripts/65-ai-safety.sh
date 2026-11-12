@@ -29,6 +29,9 @@ curl -fsSL -o "${DENO_WORK}/${DENO_ZIP}" "${DENO_BASE}/${DENO_ZIP}"
 printf '%s  %s\n' "${DENO_SHA256_X86_64}" "${DENO_WORK}/${DENO_ZIP}" | sha256sum -c -
 
 # 解包到 /usr/local/bin;unzip 保留 zip 条目权限,再显式 chmod 兜底。
+# 解包目标目录先显式建出:unzip -d 不会创建缺失的父目录,父目录不在时直接 rc=2 失败。
+# 真 bootc 基线上该目录通常已存在,但这条不依赖基线的隐式假设。
+mkdir -p /usr/local/bin
 unzip -o -d /usr/local/bin "${DENO_WORK}/${DENO_ZIP}" >/dev/null
 chmod +x /usr/local/bin/deno
 
