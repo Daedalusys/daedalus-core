@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
-# Deno 运行时钉版本门禁:版本 / 校验和 / 支持窗口三者的单一事实源必须自洽,
-# 且镜像脚本与 CI 都真的读它。任何一处漂移即拒。
-#
-# 判据(全部静态,不下载、不碰镜像):
-#   1. deno-version.env 三项齐备且形态合法;
-#   2. .tool-versions 的 deno 版本与 DENO_VERSION 相同(本地 asdf 不能跑另一个版本);
-#   3. build.yml 不出现浮动版本(deps 由 mapping 解析,不在注释里误判);
-#   4. 65-ai-safety.sh 读 env 文件,且不再出现 deno.land/install.sh;
-#   5. 当天(UTC)不超过 DENO_LTS_END。
-#
-# 用法:
-#   deno-version-pin.sh [--selftest]
+# Deno 运行时钉版本门禁:版本 / 校验和 / 支持窗口只有 deno-version.env 一个事实源,
+# 镜像脚本与 CI 都必须从它取值,任何一处漂移即拒(全静态,不下载、不碰镜像)。
+# 用法: deno-version-pin.sh [--selftest]
 set -euo pipefail
 
 ROOT="${DENO_PIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -31,6 +22,7 @@ load_env() {
         "${DENO_VERSION:-}" "${DENO_SHA256_X86_64:-}" "${DENO_LTS_END:-}" )
 }
 
+# 形态先立:下游每个消费点都拿这三项当输入,形态错会让后续判据与镜像构建一起失真。
 check_env_form() {
     local v s d
     if [ ! -f "$ENV_FILE" ]; then fail "缺少 files/scripts/deno-version.env"; return; fi
@@ -43,6 +35,7 @@ check_env_form() {
     if [ "$fail_n" -eq 0 ]; then ok "deno-version.env 三项形态合法"; fi
 }
 
+# 本地 asdf 必须跑与镜像同一个版本,否则本地验过的行为在镜像里毫无保证。
 check_tool_versions() {
     local v _ _ tv
     IFS=$'\t' read -r v _ _ <<<"$(load_env "$ENV_FILE")" || true
@@ -54,6 +47,7 @@ check_tool_versions() {
     fi
 }
 
+# CI 若让 setup-deno 自行解析版本,镜像内实际运行时与事实源脱钩,钉版本当场作废。
 check_workflow_no_floating() {
     # 只看 `deno-version:` 这个 deps 行的值,不看注释:注释里出现同名字样不是违规。
     local vals
@@ -61,12 +55,13 @@ check_workflow_no_floating() {
     if [ -z "$vals" ]; then
         fail "build.yml 里找不到 deno-version: 行"
     elif printf '%s\n' "$vals" | grep -qE '^v?[0-9]+(\.[0-9x]+)*(\.[x])?$|^v2\.x$|^latest$|^lts$'; then
-        fail "build.yml 仍是浮动版本:'$(printf '%s' "$vals" | head -1)'(必须取自事实源)"
+        fail "build.yml 的 deno-version 未取自事实源:'$(printf '%s' "$vals" | head -1)'(浮动版本与写死字面版本都算违规)"
     else
         ok "build.yml 的 deno-version 不再写死浮动版本"
     fi
 }
 
+# install.sh 拉"当时最新"且不经校验和,既不可复现又绕过 DENO_SHA256 的完整性保证。
 check_install_script() {
     if grep -q 'deno.land/install.sh' "$INSTALL_SH" 2>/dev/null; then
         fail "65-ai-safety.sh 仍走 deno.land/install.sh(不可复现)"
@@ -78,6 +73,7 @@ check_install_script() {
     if [ "$fail_n" -eq 0 ]; then ok "65-ai-safety.sh 读事实源且不再走 install.sh"; fi
 }
 
+# 支持窗口结束即不再有安全补丁,继续发版等于把无补丁运行时固化进镜像,必须重新裁决。
 check_support_window() {
     local _ _ d today
     IFS=$'\t' read -r _ _ d <<<"$(load_env "$ENV_FILE")" || true
