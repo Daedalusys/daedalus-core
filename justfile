@@ -160,6 +160,12 @@ verify-inventory:
     ./tests/build/plugin-inventory.sh
     ./tests/build/plugin-inventory-image.sh --selftest
 
+# Deno 运行时钉版本门禁:版本 / sha256 / 支持窗口的事实源自洽,且镜像与 CI 都读它。
+# 先跑 --selftest 自证门禁没变瞎,再比对真仓库。不需要镜像,CI test job 与本机都能跑。
+verify-deno-pin:
+    ./tests/ci/deno-version-pin.sh --selftest
+    ./tests/ci/deno-version-pin.sh
+
 # 3 仓平级布局守门:检查 daedalus-sdk / daedalus-plugins 兄弟仓
 # 是否以平级目录形态就位(go.work 本地 dev 桥的前置);缺哪个报哪个,exit 1。
 verify-dev-layout:
