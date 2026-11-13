@@ -375,7 +375,11 @@ if [ "$live_ok" -eq 1 ] && [ "$install_possible" -eq 1 ]; then
         # 失败现场:谁占着目标盘。下一次红时,这份证据直接给出答案。
         live_ssh "findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS; echo '--- lsblk -f ---'; lsblk -f" > "$WORK/live-mounts-after-install.txt" 2>/dev/null
         info "装机尝试日志 → $WORK/install-attempt.log"
-        sed 's/^/         /' "$WORK/install-attempt.log" 2>/dev/null | tail -8
+        # 打**全量**(每次尝试一份,带 ### 分隔头):只打尾部会把第一次尝试为什么失败
+        # 留在 artifact 里 —— 而 artifact 有 1.5G,取证成本高到没人愿意下载。
+        sed 's/^/         /' "$WORK/install-attempt.log" 2>/dev/null | head -200
+        # 现场:失败当刻谁占着盘 / 盘上有没有分区。
+        sed 's/^/         /' "$WORK/live-mounts-after-install.txt" 2>/dev/null | head -40
     fi
 fi
 
