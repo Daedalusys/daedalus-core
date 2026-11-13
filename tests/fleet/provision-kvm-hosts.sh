@@ -641,11 +641,23 @@ fleet_remote_guest_packages() {
             echo "  ok   - $name:dnf makecache + rsync 已装(有回滚点)"
             ;;
         rhel)
-            # RHEL 9 未订阅 ⇒ 官方仓库不可用(dnf 会直接报 no enabled repos)。
-            # 为跑通 rsync 装包,临时把源指向 AlmaLinux 9(RHEL 9 与 Alma 9 ABI 同源);
-            # 这只是测试手段,证据里必须注明"官方仓库未验"。
-            local repo_file
-            repo_file="$(cat <<'REPO'
+            # RHEL 9 有两种可达状态:
+            # ① 已注册订阅(SCA)→ 官方仓库可用,直接 dnf;
+            # ② 未注册 → 官方仓库不可用(dnf 报 no enabled repos),临时把源指向
+            #    AlmaLinux 9(同族 ABI 同源);这是测试手段,证据里必须注明"官方仓库未验"。
+            # 判定放在 guest 里做:subscription-manager identity 成功即视为已注册。
+            local registered=no
+            if fleet_remote_ssh "$name" 'sudo subscription-manager identity >/dev/null 2>&1' >/dev/null 2>&1; then
+                registered=yes
+            fi
+            if [ "$registered" = yes ]; then
+                fleet_remote_pkg_retry "$name" "dnf makecache(Red Hat 官方仓库)" \
+                    'sudo LC_ALL=C dnf -y makecache' || return 1
+                fleet_remote_pkg_retry "$name" "dnf install rsync(Red Hat 官方仓库)" \
+                    'sudo LC_ALL=C dnf -y install rsync' || return 1
+            else
+                local repo_file
+                repo_file="$(cat <<'REPO'
 # 仅用于测试:RHEL 9 未订阅,装包源临时指向 AlmaLinux 9(ABI 同源);
 # 证据里必须注明"官方仓库未验"。
 [daedalus-alma9-baseos]
@@ -663,16 +675,17 @@ gpgcheck=1
 gpgkey=https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-9
 REPO
 )"
-            fleet_remote_pkg_retry "$name" "写入 Alma 9 测试仓库" \
-                "printf '%s\n' '$repo_file' | sudo tee /etc/yum.repos.d/daedalus-test-alma.repo >/dev/null" \
-                || return 1
-            # --disablerepo='*' 把订阅缺失时的空仓库集合彻底关掉,只留测试源。
-            fleet_remote_pkg_retry "$name" "dnf makecache(Alma 9 测试源)" \
-                "sudo LC_ALL=C dnf -y --disablerepo='*' --enablerepo='daedalus-alma9-*' makecache" \
-                || return 1
-            fleet_remote_pkg_retry "$name" "dnf install rsync(Alma 9 测试源)" \
-                "sudo LC_ALL=C dnf -y --disablerepo='*' --enablerepo='daedalus-alma9-*' install rsync" \
-                || return 1
+                fleet_remote_pkg_retry "$name" "写入 Alma 9 测试仓库" \
+                    "printf '%s\n' '$repo_file' | sudo tee /etc/yum.repos.d/daedalus-test-alma.repo >/dev/null" \
+                    || return 1
+                # --disablerepo='*' 把订阅缺失时的空仓库集合彻底关掉,只留测试源。
+                fleet_remote_pkg_retry "$name" "dnf makecache(Alma 9 测试源)" \
+                    "sudo LC_ALL=C dnf -y --disablerepo='*' --enablerepo='daedalus-alma9-*' makecache" \
+                    || return 1
+                fleet_remote_pkg_retry "$name" "dnf install rsync(Alma 9 测试源)" \
+                    "sudo LC_ALL=C dnf -y --disablerepo='*' --enablerepo='daedalus-alma9-*' install rsync" \
+                    || return 1
+            fi
             # 断言结果而不是假定命令成功:rsync 必须在位(有回滚点)。
             local rsync_path
             rsync_path="$(fleet_remote_ssh "$name" 'command -v rsync 2>/dev/null || true' 2>/dev/null || true)"
@@ -680,7 +693,11 @@ REPO
                 echo "  FAIL - $name:rsync 没装上(会退化成无回滚点)" >&2
                 return 1
             fi
-            echo "  ok   - $name:Alma 9 测试源 makecache + rsync 已装(有回滚点;官方仓库未验)"
+            if [ "$registered" = yes ]; then
+                echo "  ok   - $name:Red Hat 官方仓库 makecache + rsync 已装(有回滚点;已注册订阅)"
+            else
+                echo "  ok   - $name:Alma 9 测试源 makecache + rsync 已装(有回滚点;官方仓库未验)"
+            fi
             ;;
         centos)
             fleet_remote_pkg_retry "$name" "dnf makecache" 'sudo LC_ALL=C dnf -y makecache' || return 1
