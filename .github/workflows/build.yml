@@ -969,15 +969,27 @@ jobs:
           # 钉死(containers/image 逐层校验内容),装好系统的 target ref 仍是规范 ghcr 地址,
           # 更新通道不交给第三方;加速源不通时自动回落直连。留空 = 关闭。
           VERIFY_INSTALL_MIRROR: ghcr.1ms.run
+          # 拉取通道(可选)。值来源优先级:仓库 secret > 自托管 runner 自己的环境变量
+          # (runner 的 .env,值完全不经过 GitHub)> 未配置(不启用)。
+          # 这里用**独立变量名**承接 secret:若直接在 env: 里写 VERIFY_INSTALL_PROXY,
+          # 空值会把 runner 提供的同名环境变量覆盖掉。
+          # 代理只在 iso-verify.sh 内部生效(它自己 export 给 podman/bootc),不污染其它
+          # 步骤;地址从不打印,也不写进 payload —— payload 会烘成 ISO 并晋级成 Release
+          # 资产,地址不能留在那里。
+          ISO_INSTALL_PROXY_SECRET: ${{ secrets.ISO_INSTALL_PROXY }}
           # 本次构建推出的 manifest digest。ISO 是拿 $IMAGE 派生 payload 再构建的,
           # 本地缓存若还是旧内容,产出的「可引导 + 装完能 login」就是给旧镜像的假绿。
           VERIFY_IMAGE_DIGEST: ${{ needs.build-image.outputs.image_digest }}
         run: |
           IMAGE="ghcr.io/$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/daedalus-os:${{ github.sha }}"
+          # 代理来源优先级:仓库 secret > runner 的 VERIFY_INSTALL_PROXY > runner 的 HTTPS_PROXY。
+          # 空 ⇒ 整条链路不启用代理,行为与以前一致。
+          PROXY="${ISO_INSTALL_PROXY_SECRET:-${VERIFY_INSTALL_PROXY:-${HTTPS_PROXY:-}}}"
           # sudo 会清环境变量,VERIFY_* 必须显式透传
           sudo VERIFY_IMAGE="$IMAGE" VERIFY_WORK="$VERIFY_WORK" \
             VERIFY_IMAGE_DIGEST="$VERIFY_IMAGE_DIGEST" \
             VERIFY_INSTALL_MIRROR="$VERIFY_INSTALL_MIRROR" \
+            ISO_INSTALL_PROXY="$PROXY" \
             bash tests/real-machine/iso-verify.sh
 
       - name: Upload ISO verify evidence

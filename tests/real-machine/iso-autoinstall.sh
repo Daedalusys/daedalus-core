@@ -81,6 +81,30 @@ SRC_REF="$(sed -n 's/^DAEDALUS_INSTALL_SOURCE_IMGREF=//p' "$IMGREF_FILE" 2>/dev/
 SRC_TIMEOUT="$(sed -n 's/^DAEDALUS_INSTALL_SOURCE_TIMEOUT=//p' "$IMGREF_FILE" 2>/dev/null | head -1)"
 case "$SRC_TIMEOUT" in ''|*[!0-9]*) SRC_TIMEOUT=900 ;; esac
 
+# 装机拉取通道(可选):配了代理就只走规范 ref —— 代理本身即传输通道,加速镜像那条
+# 路可以退休。两侧网络视角不同:runner 上的代理监听 127.0.0.1;guest 里 127.0.0.1 是
+# 它自己,QEMU user-net 把宿主暴露成 10.0.2.2,所以 guest 侧要写 http://10.0.2.2:<port>。
+# 代理地址**不得带凭据**:它会进串口日志与 artifact。
+HTTP_PROXY_URL="$(sed -n 's/^DAEDALUS_INSTALL_HTTP_PROXY=//p' "$IMGREF_FILE" 2>/dev/null | head -1)"
+if [ -z "$HTTP_PROXY_URL" ] && [ -r /sys/class/dmi/id/product_serial ]; then
+    # 常规通道:地址由 QEMU SMBIOS(type=1 serial)在本次引导里递进来。
+    # 它**不在 ISO 里** —— payload 会被烘成 ISO 并晋级成 Release 资产,地址不能留在那。
+    _dmi="$(tr -d '\r\n' < /sys/class/dmi/id/product_serial 2>/dev/null || true)"
+    case "$_dmi" in
+        http://*|https://*) HTTP_PROXY_URL="$_dmi" ;;
+    esac
+fi
+if [ -n "$HTTP_PROXY_URL" ]; then
+    case "$HTTP_PROXY_URL" in
+        *@*) die "代理地址不得携带凭据(它会进串口日志与 artifact)" ;;
+    esac
+    export HTTPS_PROXY="$HTTP_PROXY_URL"
+    export HTTP_PROXY="$HTTP_PROXY_URL"
+    export NO_PROXY="localhost,127.0.0.1"
+    # 地址不打印:它会进串口日志、artifact,以及(若哪天烘回 payload)Release 资产。
+    say "拉取走代理(地址不打印;加速镜像本次不用)"
+fi
+
 # bootc 的 --source-imgref 要**显式 transport 前缀**(实测裸 ref 会被判 Invalid transport),
 # 配置里存的是人读得懂的裸 ref,这里补前缀;已经带前缀的原样透传。
 with_transport() {
@@ -140,9 +164,17 @@ umount_target_disk() {
 }
 
 # 源列表:加速源在前、规范源兜底。加速源不通时回落,而不是整条腿直接红。
-SOURCES=()
-[ -n "$SRC_REF" ] && SOURCES+=("$SRC_REF")
-SOURCES+=("$IMGREF")
+build_sources() {
+    if [ -n "$HTTP_PROXY_URL" ]; then
+        # 代理已是传输通道:规范 ref 既是安装源也是 target,少一次第三方中转。
+        SOURCES=("$IMGREF")
+        return
+    fi
+    SOURCES=()
+    [ -n "$SRC_REF" ] && SOURCES+=("$SRC_REF")
+    SOURCES+=("$IMGREF")
+}
+build_sources
 
 installed=0
 attempt=0

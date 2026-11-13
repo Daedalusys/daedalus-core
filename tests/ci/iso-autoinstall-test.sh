@@ -121,6 +121,33 @@ if [ -f "$INST" ]; then
     st $? "规则14 每次尝试一份日志(不是只有最后一份)"
     has 'for f in "$INSTALL_LOG"*' "$INST"
     st $? "规则14 die 把所有尝试的日志倒进串口"
+
+    # 规则15:可选代理通道。两条硬约束:
+    #   (a) 值只来自仓库 secret / SMBIOS,**不进仓库、不进日志、不进 ISO**;
+    #   (b) 代理只是**传输通道** —— 配了代理就只走规范 ref,不能再叠一层第三方镜像。
+    has 'DAEDALUS_INSTALL_HTTP_PROXY' "$INST"
+    st $? "规则15 装机脚本支持代理配置(conf 通道,供本地/诊断用)"
+    has '/sys/class/dmi/id/product_serial' "$INST"
+    st $? "规则15 装机脚本从 SMBIOS 读代理(常规通道:地址不烘进 ISO)"
+    has 'export HTTPS_PROXY=' "$INST"
+    st $? "规则15 代理导出到 bootc 拉取环境"
+    has '*@*) die' "$INST"
+    st $? "规则15 带凭据的代理地址一律拒绝(凭据会进串口日志)"
+    # 反向断言:地址不得出现在任何 say/echo 里(串口日志与 artifact 会带走它)。
+    if grep -nE 'say .*\$HTTP_PROXY_URL|echo .*\$HTTP_PROXY_URL|printf .*\$HTTP_PROXY_URL' "$INST" >/dev/null 2>&1; then
+        st 1 "规则15 代理地址不得被打印(会进串口日志与 artifact)"
+    else
+        st 0 "规则15 代理地址不被打印"
+    fi
+    proxy_line="$(grep -n 'if \[ -n "\$HTTP_PROXY_URL" \]' "$INST" | head -1 | cut -d: -f1)"
+    ret_line="$(awk -v p="${proxy_line:-0}" 'NR>p && /^[[:space:]]*return$/ {print NR; exit}' "$INST")"
+    src_line="$(grep -n 'SOURCES+=("\$SRC_REF")' "$INST" | head -1 | cut -d: -f1)"
+    if [ -n "$proxy_line" ] && [ -n "$ret_line" ] && [ -n "$src_line" ] \
+       && [ "$proxy_line" -lt "$ret_line" ] && [ "$ret_line" -lt "$src_line" ]; then
+        st 0 "规则15 配了代理就只走规范 ref(加速镜像分支在 return 之后)"
+    else
+        st 1 "规则15 代理分支必须先 return,SRC_REF 只留在无代理分支(proxy=${proxy_line:-?} ret=${ret_line:-?} src=${src_line:-?})"
+    fi
 else
     st 1 "规则1 装机脚本存在:$INST"
 fi
@@ -166,6 +193,36 @@ if [ -f "$VERIFY" ]; then
     # 规则11:加速源是**传输通道**,不是信任锚 —— 写进 payload 的源 ref 必须按 digest 钉死
     # (containers/image 逐层校验),否则加速镜像就能决定我们装进去的是什么。
     hasre 'VERIFY_INSTALL_MIRROR' "$VERIFY"; st $? "规则11 加速源可配(VERIFY_INSTALL_MIRROR)"
+    has 'ISO_INSTALL_PROXY' "$VERIFY"; st $? "规则15 iso-verify.sh 读 workflow 注入的代理"
+    has 'VERIFY_INSTALL_PROXY:-}' "$VERIFY"; st $? "规则15 runner 环境可兜底;默认空(不配代理时行为不变)"
+    has 'export HTTPS_PROXY=' "$VERIFY"; st $? "规则15 宿主侧 podman 也走代理(脚本内 export)"
+    has 'smbios' "$VERIFY"; st $? "规则15 代理经 QEMU SMBIOS 递进 guest"
+    has '*@*) die' "$VERIFY"; st $? "规则15 verify 侧也拒绝带凭据的代理"
+    # 反向断言:代理**不得**写进 payload 的 conf(payload 会被烘成 ISO 并晋级成
+    # Release 资产 —— 地址不能留在那里)。
+    if hasre 'DAEDALUS_INSTALL_HTTP_PROXY=%s' "$VERIFY"; then
+        st 1 "规则15 代理不得写进 payload 的 iso-install.conf(会随 ISO 进 Release)"
+    else
+        st 0 "规则15 代理不写进 payload(只经 SMBIOS 递入)"
+    fi
+    if [ -f "$REPO/.github/workflows/build.yml" ]; then
+        hasre 'secrets\.ISO_INSTALL_PROXY' "$REPO/.github/workflows/build.yml"
+        st $? "规则15 出货档 workflow 从仓库 secret 取代理值(值不进仓库)"
+        has 'ISO_INSTALL_PROXY="$PROXY"' "$REPO/.github/workflows/build.yml"
+        st $? "规则15 代理经显式变量透传过 sudo(否则会被 sudo 清掉)"
+        # 反向断言:不要直接设 VERIFY_INSTALL_PROXY —— 空值会覆盖 runner 提供的同名环境变量。
+        if grep -nE '^[[:space:]]+VERIFY_INSTALL_PROXY:' "$REPO/.github/workflows/build.yml" >/dev/null 2>&1; then
+            st 1 "规则15 workflow 不得直接设 VERIFY_INSTALL_PROXY(空值会覆盖 runner 环境)"
+        else
+            st 0 "规则15 workflow 不覆盖 runner 的 VERIFY_INSTALL_PROXY"
+        fi
+        # 反向断言:workflow 里不得出现任何字面代理地址。
+        if grep -nE 'https?://(127\.0\.0\.1|localhost|10\.0\.2\.2):[0-9]+' "$REPO/.github/workflows/build.yml" >/dev/null 2>&1; then
+            st 1 "规则15 workflow 里不得出现字面代理地址(一律走 secret)"
+        else
+            st 0 "规则15 workflow 里没有字面代理地址"
+        fi
+    fi
     hasre 'INSTALL_SOURCE_REF=.*@' "$VERIFY"
     st $? "规则11 写进 payload 的加速源按 digest 钉死(@sha256:...)"
     if [ -f "$REPO/.github/workflows/build.yml" ]; then

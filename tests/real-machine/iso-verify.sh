@@ -66,6 +66,32 @@ set -uo pipefail
 
 IMAGE="${VERIFY_IMAGE:-ghcr.io/daedalusys/daedalus-os:latest}"
 INSTALL_MIRROR="${VERIFY_INSTALL_MIRROR:-}"
+# 拉取代理(可选)。优先级:仓库 secret(workflow 注入 ISO_INSTALL_PROXY)>
+# runner 自己环境里的 VERIFY_INSTALL_PROXY。地址**从不打印**,只用于拉取:
+#   - 宿主侧:脚本内 export 给 podman(pull/build),不污染 workflow 其它步骤;
+#   - guest 侧:派生后经 QEMU SMBIOS(type=1 serial)在本次引导里递入 ——
+#     **不写进 payload**,因为 payload 会烘成 ISO 并晋级成 Release 资产。
+# 空 ⇒ 不启用代理,行为与以前完全一致。
+INSTALL_PROXY="${ISO_INSTALL_PROXY:-${VERIFY_INSTALL_PROXY:-}}"
+GUEST_PROXY=""
+if [ -n "$INSTALL_PROXY" ]; then
+    case "$INSTALL_PROXY" in
+        *@*) die "代理地址不得携带凭据(它会进串口日志与 artifact)" ;;
+    esac
+    export HTTPS_PROXY="$INSTALL_PROXY"
+    export HTTP_PROXY="$INSTALL_PROXY"
+    export NO_PROXY="localhost,127.0.0.1"
+    info "拉取走代理(地址不打印;加速镜像本次不用)"
+    GUEST_PROXY="$(printf '%s' "$INSTALL_PROXY" | sed 's#//127\.0\.0\.1#//10.0.2.2#; s#//localhost#//10.0.2.2#')"
+    case "$GUEST_PROXY" in
+        *//10.0.2.2:*) : ;;
+        *) warn "代理不是 localhost 形态,guest 侧按原样透传(可能不可达)" ;;
+    esac
+    # QEMU 的 -smbios 是 key=value 逗号分隔,值里出现逗号会截断。
+    case "$GUEST_PROXY" in
+        *,*) die "代理地址含逗号,无法经 SMBIOS 递入 guest" ;;
+    esac
+fi
 MEM="${VERIFY_MEM:-8192}"
 BOOT_TIMEOUT="${VERIFY_BOOT_TIMEOUT:-600}"
 INSTALL_TIMEOUT="${VERIFY_INSTALL_TIMEOUT:-2400}"
@@ -173,7 +199,9 @@ podman run --rm "$IMAGE" cat /etc/os-release > "$VM/os-release.expected" 2>/dev/
 # 加速镜像只当**传输通道**:源 ref 按 manifest digest 钉死,containers/image 会逐层校验
 # 内容;装好系统的 target ref 仍是规范地址(更新通道不能被第三方接管)。
 INSTALL_SOURCE_REF=""
-if [ -n "$INSTALL_MIRROR" ]; then
+if [ -n "$GUEST_PROXY" ]; then
+    info "guest 拉取走代理(地址不打印;加速镜像本次不用)"
+elif [ -n "$INSTALL_MIRROR" ]; then
     case "$IMAGE" in
         localhost/*|./*|/*) warn "本地镜像 $IMAGE 不走加速源,忽略 VERIFY_INSTALL_MIRROR" ;;
         *)
@@ -261,7 +289,11 @@ ok "目标盘(每次新建,不复用旧盘): $TARGET($DISK_SIZE)"
 
 # 目标盘是 virtio 盘 → guest 内是 /dev/vda;ISO 走 cdrom → /dev/sr0。
 # daedalus.install.disk 由内核参数点名:live 里的装机脚本只认这个参数,不做任何选盘推测。
+# SMBIOS type=1 serial 是代理地址的唯一递入通道(空时不加该参数,guest 侧即无代理)。
+SMBIOS_ARGS=()
+[ -n "$GUEST_PROXY" ] && SMBIOS_ARGS+=("-smbios" "type=1,serial=$GUEST_PROXY")
 qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m "$MEM" -smp 2 \
+    "${SMBIOS_ARGS[@]+"${SMBIOS_ARGS[@]}"}" \
     -nographic -no-reboot -boot d -cdrom "$ISO" \
     -drive file="$TARGET",if=virtio,format=qcow2 \
     -netdev user,id=net0,hostfwd=tcp::$SSH_PORT-:22 -device virtio-net-pci,netdev=net0 \
