@@ -367,9 +367,13 @@ if [ "$live_ok" -eq 1 ] && [ "$install_possible" -eq 1 ]; then
     else
         [ "$install_state" = "FAILED" ] || install_state="NOT_DONE"
         bad "安装器未自行完成(单元状态=$install_state)—— 明确记 BLOCKED,不当成笼统 TIMEOUT"
-        live_ssh "cat /run/daedalus-iso-autoinstall.log 2>/dev/null" > "$WORK/install-attempt.log" 2>/dev/null
+        # 每次尝试一份日志(第 N 次 = <base>.N),这里**全量**收集:只收最后一份就会把
+        # 第一次为什么失败盖掉 —— 那正是"Device ... is mounted"看不懂的根源。
+        live_ssh 'for f in /run/daedalus-iso-autoinstall.log*; do [ -f "$f" ] || continue; echo "### $f"; cat "$f"; done' > "$WORK/install-attempt.log" 2>/dev/null
         live_ssh "systemctl status daedalus-iso-autoinstall --no-pager 2>&1" > "$WORK/install-unit-status.txt" 2>/dev/null
         live_ssh "lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS" > "$WORK/live-lsblk-after-install.txt" 2>/dev/null
+        # 失败现场:谁占着目标盘。下一次红时,这份证据直接给出答案。
+        live_ssh "findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS; echo '--- lsblk -f ---'; lsblk -f" > "$WORK/live-mounts-after-install.txt" 2>/dev/null
         info "装机尝试日志 → $WORK/install-attempt.log"
         sed 's/^/         /' "$WORK/install-attempt.log" 2>/dev/null | tail -8
     fi

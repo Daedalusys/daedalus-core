@@ -453,18 +453,34 @@ test: blueprint-embed
 copilot-plugin:
     ./scripts/pack-copilot-plugin.sh
 
-# Build bootable ISO
-iso:
+# Build bootable ISO(与 CI 同源)
+#
+# 为什么不再用 legacy `bootc-image-builder --type iso`:上游已把 iso/anaconda-iso
+# 标为 legacy,osbuild 的每个包下载都失败 —— 这条 recipe 历史上下不出任何 ISO
+# (core#84 的 6 组对照实验)。CI 的 deploy-verify-iso 腿走的是官方新工具链
+# image-builder CLI + generic-iso;本 recipe 改为调用**同一个脚本**,让
+# 「本地能出 ISO」与「CI 能出 ISO」互为蕴含(core#103)。
+#
+# 代价:它不再是一条「出个 ISO 就完事」的命令 —— 还要起 QEMU 自证 live 系统、
+# 无人值守装机、再引导那块盘,全程约 30~40 分钟,且需 x86-64-v3 + KVM + rootful
+# podman。只想快速拿 ISO 文件:产物在 $VERIFY_WORK/output/ 下;只想验 live 段:
+# VERIFY_REQUIRE_INSTALL=0 just iso(本地排查档,不等价于 CI 判据)。
+#
+# 不再要求本地先 `just build`:脚本按 VERIFY_IMAGE(默认 ghcr.io 正式镜像)拉取。
+
+# Build bootable ISO(与 CI 同源:调用 tests/real-machine/iso-verify.sh)
+iso *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    mkdir -p output
-    # save/load 交接:just build 是 rootless(镜像在 ~/.local/share/containers/storage);
-    # bootc-image-builder 跑 rootful(看 /var/lib/containers/storage)。先 podman save
-    # (rootless 导出)再 sudo podman load(rootful 导入),否则 builder --local 报
-    # "image not known"。
-    podman save --format oci-archive -o output/daedalus-os.oci.tar localhost/daedalus-os:latest
-    sudo podman load -i output/daedalus-os.oci.tar
-    sudo podman run --rm --privileged -v "$(pwd)/output":/output -v /var/lib/containers/storage:/var/lib/containers/storage --security-opt label=disable quay.io/centos-bootc/bootc-image-builder:latest --type iso --local localhost/daedalus-os:latest
+    # 把脚本读的开关原样透传下去(sudo 会清环境);未设置的不传,让脚本用自己的默认值。
+    # VERIFY_IMAGE_DIGEST 漏传会让加速源被静默禁用,故两个 digest/builder 开关也在列。
+    env_args=()
+    for v in VERIFY_WORK VERIFY_IMAGE VERIFY_IMAGE_DIGEST VERIFY_BUILDER_IMAGE \
+             VERIFY_INSTALL_MIRROR VERIFY_REQUIRE_INSTALL VERIFY_MEM VERIFY_BOOT_TIMEOUT \
+             VERIFY_INSTALL_TIMEOUT VERIFY_SSH_PORT VERIFY_DISK_SIZE; do
+        [ -n "${!v:-}" ] && env_args+=("$v=${!v}")
+    done
+    sudo env ${env_args[@]+"${env_args[@]}"} bash tests/real-machine/iso-verify.sh "$@"
 
 # Build qcow2 and run in QEMU
 qemu:

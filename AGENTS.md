@@ -353,7 +353,7 @@ just i18n-sync [plugin-dir]            # 双向校验,严格,不一致 exit 1(CI
 just i18n-sync-autofix [plugin-dir]    # 以 i18n/ 目录为准,改写 manifest 的 i18n 字段
 just verify-dev-layout     # 三仓平级布局守门 (兄弟仓就位 + go.mod module 路径匹配)
 just verify-image          # 镜像零残留断言 (find /opt 无 *.py/*.pyc/__pycache__/*.test.ts/go.mod/vendor;需已构建镜像)
-just iso                   # Build bootable ISO via bootc-image-builder
+just iso                   # ISO 全流程(与 CI 同源:tests/real-machine/iso-verify.sh,需 KVM+root,约 30~40 min)
 just qemu                  # Build qcow2 and test-boot in QEMU
 
 # Go 直接命令 (本仓 cmd/ + internal/)
