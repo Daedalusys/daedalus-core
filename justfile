@@ -469,13 +469,15 @@ copilot-plugin:
 # 不再要求本地先 `just build`:脚本按 VERIFY_IMAGE(默认 ghcr.io 正式镜像)拉取。
 
 # Build bootable ISO(与 CI 同源:调用 tests/real-machine/iso-verify.sh)
-iso:
+iso *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    # 把本地常用开关透传给脚本;未设置的不传,让脚本用自己的默认值。
+    # 把脚本读的开关原样透传下去(sudo 会清环境);未设置的不传,让脚本用自己的默认值。
+    # VERIFY_IMAGE_DIGEST 漏传会让加速源被静默禁用,故两个 digest/builder 开关也在列。
     env_args=()
-    for v in VERIFY_WORK VERIFY_IMAGE VERIFY_INSTALL_MIRROR VERIFY_REQUIRE_INSTALL \
-             VERIFY_MEM VERIFY_BOOT_TIMEOUT VERIFY_INSTALL_TIMEOUT VERIFY_SSH_PORT VERIFY_DISK_SIZE; do
+    for v in VERIFY_WORK VERIFY_IMAGE VERIFY_IMAGE_DIGEST VERIFY_BUILDER_IMAGE \
+             VERIFY_INSTALL_MIRROR VERIFY_REQUIRE_INSTALL VERIFY_MEM VERIFY_BOOT_TIMEOUT \
+             VERIFY_INSTALL_TIMEOUT VERIFY_SSH_PORT VERIFY_DISK_SIZE; do
         [ -n "${!v:-}" ] && env_args+=("$v=${!v}")
     done
     sudo env ${env_args[@]+"${env_args[@]}"} bash tests/real-machine/iso-verify.sh "$@"

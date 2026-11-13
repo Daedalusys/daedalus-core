@@ -89,20 +89,38 @@ if [ -f "$INST" ]; then
     # mounted" 收场 —— 那句错不含挂载点,会把真正的首因盖掉。
     hasre '^[[:space:]]+umount_target_disk[[:space:]]*$' "$INST"
     st $? "规则12 循环体里调用 umount_target_disk(每次尝试前清理)"
+    for_line="$(grep -n '^for src in' "$INST" | head -1 | cut -d: -f1)"
     umount_line="$(grep -n '^[[:space:]]*umount_target_disk[[:space:]]*$' "$INST" | head -1 | cut -d: -f1)"
+    done_line="$(awk -v f="${for_line:-0}" 'NR>f && /^done$/ {print NR; exit}' "$INST")"
     install_line="$(grep -n 'bootc install to-disk' "$INST" | head -1 | cut -d: -f1)"
-    if [ -n "$umount_line" ] && [ -n "$install_line" ] && [ "$umount_line" -lt "$install_line" ]; then
-        st 0 "规则12 清理出现在 bootc install 之前(第 ${umount_line} 行 < 第 ${install_line} 行)"
+    if [ -n "$for_line" ] && [ -n "$umount_line" ] && [ -n "$done_line" ] && [ -n "$install_line" ] \
+       && [ "$umount_line" -gt "$for_line" ] && [ "$umount_line" -lt "$done_line" ] \
+       && [ "$umount_line" -lt "$install_line" ]; then
+        st 0 "规则12 清理调用落在 for 循环体内且早于 bootc install(第 ${umount_line} 行 ∈ (${for_line}, ${done_line}))"
     else
-        st 1 "规则12 清理必须排在 bootc install 之前(umount=${umount_line:-?} install=${install_line:-?})"
+        st 1 "规则12 清理调用必须在 for 循环体内且早于 bootc install(只清一次不算:第二次尝试仍是脏盘)"
     fi
     has '清理后仍被挂载' "$INST"
     st $? "规则12 清理后仍被占用时当场报出挂载点(不给 bootc 那句无信息的错)"
-    # 规则13:timeout 默认只发 SIGTERM;bootc 若不理就会带着半成品挂载点活到下一次尝试。
+    # 只看代码行:注释里提到 umount -l(说明为什么不这么做)不算违规。
+    if grep -v '^[[:space:]]*#' "$INST" | grep -qE 'umount[[:space:]]+-l'; then
+        st 1 "规则12 不得用 lazy umount(-l):它把挂载从 mountinfo 摘掉,后置检查会看不见残留"
+    else
+        st 0 "规则12 不用 lazy umount(busy 时直接报错收工)"
+    fi
+    # 规则13:timeout 默认只发 SIGTERM。补 SIGKILL 是为了让**进程**一定死掉,不再继续
+    # 拉镜像/写盘;它不负责清挂载点(挂载是内核状态,SIGKILL 后照样留着)。
     hasre 'timeout --kill-after=' "$INST"
     st $? "规则13 timeout 带 --kill-after(SIGTERM 被忽略时补 SIGKILL)"
-    hasre 'rc -eq 124|rc=124' "$INST"
-    st $? "规则13 超时与普通失败分开报告(rc=124 可诊断)"
+    hasre 'case "\$rc" in' "$INST"
+    st $? "规则13 失败按 rc 分情况报告(case 判定,不是消息里的字样)"
+    hasre '124\)' "$INST"; st $? "规则13 超时(rc=124)单独报告"
+    hasre '137\)' "$INST"; st $? "规则13 SIGKILL(rc=137)单独报告"
+    # 规则14:每次尝试一份日志。只留最后一份,第一次为什么失败就永远看不到。
+    hasre 'INSTALL_LOG\.\$attempt' "$INST"
+    st $? "规则14 每次尝试一份日志(不是只有最后一份)"
+    has 'for f in "$INSTALL_LOG"*' "$INST"
+    st $? "规则14 die 把所有尝试的日志倒进串口"
 else
     st 1 "规则1 装机脚本存在:$INST"
 fi
