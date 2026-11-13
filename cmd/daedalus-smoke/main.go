@@ -18,7 +18,8 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/Daedalusys/daedalus-sdk/version"
+	"github.com/Daedalusys/daedalus-core/internal/version"
+	sdkversion "github.com/Daedalusys/daedalus-sdk/version"
 )
 
 // smokeConfig 是冒烟测试的 TOML 配置模式:证明 BurntSushi/toml 可以解析
@@ -62,7 +63,7 @@ func run() error {
 	// —— 第 2 步:go-sdk 构造 MCP 服务器并注册 demo 工具 ——
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "daedalus-smoke",
-		Version: version.Version,
+		Version: sdkversion.Version,
 	}, nil)
 
 	// v1.7.0 的 ToolAnnotations.DestructiveHint 是 *bool 且 SDK 未导出
@@ -96,7 +97,7 @@ func run() error {
 
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "daedalus-smoke-client",
-		Version: version.Version,
+		Version: sdkversion.Version,
 	}, nil)
 	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
@@ -123,7 +124,7 @@ func run() error {
 	if want := "pong: " + cfg.Name; text.Text != want {
 		return fmt.Errorf("tools/call 回显不符: got %q, want %q", text.Text, want)
 	}
-	fmt.Printf("mcp  : tool=smoke_ping echo=%q (server %s v%s)\n", text.Text, version.ModulePath, version.Version)
+	fmt.Printf("mcp  : tool=smoke_ping echo=%q (server %s v%s)\n", text.Text, version.ModulePath, sdkversion.Version)
 
 	// —— 第 4 步:确定性收尾(关闭会话 → 服务器随连接断开而退出)——
 	if err := session.Close(); err != nil {
