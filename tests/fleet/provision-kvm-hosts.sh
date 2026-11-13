@@ -931,6 +931,16 @@ fleet_remote_status() {
 fleet_remote_destroy() {
     local purge="${1:-0}" i name d pid
     step "停机与清理"
+    # 已注册 Red Hat 订阅的 RHEL guest:销毁会连 overlay 一起删,席位仍被占着。
+    # 这里只在销毁前提醒,不替人做 unregister(那是账号级动作,得人来定)。
+    for i in "${!GUEST_NAMES[@]}"; do
+        [ "${GUEST_FAMILY[i]}" = rhel ] || continue
+        name="${GUEST_NAMES[i]}"
+        fleet_remote_pid_alive "$FLEET_WORK/vms/$name/qemu.pid" || continue
+        if fleet_remote_ssh "$name" 'sudo subscription-manager identity >/dev/null 2>&1' >/dev/null 2>&1; then
+            echo "  WARN - $name:已注册 Red Hat 订阅;销毁前建议先进 guest 跑 sudo subscription-manager unregister,否则席位仍被这台已删的机器占着" >&2
+        fi
+    done
     for i in "${!GUEST_NAMES[@]}"; do
         name="${GUEST_NAMES[i]}"; d="$FLEET_WORK/vms/$name"
         if fleet_remote_pid_alive "$d/qemu.pid"; then
