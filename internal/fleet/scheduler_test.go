@@ -339,9 +339,12 @@ func TestScheduler_LowRiskTransientThenSuccess(t *testing.T) {
 
 // TestScheduler_HighRiskAnyFailurePausesImmediately 钉住 G9:高危的**任何**失败
 // 立即暂停,一次重试都不做。
+//
+// 用 file 高危而不是 package 高危:agent 节点上只有 file 有可承诺的回滚点,
+// package 高危会被准入闸门挡在 RPC 之前,测不到本条的暂停语义。
 func TestScheduler_HighRiskAnyFailurePausesImmediately(t *testing.T) {
 	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapBtrfs))
-	plan := planOf(t, []objectmodel.Intent{highIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	plan := planOf(t, []objectmodel.Intent{highFileIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
 	fake := &fakeDispatcher{reply: func(_ DispatchTarget, _ int) (StepResult, error) {
 		return StepResult{Outcome: OutcomeN2, Result: agentv1.ApplyIntentResult_APPLY_INTENT_RESULT_TRANSIENT_FAILURE}, nil
 	}}
@@ -363,9 +366,10 @@ func TestScheduler_HighRiskAnyFailurePausesImmediately(t *testing.T) {
 }
 
 // TestScheduler_HighRiskSuccessDoesNotPause 证明高危成功照常推进。
+// 同前一条:用 file 高危,package 高危在 agent 节点上过不了准入闸门。
 func TestScheduler_HighRiskSuccessDoesNotPause(t *testing.T) {
 	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapBtrfs))
-	plan := planOf(t, []objectmodel.Intent{highIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	plan := planOf(t, []objectmodel.Intent{highFileIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
 	fake := &fakeDispatcher{}
 	s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
 
@@ -528,25 +532,60 @@ func TestScheduler_LowRiskStillRunsOnUnknownSnapshotCapability(t *testing.T) {
 	}
 }
 
-// TestIntentHasRollbackPoint 钉住回滚点的两个维度:file 在 agent 节点上有
-// 内建单文件 copy(与宿主快照无关);package/service 只能靠宿主自带的快照
-// 机制;atomic 节点不能借 agent 的内建 copy 替自己承诺回滚。
+// TestIntentHasRollbackPoint 钉住回滚点的两个维度在 agent 节点上的分工:
+// 只按 kind 判——file 有内建单文件 copy,其余一律没有。宿主快照能力回答的是
+// 「怎么还原」,不是「有没有还原点」;把能力也算进来,LVM 宿主上的 package
+// 高危就会被放行,而 lvconvert --merge 要卸载/重启才生效,承诺不了。
+//
+// 2026-11-12:agent 侧恢复上报宿主快照机制后,这条从「能力也算」收紧成「只按
+// kind」。atomic 节点的判定逻辑不变(仍按宿主能力)。
 func TestIntentHasRollbackPoint(t *testing.T) {
-	agentNone := Node{Kind: objectmodel.MachineKindAgent, SnapshotCap: "SNAPSHOT_CAPABILITY_NONE"}
-	agentBtrfs := Node{Kind: objectmodel.MachineKindAgent, SnapshotCap: "SNAPSHOT_CAPABILITY_BTRFS_SUBVOLUME"}
-	atomicNone := Node{Kind: objectmodel.MachineKindAtomic, SnapshotCap: "SNAPSHOT_CAPABILITY_NONE"}
+	for _, cap := range []string{
+		"SNAPSHOT_CAPABILITY_NONE",
+		"SNAPSHOT_CAPABILITY_BTRFS_SUBVOLUME",
+		"SNAPSHOT_CAPABILITY_LVM_SNAP",
+		"SNAPSHOT_CAPABILITY_SNAPSHOT_SNAPPER",
+		"SNAPSHOT_CAPABILITY_RSYNC_TARGET",
+	} {
+		n := Node{Kind: objectmodel.MachineKindAgent, SnapshotCap: cap}
+		if !intentHasRollbackPoint(n, objectmodel.KindFile) {
+			t.Errorf("agent 节点(cap=%s)的 file intent 有内建 copy 回滚点", cap)
+		}
+		if intentHasRollbackPoint(n, objectmodel.KindPackage) {
+			t.Errorf("agent 节点(cap=%s)的 package intent 必须没有回滚点", cap)
+		}
+		if intentHasRollbackPoint(n, objectmodel.KindService) {
+			t.Errorf("agent 节点(cap=%s)的 service intent 必须没有回滚点", cap)
+		}
+	}
 
-	if !intentHasRollbackPoint(agentNone, objectmodel.KindFile) {
-		t.Error("agent 节点的 file intent 有内建单文件 copy 回滚点")
+	atomicLVM := Node{Kind: objectmodel.MachineKindAtomic, SnapshotCap: "SNAPSHOT_CAPABILITY_LVM_SNAP"}
+	if !intentHasRollbackPoint(atomicLVM, objectmodel.KindPackage) {
+		t.Error("atomic 节点仍按宿主快照能力判(package + LVM 快照应为有回滚点)")
 	}
-	if intentHasRollbackPoint(agentNone, objectmodel.KindPackage) {
-		t.Error("agent 节点的 package intent 没有回滚点")
-	}
-	if !intentHasRollbackPoint(agentBtrfs, objectmodel.KindPackage) {
-		t.Error("有宿主快照机制的节点,package intent 有回滚点")
-	}
+	atomicNone := Node{Kind: objectmodel.MachineKindAtomic, SnapshotCap: "SNAPSHOT_CAPABILITY_NONE"}
 	if intentHasRollbackPoint(atomicNone, objectmodel.KindFile) {
 		t.Error("atomic 节点不能借 agent 的内建 copy 承诺回滚")
+	}
+}
+
+// TestScheduler_RefusesHighRiskPackageOnAgentWithVolumeCapability 把上面那条
+// 判定钉到真实下发路径上:节点自报 LVM 快照能力后,package 高危仍不得发 RPC。
+func TestScheduler_RefusesHighRiskPackageOnAgentWithVolumeCapability(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", "SNAPSHOT_CAPABILITY_LVM_SNAP"))
+	plan := planOf(t, []objectmodel.Intent{highIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("package 高危在 agent 节点上不得下发,Dispatch 被调 %d 次", len(fake.calls))
+	}
+	if run.Status != objectmodel.PlanStatusDirty {
+		t.Errorf("Status = %q, want dirty", run.Status)
 	}
 }
 

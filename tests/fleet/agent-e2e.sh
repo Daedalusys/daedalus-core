@@ -136,19 +136,21 @@ low_risk_verdict() {
 }
 
 # node_has_rollback_point <node-kind> <intent-kind> <snapshot-capability>:某条
-# intent 在这个节点上**有没有回滚点**。只用于真机矩阵选点,不参与判定。
+# intent 在这个节点上**有没有可承诺的回滚点**。只用于真机矩阵选点,不参与判定。
 #
-# 与控制面 internal/fleet 的 intentHasRollbackPoint 同语义,两个维度合起来才算:
-#   - kind 维度:agent 内置单文件 copy 快照,但只对 file 成立 —— package/service
-#     改的是宿主状态,单文件还原救不了;
-#   - 节点维度:非 file 的 kind 只能靠宿主自带的快照机制,快照能力为空 / NONE /
-#     UNSPECIFIED 一律视为没有(proto 要求 UNSPECIFIED 按 NONE 处理)。
+# 与控制面 internal/fleet 的 intentHasRollbackPoint 同语义:
+#   - agent 节点**只按 kind 判**:file 有内建单文件 copy;package/service 改的是
+#     宿主状态,一律没有回滚点。宿主快照能力不参与准入 —— 能力回答"怎么还原",
+#     不回答"有没有还原点"(LVM 的 lvconvert --merge 要卸载/重启才生效,
+#     承诺不了即时还原)。控制面 392d779 起就是这么判的。
+#   - atomic 节点沿用宿主快照能力判(它的回滚由 daedalus-tx 承担)。
 #
 # 注意这不回答"低危能不能打":低危 intent 不因缺回滚点被拒,所以低危腿不筛点。
 node_has_rollback_point() {
     local node_kind="$1" intent_kind="$2" snap_cap="${3:-}"
-    if [ "$intent_kind" = "file" ] && [ "$node_kind" = "agent" ]; then
-        return 0
+    if [ "$node_kind" = "agent" ]; then
+        [ "$intent_kind" = "file" ] && return 0
+        return 1
     fi
     case "$snap_cap" in
         ""|SNAPSHOT_CAPABILITY_NONE|SNAPSHOT_CAPABILITY_UNSPECIFIED) return 1 ;;
@@ -347,15 +349,21 @@ run_selftest() {
     check_probe "rpm 输出形状不认识 → 判没装上" \
         rhel "$WANT_PKG" absent "$(printf 'nginx-devel is not a package\n')"
 
-    step "回滚点判定:按 intent kind + 节点快照能力(不按风险等级)"
+    step "回滚点判定:agent 只按 kind 判;atomic 按节点快照能力"
     check_point "file on agent → 有内建单文件 copy 回滚点(与宿主快照无关)" \
         agent file SNAPSHOT_CAPABILITY_NONE has
     check_point "file on atomic → 不替 daedalus-tx 承诺,按节点快照能力判" \
         atomic file SNAPSHOT_CAPABILITY_NONE none
     check_point "package on agent + 快照能力 NONE → 无回滚点(高危腿的选点条件)" \
         agent package SNAPSHOT_CAPABILITY_NONE none
-    check_point "package on agent + 快照能力 BTRFS → 有回滚点(高危腿不选它)" \
-        agent package SNAPSHOT_CAPABILITY_BTRFS_SUBVOLUME has
+    check_point "package on agent + 快照能力 BTRFS → 仍无回滚点(能力不参与准入)" \
+        agent package SNAPSHOT_CAPABILITY_BTRFS_SUBVOLUME none
+    check_point "package on agent + 快照能力 LVM_SNAP → 仍无回滚点(merge 要卸载/重启)" \
+        agent package SNAPSHOT_CAPABILITY_LVM_SNAP none
+    check_point "package on agent + 快照能力 SNAPPER → 仍无回滚点" \
+        agent package SNAPSHOT_CAPABILITY_SNAPSHOT_SNAPPER none
+    check_point "package on atomic + 快照能力 LVM_SNAP → atomic 仍按能力判" \
+        atomic package SNAPSHOT_CAPABILITY_LVM_SNAP has
 
     step "负对照:说谎的 agent(控制面报 complete,目标机上并没有装上)"
     local lying='{"plan_id":"selftest","status":"complete","results":[{"node_id":"n1","outcome":"success","result":"success","tx_id":"tx-n1","message":""}]}'
@@ -515,8 +523,31 @@ run_matrix() {
         low_pairs+=("$pair")
         low_keys+=("${keys[i]}"); low_sshs+=("${sshs[i]}"); low_distros+=("${distros[i]}")
     done
+
+    # 基线闸门:本轮要证明"装上了",所以执行前必须确证**没装**。上一轮留下的包
+    # 会让"独立核实已装"变成空过 —— 真机上撞过:nginx 是上一轮装的,本轮明明
+    # dirty、tx_id 全空,独立核实照样报 ok。基线不干净的节点不下发,记 FAIL 并
+    # 提示换 --package。
+    local -a base_pairs=() base_keys=() base_sshs=() base_distros=()
+    for ((i = 0; i < ${#low_pairs[@]}; i++)); do
+        local pre
+        pre="$("$SSH" -n "${low_sshs[i]}" "$(pkg_probe_cmd "${low_distros[i]}" "$WANT_PKG")" 2>/dev/null || true)"
+        if pkg_installed_from_output "${low_distros[i]}" "$WANT_PKG" "$pre"; then
+            bad "${low_keys[i]}: ${WANT_PKG} 执行前就装着(基线不干净),本轮无法证明落地 —— 用 --package 换个未装包"
+            continue
+        fi
+        base_pairs+=("${low_pairs[i]}"); base_keys+=("${low_keys[i]}")
+        base_sshs+=("${low_sshs[i]}"); base_distros+=("${low_distros[i]}")
+    done
+    if [ "${#base_pairs[@]}" -gt 0 ]; then
+        low_pairs=("${base_pairs[@]}"); low_keys=("${base_keys[@]}")
+        low_sshs=("${base_sshs[@]}"); low_distros=("${base_distros[@]}")
+    else
+        low_pairs=(); low_keys=(); low_sshs=(); low_distros=()
+    fi
+
     if [ "${#low_pairs[@]}" -eq 0 ]; then
-        bad "node list 里没有任何节点,低危腿无法执行"
+        bad "低危腿没有可执行的节点(未登记,或被基线闸门拦下)"
     else
         local planfile
         planfile="$(mktemp)"

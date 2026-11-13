@@ -47,13 +47,16 @@ func nodeHasRollbackPoint(n Node) bool {
 	return true
 }
 
-// intentHasRollbackPoint 报告这条 intent 在这个节点上有没有回滚点。
-// 两个维度合起来才算:
-//   - kind 维度:file 有 agent 内建的单文件 copy,与宿主无关;但只有 agent
-//     节点走这条路,atomic 节点走 daedalus-tx,不能替它承诺。
-//   - 节点维度:package / service 只能靠宿主自带的快照机制。
+// intentHasRollbackPoint 报告这条 intent 在这个节点上有没有**可承诺的**回滚点。
+// agent 节点只按 kind 判:
+//   - kind 维度:file 有 agent 内建的单文件 copy,与宿主无关。
+//   - 宿主快照能力不参与准入。能力回答的是「怎么还原」,不是「有没有还原点」;
+//     把 LVM / snapper / btrfs 算进来会让 package 高危在卷级宿主上被放行,而
+//     lvconvert --merge 要卸载或重启才生效,agent 承诺不了即时还原。
+//
+// atomic 节点沿用原判定(仍按宿主快照能力),它的回滚由 daedalus-tx 一侧承担。
 func intentHasRollbackPoint(n Node, kind objectmodel.Kind) bool {
-	if kind == objectmodel.KindFile && n.Kind == objectmodel.MachineKindAgent {
+	if n.Kind == objectmodel.MachineKindAgent {
 		return objectmodel.HasRollbackPoint(kind)
 	}
 	return nodeHasRollbackPoint(n)
