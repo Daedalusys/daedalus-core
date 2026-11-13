@@ -65,6 +65,31 @@ with_transport() {
     esac
 }
 
+# umount_target_disk —— 把 $DEV 上残留的挂载点卸干净,并把清理前后的盘状态打进串口。
+#
+# 为什么每次装机前都要清:上一次尝试(尤其是被 timeout 打断的)会在目标盘上留下
+# 分区与挂载点,下一次 bootc 就会以 "Creating rootfs: Device $DEV is mounted" 收场
+# —— 那句错不含挂载点,排查时等于没有信息,还会把真正的首因(第一次为什么失败)盖掉。
+#
+# 只动 $DEV 自己:live 介质的载体在前面已被明确排除(那是「擦掉自己」的红线)。
+# 这里不做 wipefs:本故障是**挂载态**残留,不是旧文件系统签名;`bootc install
+# --wipe` 自己会重写分区表,多一次 wipefs 只增加破坏面。
+umount_target_disk() {
+    say "清理目标盘 $DEV(清理前)"
+    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT "$DEV" >"$TTY" 2>/dev/null || true
+    local mp still
+    while read -r mp; do
+        [ -n "$mp" ] || continue
+        umount -R "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+    done < <({ findmnt -rno TARGET -S "$DEV" 2>/dev/null; lsblk -rno MOUNTPOINT "$DEV" 2>/dev/null; } \
+             | sed '/^$/d' | sort -u)
+    # 清理后还在挂载就当场报出挂载点:bootc 那句 "is mounted" 不含这些信息。
+    still="$(lsblk -rno MOUNTPOINT "$DEV" 2>/dev/null | sed '/^$/d' | sort -u | tr '\n' ' ')"
+    [ -z "$still" ] || die "目标盘 $DEV 清理后仍被挂载:$still(先查是谁挂的,不要直接重试)"
+    say "清理目标盘 $DEV(清理后)"
+    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT "$DEV" >"$TTY" 2>/dev/null || true
+}
+
 # 源列表:加速源在前、规范源兜底。加速源不通时回落,而不是整条腿直接红。
 SOURCES=()
 [ -n "$SRC_REF" ] && SOURCES+=("$SRC_REF")
@@ -73,17 +98,27 @@ SOURCES+=("$IMGREF")
 installed=0
 for src in "${SOURCES[@]}"; do
     SRC_IMGREF="$(with_transport "$src")"
+    # 每次尝试都从**干净盘**开始。
+    umount_target_disk
     say "目标盘 $DEV,源镜像 $SRC_IMGREF,开始无人值守安装"
     # --karg console=ttyS0:装好的系统要能在串口上判「装完了」,判据落在结果上而不是过程上。
     # --skip-fetch-check:fetch check 会以装好系统的凭据再拉一次目标 ref,那不是这条门禁要
     # 验的东西,失败反而会误杀(源与目标是同一个公开 ref 的不同写法时尤其如此)。
-    if timeout "$SRC_TIMEOUT" bootc install to-disk --wipe "$DEV" \
+    # --kill-after:timeout 默认只发 SIGTERM;bootc 若不理会就会带着半成品挂载点活到
+    # 下一次尝试,那次就会以 "Device $DEV is mounted" 收场。补一次 SIGKILL 兜底。
+    rc=0
+    timeout --kill-after=30 "$SRC_TIMEOUT" bootc install to-disk --wipe "$DEV" \
             --source-imgref "$SRC_IMGREF" --target-imgref "$IMGREF" \
-            --skip-fetch-check --karg console=ttyS0,115200n8 >"$INSTALL_LOG" 2>&1; then
+            --skip-fetch-check --karg console=ttyS0,115200n8 >"$INSTALL_LOG" 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
         installed=1
         break
     fi
-    say "源 $SRC_IMGREF 装机未成功(日志在 $INSTALL_LOG),换下一个源"
+    if [ "$rc" -eq 124 ]; then
+        say "源 $SRC_IMGREF 装机未成功(rc=124:该源 ${SRC_TIMEOUT}s 内没装完),换下一个源"
+    else
+        say "源 $SRC_IMGREF 装机未成功(rc=$rc,日志在 $INSTALL_LOG),换下一个源"
+    fi
 done
 [ "$installed" -eq 1 ] || die "所有安装源都失败(最后一次日志在 $INSTALL_LOG)"
 

@@ -84,6 +84,25 @@ if [ -f "$INST" ]; then
     fi
     hasre 'timeout .*bootc install to-disk' "$INST"
     st $? "规则10 单个安装源有独立时限(加速源不通可回落)"
+    # 规则12:每次尝试都必须从**干净盘**开始。上一次尝试(尤其被 timeout 打断的)会在
+    # 目标盘上留下分区与挂载点,下一次 bootc 就会以 "Creating rootfs: Device ... is
+    # mounted" 收场 —— 那句错不含挂载点,会把真正的首因盖掉。
+    hasre '^[[:space:]]+umount_target_disk[[:space:]]*$' "$INST"
+    st $? "规则12 循环体里调用 umount_target_disk(每次尝试前清理)"
+    umount_line="$(grep -n '^[[:space:]]*umount_target_disk[[:space:]]*$' "$INST" | head -1 | cut -d: -f1)"
+    install_line="$(grep -n 'bootc install to-disk' "$INST" | head -1 | cut -d: -f1)"
+    if [ -n "$umount_line" ] && [ -n "$install_line" ] && [ "$umount_line" -lt "$install_line" ]; then
+        st 0 "规则12 清理出现在 bootc install 之前(第 ${umount_line} 行 < 第 ${install_line} 行)"
+    else
+        st 1 "规则12 清理必须排在 bootc install 之前(umount=${umount_line:-?} install=${install_line:-?})"
+    fi
+    has '清理后仍被挂载' "$INST"
+    st $? "规则12 清理后仍被占用时当场报出挂载点(不给 bootc 那句无信息的错)"
+    # 规则13:timeout 默认只发 SIGTERM;bootc 若不理就会带着半成品挂载点活到下一次尝试。
+    hasre 'timeout --kill-after=' "$INST"
+    st $? "规则13 timeout 带 --kill-after(SIGTERM 被忽略时补 SIGKILL)"
+    hasre 'rc -eq 124|rc=124' "$INST"
+    st $? "规则13 超时与普通失败分开报告(rc=124 可诊断)"
 else
     st 1 "规则1 装机脚本存在:$INST"
 fi
