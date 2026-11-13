@@ -432,11 +432,15 @@ jobs:
       - name: Download plugin zips from daedalus-plugins release
         # 镜像构建 job 内联 plugin zip 下载(跨仓集成)。
         # daedalus-plugins 仓 release 出 11 个 *.plugin.zip(fs/shell/pkg/sysinfo/
-        # service/blueprint/dupe/diskclean/organize/trace/proc);gh 在 runner 预装且
-        # 经 GITHUB_TOKEN 认证。fetch-plugins.sh 只做本地等价兜底,
-        # 不重复描述本 workflow 步骤。下载目录用绝对路径 /tmp,不受 cwd 影响。
+        # service/blueprint/dupe/diskclean/organize/trace/proc)。gh 在 runner 预装,
+        # 但 **必须显式给 GH_TOKEN**:GITHUB_TOKEN 不会自动进步骤环境,匿名调用会撞
+        # 共享出口 IP 的 60 次/小时限额(run 43474365258 的 403 就是这么来的)。
+        # fetch-plugins.sh 只做本地等价兜底,不重复描述本 workflow 步骤。
+        # 下载目录用绝对路径 /tmp,不受 cwd 影响。
         shell: bash
         working-directory: daedalus-core
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/plugins-release
           gh release download --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --dir /tmp/plugins-release/
