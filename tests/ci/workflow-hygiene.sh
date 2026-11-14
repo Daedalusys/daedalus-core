@@ -12,6 +12,8 @@
 #   规则5 所有 uses: 的 ref 必须是 40 位十六进制 SHA(拒 @v3 之类浮动标签)
 #   规则8 VERIFY_WORK 与证据上传路径必须带 github.run_id(按 run 隔离;固定路径会
 #        跨 run 串味,且旧目录没人收口)
+#   规则9 四仓 Go 源码必须是 gofmt-clean(`gofmt -l` 为空);与规则6/7 同型 ——
+#        仓目录不存在、gofmt 不在 PATH 一律判红(扫了 0 个文件的"绿"不算绿)
 #
 # 判定必须是 **mapping 解析**,不是全文 grep:注释/文档里出现的 `actions/checkout`
 # 字样不是步骤。`--selftest` 用合成样本把这条负例钉住。
@@ -51,6 +53,43 @@ check_coverage() {
         return 1
     fi
     printf 'checkout %d 处 / setup-go %d 处' "$tc" "$ts"
+}
+
+# check_gofmt <四仓平级根> —— 规则9:四仓 Go 源码必须是 gofmt-clean。
+#   缺仓 / 缺工具都**判红**,理由与规则6/7 相同:一个"扫了 0 个文件却打印 OK"的
+#   守门,与它要消灭的 `|| true` 是同一种假绿。
+# 输出约定:成功时 stdout 只有合计 .go 文件数(主流程用命令替换取它拼 OK 行),
+#   失败定位一律走 stderr —— 否则命令替换会把逐条定位吞掉,红得没有信息。
+# GOFMT 可被覆盖(默认 gofmt),供 selftest 构造"工具缺失"负例。
+check_gofmt() {
+    local root="$1" gfmt out repo rel n=0 total=0 fail=0
+    gfmt="${GOFMT:-gofmt}"
+    if ! command -v "$gfmt" >/dev/null 2>&1; then
+        echo "规则9 gofmt 不在 PATH(格式守门不得静默变绿)" >&2
+        return 1
+    fi
+    for repo in $REPOS; do
+        if [ ! -d "$root/$repo" ]; then
+            echo "规则9 $repo: 目录不存在,守门未检视该仓" >&2
+            fail=1
+            continue
+        fi
+        if ! out="$(cd "$root/$repo" && "$gfmt" -l .)"; then
+            echo "规则9 $repo: gofmt 执行失败(无法判定该仓格式)" >&2
+            fail=1
+            continue
+        fi
+        n=0
+        while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            echo "规则9 $repo/${rel#./}" >&2
+            n=$((n + 1))
+        done <<< "$out"
+        if [ "$n" -gt 0 ]; then fail=1; fi
+        total=$((total + $(cd "$root/$repo" && find . -type f -name '*.go' | wc -l)))
+    done
+    [ "$fail" -eq 0 ] || return 1
+    printf '%d' "$total"
 }
 
 # scan_root <四仓平级根> [<站点计数文件>] —— 逐仓逐 workflow 断言;有违规打印定位并返回 1。
@@ -498,6 +537,30 @@ jobs:
     rc=0; check_coverage "$tmp" >/dev/null 2>&1 || rc=$?
     st 1 "$rc" "覆盖度:缺 daedalus-agent 的 workflow 目录 → 规则6 拒"
 
+    # 25) 规则9:四仓 Go 格式守门。与规则6/7 同型 —— 缺仓、缺工具一律判红。
+    #     上面的用例会删/建仓目录,故本组自己先把四个仓 mkdir 齐。
+    for r in daedalus-core daedalus-sdk daedalus-plugins daedalus-agent; do mkdir -p "$tmp/$r"; done
+
+    # 25a) 存在非 gofmt-clean 文件 → 拒,且逐条定位到仓/文件。
+    printf 'package x\nfunc  F(){}\n' >"$tmp/daedalus-sdk/bad.go"
+    rc=0; out="$(check_gofmt "$tmp" 2>&1)" || rc=$?
+    st 1 "$rc" "规则9:存在非 gofmt-clean 文件 → 拒"
+    st 1 "$(printf '%s' "$out" | grep -c '规则9')" "规则9:违规时逐条定位"
+    rm -f "$tmp/daedalus-sdk/bad.go"
+
+    # 25b) 四仓干净 → 放行。
+    rc=0; out="$(check_gofmt "$tmp" 2>&1)" || rc=$?
+    st 0 "$rc" "规则9:四仓干净 → 放行"
+
+    # 25c) gofmt 不在 PATH → 必须判红(工具缺失不得静默变绿)。
+    rc=0; GOFMT=/nonexistent/gofmt check_gofmt "$tmp" >/dev/null 2>&1 || rc=$?
+    st 1 "$rc" "规则9:gofmt 缺失 → 拒(不得静默变绿)"
+
+    # 25d) 仓目录缺失 → 判红(扫没扫过的仓不能算绿)。
+    rm -rf "$tmp/daedalus-plugins"
+    rc=0; check_gofmt "$tmp" >/dev/null 2>&1 || rc=$?
+    st 1 "$rc" "规则9:缺仓 → 拒"
+
     if [ "$fail_n" -eq 0 ]; then echo "RESULT: SELFTEST PASS"; exit 0; fi
     echo "RESULT: SELFTEST FAIL ($fail_n)"; exit 1
 fi
@@ -509,9 +572,10 @@ trap 'rm -f "$COUNTS"' EXIT
 ok=1
 scan_root "$ROOT" "$COUNTS" || ok=0
 cov="$(check_coverage "$ROOT" "$COUNTS")" || ok=0
+gofmt_out="$(check_gofmt "$ROOT")" || ok=0
 if [ "$ok" -eq 1 ]; then
-    echo "OK: 四仓 workflow 的 persist-credentials / cache / 钉 SHA / VERIFY_WORK 按 run 隔离全部显式(仓 4 个 / $cov)"
+    echo "OK: 四仓 workflow 的 persist-credentials / cache / 钉 SHA / VERIFY_WORK 按 run 隔离全部显式(仓 4 个 / $cov);四仓 gofmt 干净（$gofmt_out 个 .go 文件）"
 else
-    echo "ERROR: workflow 凭据/缓存不变式被破坏或守门覆盖不全(见上方逐条定位)" >&2
+    echo "ERROR: workflow 凭据/缓存不变式或四仓 Go 格式守门失败,或守门覆盖不全(见上方逐条定位)" >&2
     exit 1
 fi
