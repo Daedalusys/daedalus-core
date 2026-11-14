@@ -90,6 +90,16 @@ func lowIntent() objectmodel.Intent {
 	return objectmodel.Intent{Kind: objectmodel.KindPackage, Target: "nginx", RiskClass: objectmodel.RiskClassLow}
 }
 
+// highContainerIntent 是"既无内建回滚点、执行器也产不出凭据"的高危 intent:
+// container 改的是宿主状态,agent 没有它的执行器,也不承诺还原。
+func highContainerIntent() objectmodel.Intent {
+	return objectmodel.Intent{
+		Kind:      objectmodel.KindContainer,
+		Target:    "daedalus-demo",
+		RiskClass: objectmodel.RiskClassHigh,
+	}
+}
+
 // highIntent 是声明为高危的 intent。
 func highIntent() objectmodel.Intent {
 	return objectmodel.Intent{
@@ -123,11 +133,12 @@ func planOf(t *testing.T, intents []objectmodel.Intent, machines []objectmodel.M
 	return p
 }
 
-// TestScheduler_RefusesDispatchWhenSnapshotNone 钉住 N1 前置拒绝:目标节点没有
-// 回滚点时,高危 intent 必须在下发**之前**被拒(一个 RPC 都不发)。
-func TestScheduler_RefusesDispatchWhenSnapshotNone(t *testing.T) {
+// TestScheduler_RefusesDispatchWhenKindHasNoRollbackPoint 钉住 N1 前置拒绝:
+// 该 kind 既没有内建回滚点、执行器也产不出凭据时,高危 intent 必须在下发
+// **之前**被拒(一个 RPC 都不发)。
+func TestScheduler_RefusesDispatchWhenKindHasNoRollbackPoint(t *testing.T) {
 	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapNone))
-	plan := planOf(t, []objectmodel.Intent{highIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	plan := planOf(t, []objectmodel.Intent{highContainerIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
 	fake := &fakeDispatcher{}
 	s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
 
@@ -494,7 +505,7 @@ func TestScheduler_RefusesHighRiskWhenSnapshotCapabilityUnknown(t *testing.T) {
 	for _, cap := range []string{"", snapUnspecifiedForTest, snapNone} {
 		t.Run("cap="+cap, func(t *testing.T) {
 			r := newRegistryWithNodes(t, nodeWithSnapshot("n1", cap))
-			plan := planOf(t, []objectmodel.Intent{highIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+			plan := planOf(t, []objectmodel.Intent{highContainerIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
 			fake := &fakeDispatcher{}
 			s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
 
@@ -551,11 +562,16 @@ func TestIntentHasRollbackPoint(t *testing.T) {
 		if !intentHasRollbackPoint(n, objectmodel.KindFile) {
 			t.Errorf("agent 节点(cap=%s)的 file intent 有内建 copy 回滚点", cap)
 		}
-		if intentHasRollbackPoint(n, objectmodel.KindPackage) {
-			t.Errorf("agent 节点(cap=%s)的 package intent 必须没有回滚点", cap)
+		// package / service 的回滚点是执行器在 apply **之后**产出的凭据
+		// (dnf history undo / apt before-state),与宿主快照能力无关。
+		if !intentHasRollbackPoint(n, objectmodel.KindPackage) {
+			t.Errorf("agent 节点(cap=%s)的 package intent 有执行器回滚凭据", cap)
 		}
-		if intentHasRollbackPoint(n, objectmodel.KindService) {
-			t.Errorf("agent 节点(cap=%s)的 service intent 必须没有回滚点", cap)
+		if !intentHasRollbackPoint(n, objectmodel.KindService) {
+			t.Errorf("agent 节点(cap=%s)的 service intent 有执行器回滚凭据", cap)
+		}
+		if intentHasRollbackPoint(n, objectmodel.KindContainer) {
+			t.Errorf("agent 节点(cap=%s)的 container intent 既无内建点也无凭据", cap)
 		}
 	}
 
@@ -569,23 +585,32 @@ func TestIntentHasRollbackPoint(t *testing.T) {
 	}
 }
 
-// TestScheduler_RefusesHighRiskPackageOnAgentWithVolumeCapability 把上面那条
-// 判定钉到真实下发路径上:节点自报 LVM 快照能力后,package 高危仍不得发 RPC。
-func TestScheduler_RefusesHighRiskPackageOnAgentWithVolumeCapability(t *testing.T) {
-	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", "SNAPSHOT_CAPABILITY_LVM_SNAP"))
-	plan := planOf(t, []objectmodel.Intent{highIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
-	fake := &fakeDispatcher{}
-	s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+// TestScheduler_AdmitsHighRiskPackageOnAgentNode 钉住准入与执行侧同口径:
+// package 高危在 agent 节点上**要**下发(执行器靠 dnf/apt 凭据还原),节点自报的
+// 宿主快照能力不参与这条判定 —— 它回答"怎么还原文件/卷",不回答"能不能撤装包"。
+func TestScheduler_AdmitsHighRiskPackageOnAgentNode(t *testing.T) {
+	for _, cap := range []string{
+		snapNone,
+		"SNAPSHOT_CAPABILITY_RSYNC_TARGET",
+		"SNAPSHOT_CAPABILITY_LVM_SNAP",
+	} {
+		t.Run("cap="+cap, func(t *testing.T) {
+			r := newRegistryWithNodes(t, nodeWithSnapshot("n1", cap))
+			plan := planOf(t, []objectmodel.Intent{highIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+			fake := &fakeDispatcher{}
+			s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
 
-	run, err := s.Run(context.Background(), plan)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(fake.calls) != 0 {
-		t.Errorf("package 高危在 agent 节点上不得下发,Dispatch 被调 %d 次", len(fake.calls))
-	}
-	if run.Status != objectmodel.PlanStatusDirty {
-		t.Errorf("Status = %q, want dirty", run.Status)
+			run, err := s.Run(context.Background(), plan)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(fake.calls) != 1 {
+				t.Errorf("package 高危应下发,Dispatch 次数 = %d, want 1", len(fake.calls))
+			}
+			if run.Status != objectmodel.PlanStatusComplete {
+				t.Errorf("Status = %q, want complete", run.Status)
+			}
+		})
 	}
 }
 
