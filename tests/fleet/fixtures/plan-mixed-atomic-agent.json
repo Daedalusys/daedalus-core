@@ -1,0 +1,22 @@
+{
+  "id": "5eeded1a2b3c4d5e",
+  "intents": [
+    {
+      "kind": "package",
+      "target": "nginx",
+      "expected_diff": "- nginx (absent)\n+ nginx (present)\n",
+      "risk_class": "high"
+    }
+  ],
+  "machines": [
+    { "machine_id": "ubuntu24-a", "kind": "agent", "support_level": "supported" },
+    { "machine_id": "legacy-no-snapshot", "kind": "atomic", "support_level": "experimental" }
+  ],
+  "batching": { "strategy": "count", "size": 1 },
+  "blast_radius": {
+    "count": 2,
+    "kind_breakdown": { "package": 1 },
+    "max_downtime_ns": 30000000000,
+    "max_risk": "high"
+  }
+}

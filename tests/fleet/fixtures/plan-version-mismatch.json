@@ -1,0 +1,22 @@
+{
+  "id": "0badc0de5eed0001",
+  "intents": [
+    {
+      "kind": "package",
+      "target": "nginx",
+      "spec": { "version": "9.9.9" },
+      "expected_diff": "- nginx 1.24.0\n+ nginx 9.9.9\n",
+      "risk_class": "low"
+    }
+  ],
+  "machines": [
+    { "machine_id": "ubuntu24-a", "kind": "agent", "support_level": "supported" }
+  ],
+  "batching": { "strategy": "count", "size": 1 },
+  "blast_radius": {
+    "count": 1,
+    "kind_breakdown": { "package": 1 },
+    "max_downtime_ns": 30000000000,
+    "max_risk": "low"
+  }
+}
