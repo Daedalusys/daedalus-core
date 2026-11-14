@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# 装机重试 / 失败分类的**行为**门禁。iso-autoinstall-test.sh 是静态断言(脚本里有没有那几行),
+# 这里把 iso-autoinstall.sh 按库模式加载进来,用假 bootc 真跑 install_all_sources,钉住三件
+# 只有真跑才看得见的事:
+#
+#   重试 同一个源的**瞬时**网络失败退避重试,重试次数由 DAEDALUS_INSTALL_RETRIES 定,
+#        且重试用尽后换下一个源而不是死在一个源上
+#   分类 rc → transient / timeout / fatal 是显式映射,绝不兜底成 transient ——
+#        把 "Device is mounted" 这种装机逻辑失败当瞬时错误重试,等于用重试掩盖真缺陷
+#   预算 总预算先于外层 INSTALL_TIMEOUT 耗尽,结局是「预算耗尽」(与普通失败、与外层
+#        TIMEOUT 都可区分):否则外层会把"外因慢"报成 TIMEOUT,那正是要消灭的假因
+#
+# 用法: iso-install-retry-test.sh    # 全绿打印 RESULT: SELFTEST PASS
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+INST="$REPO/tests/real-machine/iso-autoinstall.sh"
+VERIFY="$REPO/tests/real-machine/iso-verify.sh"
+WORKFLOW="$REPO/.github/workflows/build.yml"
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+fail_n=0
+pass_n=0
+st() { # st <条件结果 0/1> <说明>
+    if [ "$1" -eq 0 ]; then
+        pass_n=$((pass_n + 1)); printf 'PASS %s\n' "$2"
+    else
+        fail_n=$((fail_n + 1)); printf 'FAIL %s\n' "$2"
+    fi
+}
+has() { grep -qF -- "$1" "$2" 2>/dev/null; }
+contains() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
+nlines() { wc -l <"$1" 2>/dev/null | tr -d ' '; }
+
+# 假 bootc:按 $BOOTC_PLAN 逐行消费 "<rc>|<日志正文>",正文写到 stderr。
+# 真实调用里 bootc 的 stdout+stderr 都被重定向进 ATT_LOG,分类正是读那份日志 ——
+# 所以"日志里有什么"必须由被测脚本自己捕获,而不是由测试直接喂给 classify_failure。
+mkdir -p "$WORK/bin"
+cat >"$WORK/bin/bootc" <<'FAKE'
+#!/usr/bin/env bash
+plan="${BOOTC_PLAN:?假 bootc 需要 BOOTC_PLAN}"
+line="$(head -1 "$plan" 2>/dev/null)"
+[ -n "$line" ] || { printf 'fake bootc: plan 已耗尽\n' >&2; exit 98; }
+tail -n +2 "$plan" >"$plan.next" && mv "$plan.next" "$plan"
+msg="${line#*|}"
+case "$msg" in ''|-) : ;; *) printf '%s\n' "$msg" >&2 ;; esac
+exit "${line%%|*}"
+FAKE
+chmod +x "$WORK/bin/bootc"
+
+# 在子 shell 里以**库模式**加载被测脚本:主流程不执行(否则它读 /proc/cmdline 就 die),
+# 块设备与退避等待全部压掉。入参是要在那个环境里跑的 bash 代码。
+lib_eval() {
+    (
+        set +u
+        export PATH="$WORK/bin:$PATH"
+        export DAEDALUS_ISO_AUTOINSTALL_LIB=1
+        # shellcheck disable=SC1090
+        source "$INST" || exit 90
+        set +u
+        : "${LIB_TTY:=$WORK/tty-default}"
+        TTY="$LIB_TTY"
+        # 测试不碰块设备;但调用**次数**要留痕 —— "每次尝试前清理"只查静态 grep 不够。
+        umount_target_disk() { printf 'umount\n' >>"${LIB_UMOUNT_LOG:-$WORK/umount-default}"; }
+        sleep() { :; }
+        eval "$1"
+    )
+}
+
+# 跑一次 install_all_sources。
+#   $1 标签(plan/summary/umount/tty/log 的文件名后缀)  $2 RETRIES  $3 BUDGET  $4 是否两源(0/1)
+# 退出码原样透传(die → 1)。OUTCOME 行走 EXIT trap:die 会 exit,普通 printf 到不了。
+run_install() {
+    local tag="$1" retries="$2" budget="$3" two="${4:-0}"
+    local plan="$WORK/plan.$tag" sum="$WORK/summary.$tag" ulog="$WORK/umount.$tag"
+    local log="$WORK/install.$tag" tty="$WORK/tty.$tag"
+    : >"$sum"; : >"$ulog"
+    BOOTC_PLAN="$plan" LIB_TTY="$tty" LIB_UMOUNT_LOG="$ulog" \
+    lib_eval "
+        DEV=/dev/vda
+        IMGREF='ghcr.io/daedalusys/daedalus-os:test'
+        SRC_REF=''
+        [ '$two' = 1 ] && SRC_REF='ghcr.1ms.run/daedalusys/daedalus-os:test'
+        HTTP_PROXY_URL=''
+        SRC_TIMEOUT=900
+        RETRIES=$retries
+        BACKOFF=1
+        BACKOFF_MAX=60
+        INSTALL_BUDGET=$budget
+        INSTALL_LOG='$log'
+        INSTALL_SUMMARY='$sum'
+        trap 'printf \"OUTCOME installed=%s attempts=%s\n\" \"\${installed:-?}\" \"\${attempts:-?}\"' EXIT
+        install_all_sources
+    "
+}
+
+# 后置断言:摘要行数 == attempts、每行带 class=、每次尝试前都清理过。
+summary_ok() { # summary_ok <标签> <期望 attempts>
+    local sum="$WORK/summary.$1" want="$2"
+    [ "$(nlines "$sum")" = "$want" ]; st $? "摘要 $1:行数 == attempts($want;实得 $(nlines "$sum"))"
+    [ "$(grep -c 'class=' "$sum")" = "$want" ]; st $? "摘要 $1:每行带 class=($want/$want;实得 $(grep -c 'class=' "$sum"))"
+    [ "$(nlines "$WORK/umount.$1")" = "$want" ]; st $? "清理 $1:每次尝试前都 umount_target_disk($want 次;实得 $(nlines "$WORK/umount.$1"))"
+}
+
+# ------------------------------------------------------------ 分类(表驱动,显式) --
+printf '%s\n' 'error: Installing to disk: Creating ostree deployment: Preparing import: Fetching manifest: failed to invoke method GetFullConfig: Get "https://ghcr-cf.mrs.1ms.run/ghcrblobs07/blobs/sha256:d7601b6e...": net/http: TLS handshake timeout' >"$WORK/log-tls"
+printf '%s\n' 'error: Installing to disk: Creating rootfs: Device /dev/vda is mounted' >"$WORK/log-mounted"
+printf '%s\n' 'error: Installing to disk: Creating ostree deployment: Preparing import: writing deployment: Invalid argument' >"$WORK/log-ostree"
+printf '%s\n' 'error: pulling image: read tcp 10.0.2.15:37666->1.2.3.4:443: i/o timeout' >"$WORK/log-iotimeout"
+
+classify_case() { # classify_case <rc> <日志路径> <期望分类> <说明>
+    local out
+    out="$(LIB_TTY="$WORK/tty.classify" lib_eval "classify_failure $1 '$2'")"
+    [ "$out" = "$3" ]; st $? "$4(期望 [${3}] 实得 [${out}])"
+}
+classify_case 1 "$WORK/log-tls" transient "分类 rc=1 + TLS handshake timeout → transient"
+classify_case 1 "$WORK/log-mounted" fatal "分类 rc=1 + Device is mounted → fatal(装机逻辑失败不重试)"
+classify_case 1 "$WORK/log-ostree" fatal "分类 rc=1 + Creating ostree deployment 失败 → fatal"
+classify_case 124 "$WORK/log-tls" timeout "分类 rc=124 → timeout(同源不重试)"
+classify_case 137 "$WORK/log-tls" timeout "分类 rc=137(SIGKILL) → timeout"
+classify_case 0 "$WORK/log-tls" "" "分类 rc=0 → 空输出(成功不分类,哪怕日志里有超时字样)"
+
+out="$(LIB_TTY="$WORK/tty.tr" lib_eval "is_transient_log '$WORK/log-tls' && echo hit || echo miss")"
+[ "$out" = hit ]; st $? "分类 is_transient_log 命中 TLS 超时日志"
+out="$(LIB_TTY="$WORK/tty.tr" lib_eval "is_transient_log '$WORK/log-mounted' && echo hit || echo miss")"
+[ "$out" = miss ]; st $? "分类 is_transient_log 不命中装机逻辑失败日志(不兜底成 transient)"
+out="$(LIB_TTY="$WORK/tty.tr" lib_eval "is_transient_log '$WORK/log-iotimeout' && echo hit || echo miss")"
+[ "$out" = hit ]; st $? "分类 is_transient_log 命中 i/o timeout"
+
+# ------------------------------------------------------------------ 循环:重试 --
+# 第 1 次 TLS 超时、第 2 次成功:同源重试一次就够,不该去开第二个源。
+printf '%s\n' '1|Get "https://ghcr-cf.mrs.1ms.run/x": net/http: TLS handshake timeout' '0|-' >"$WORK/plan.retry"
+out="$(run_install retry 1 2100 0)"; rc=$?
+contains "$out" 'installed=1 attempts=2'; st $? "循环 同源瞬时失败 → 退避重试一次后成功(期望 installed=1 attempts=2;实得 $(printf '%s' "$out" | tr '\n' ' '))"
+[ "$rc" -eq 0 ]; st $? "循环 重试成功后正常返回(rc=$rc)"
+summary_ok retry 2
+
+# rc=124 是**外层时限到**,不是网络瞬时失败:同源重试只会再烧一个 SRC_TIMEOUT。
+printf '%s\n' '124|-' '0|-' >"$WORK/plan.tmo"
+out="$(run_install tmo 1 2100 0)"; rc=$?
+contains "$out" 'installed=0 attempts=1'; st $? "循环 rc=124 同源不重试(期望 attempts=1;实得 $(printf '%s' "$out" | tr '\n' ' '))"
+[ "$rc" -ne 0 ]; st $? "循环 全部失败时 die(rc=$rc)"
+summary_ok tmo 1
+if has '预算耗尽' "$WORK/tty.tmo"; then
+    st 1 "循环 普通失败的 die 消息不得是「预算耗尽」(否则两种结局无法区分)"
+else
+    st 0 "循环 普通失败的 die 消息与「预算耗尽」可区分"
+fi
+
+# 两个源都永远瞬时失败:每源 1+RETRIES 次,然后 die(不是死在第一个源上)。
+printf '%s\n' '1|read tcp: i/o timeout' '1|read tcp: i/o timeout' \
+                '1|read tcp: i/o timeout' '1|read tcp: i/o timeout' >"$WORK/plan.exhaust"
+out="$(run_install exhaust 1 2100 1)"; rc=$?
+contains "$out" 'installed=0 attempts=4'; st $? "循环 每源 1+RETRIES 次后换下一源(期望 attempts=4;实得 $(printf '%s' "$out" | tr '\n' ' '))"
+[ "$rc" -ne 0 ]; st $? "循环 两源用尽后 die(rc=$rc)"
+summary_ok exhaust 4
+
+# 第一个源用尽重试、第二个源成功:换源语义正确,且成功即停。
+printf '%s\n' '1|read tcp: i/o timeout' '1|read tcp: i/o timeout' '0|-' >"$WORK/plan.next"
+out="$(run_install next 1 2100 1)"; rc=$?
+contains "$out" 'installed=1 attempts=3'; st $? "循环 第一源用尽 → 第二源成功(期望 installed=1 attempts=3;实得 $(printf '%s' "$out" | tr '\n' ' '))"
+[ "$rc" -eq 0 ]; st $? "循环 换源后成功正常返回(rc=$rc)"
+summary_ok next 3
+
+# fatal 不许重试:fatal 重试等于用重试掩盖真缺陷,而且白烧预算。
+printf '%s\n' '1|error: Installing to disk: Creating rootfs: Device /dev/vda is mounted' >"$WORK/plan.fatal"
+out="$(run_install fatal 1 2100 0)"; rc=$?
+contains "$out" 'installed=0 attempts=1'; st $? "循环 fatal 不重试同源(期望 attempts=1;实得 $(printf '%s' "$out" | tr '\n' ' '))"
+[ "$rc" -ne 0 ]; st $? "循环 fatal 直接 die(rc=$rc)"
+
+# ---------------------------------------------------------------- 循环:预算 --
+# 预算 0:一次尝试都不发起,结局是「预算耗尽」—— 与普通失败、与外层 TIMEOUT(124)都不同。
+printf '%s\n' '0|-' >"$WORK/plan.budget"
+out="$(run_install budget 1 0 0)"; rc=$?
+contains "$out" 'installed=0 attempts=0'; st $? "预算 预算耗尽前不发起尝试(期望 attempts=0;实得 $(printf '%s' "$out" | tr '\n' ' '))"
+if has '预算耗尽' "$WORK/tty.budget"; then
+    st 0 "预算 结局报「预算耗尽」(不是笼统的失败)"
+else
+    st 1 "预算 结局必须报「预算耗尽」(串口末尾:$(tail -1 "$WORK/tty.budget" 2>/dev/null))"
+fi
+[ "$rc" -ne 124 ]; st $? "预算 预算耗尽的退出码不是 124(外层的 TIMEOUT 才有权用 124)"
+[ "$(nlines "$WORK/summary.budget")" = 0 ]; st $? "预算 没发起尝试就不写摘要行"
+
+# ------------------------------------------------------------ 预算与外层时限关系 --
+# 总预算必须**严格小于** iso-verify.sh 等 guest 重启的上限,否则外层把"预算耗尽"
+# 报成 TIMEOUT —— 那正是本次要消灭的假因。
+lib_budget="$(LIB_TTY="$WORK/tty.cfg" lib_eval 'printf "%s" "$INSTALL_BUDGET"')"
+verify_timeout="$(sed -n 's/.*VERIFY_INSTALL_TIMEOUT:-\([0-9][0-9]*\)}.*/\1/p' "$VERIFY" | head -1)"
+if [ -n "$lib_budget" ] && [ -n "$verify_timeout" ] && [ "$lib_budget" -lt "$verify_timeout" ]; then
+    st 0 "预算 默认总预算 ${lib_budget}s 严格小于外层 INSTALL_TIMEOUT ${verify_timeout}s"
+else
+    st 1 "预算 必须满足 总预算 < 外层 INSTALL_TIMEOUT(budget=${lib_budget:-?} timeout=${verify_timeout:-?})"
+fi
+
+# --------------------------------------------------------------------- 接线 --
+if [ -f "$WORKFLOW" ]; then
+    has 'bash tests/ci/iso-install-retry-test.sh' "$WORKFLOW"
+    st $? "接线 build.yml 的 CI gate selftests 真的跑了本测试(静态门禁不接线等于不存在)"
+else
+    st 1 "接线 出货档 workflow 存在:$WORKFLOW"
+fi
+has '/run/daedalus-iso-install-summary.txt' "$VERIFY"
+st $? "接线 iso-verify.sh 装机失败时收集 summary(否则证据只活在 live 根里)"
+
+echo
+printf -- '---------------- %d 条通过 / %d 条失败 ----------------\n' "$pass_n" "$fail_n"
+if [ "$fail_n" -eq 0 ]; then
+    echo "RESULT: SELFTEST PASS"
+    exit 0
+fi
+echo "RESULT: SELFTEST FAIL ($fail_n)"
+exit 1

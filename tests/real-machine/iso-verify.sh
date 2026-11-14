@@ -402,6 +402,9 @@ if [ "$live_ok" -eq 1 ] && [ "$install_possible" -eq 1 ]; then
         # 每次尝试一份日志(第 N 次 = <base>.N),这里**全量**收集:只收最后一份就会把
         # 第一次为什么失败盖掉 —— 那正是"Device ... is mounted"看不懂的根源。
         live_ssh 'for f in /run/daedalus-iso-autoinstall.log*; do [ -f "$f" ] || continue; echo "### $f"; cat "$f"; done' > "$WORK/install-attempt.log" 2>/dev/null
+        # 每次尝试一行摘要(attempt/src/rc/class):让"外因不可得"与"装机逻辑失败"在
+        # artifact 里就能分开,不用人去翻上面那一大坨日志。
+        live_ssh 'cat /run/daedalus-iso-install-summary.txt 2>/dev/null' > "$WORK/install-summary.txt" 2>/dev/null || true
         live_ssh "systemctl status daedalus-iso-autoinstall --no-pager 2>&1" > "$WORK/install-unit-status.txt" 2>/dev/null
         live_ssh "lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS" > "$WORK/live-lsblk-after-install.txt" 2>/dev/null
         # 失败现场:谁占着目标盘。下一次红时,这份证据直接给出答案。
