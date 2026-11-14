@@ -69,9 +69,64 @@ run_selftest() {
     else
         bad "TestFleetE2E_* 未通过"
     fi
+
+    step "运行期渲染:夹具按 agent 自报的 node_id 提交(不等机器名)"
+    local tmp
+    tmp="$(mktemp -d)"
+    export NODE_ID_MAP='{"ubuntu24-a":"n-u24","debian12-a":"n-d12","rhel9-a":"n-r9","legacy-no-snapshot":"n-nosnap"}'
+    if render_plan "$FIXTURES/plan-low-nginx.json" "$tmp/low.json"; then
+        assert_jq "低危夹具三台都换成 node_id" \
+            '([.machines[].machine_id] == ["n-u24","n-d12","n-r9"])' "$(cat "$tmp/low.json")"
+    else
+        bad "render_plan 低危夹具失败"
+    fi
+    if render_plan "$FIXTURES/plan-high-kernel.json" "$tmp/high.json" n-nosnap; then
+        assert_jq "高危夹具把无回滚点排第一批,台数不变" \
+            '.machines[0].machine_id == "n-nosnap" and (.machines|length) == 2' "$(cat "$tmp/high.json")"
+    else
+        bad "render_plan 高危夹具失败"
+    fi
+    export NODE_ID_MAP='{"ubuntu24-a":"n-u24"}'
+    if render_plan "$FIXTURES/plan-low-nginx.json" "$tmp/bad.json" 2>/dev/null; then
+        bad "反证:映射不全时 render_plan 必须拒"
+    else
+        ok "反证:映射不全时 render_plan 拒绝提交"
+    fi
+    rm -rf "$tmp"
 }
 
 # -------------------------------------------------------------- 真机矩阵 ----
+
+declare -A NODE_IDS=()
+
+# render_plan <src> <dst> [snapshotless_first]
+# 夹具是模板:机器名由夹具自定,真 node_id 由 agent 在 Register 时自报
+# (控制面 Registry.Get 只认 node_id,不认机器名)。映射不全时拒提交 ——
+# 把未映射的原名交上去只会换来一条"未注册",掩盖真正的拼写错误。
+render_plan() {
+    local src="$1" dst="$2" first="${3:-}" map missing
+    map="${NODE_ID_MAP:-}"
+    [ -n "$map" ] || map='{}'
+    missing="$(jq -r --argjson m "$map" \
+        '.machines[].machine_id | select(. as $x | ($m|has($x))|not)' "$src")"
+    if [ -n "$missing" ]; then
+        echo "render_plan: 夹具机器 $(echo "$missing" | tr '\n' ' ')未在 --hosts 中登记" >&2
+        return 1
+    fi
+    jq --argjson m "$map" --arg first "$first" '
+        .machines |= map(.machine_id = ($m[.machine_id]))
+        | if $first == "" then .
+          else .machines |= (map(select(.machine_id == $first)) + map(select(.machine_id != $first)))
+          end' "$src" > "$dst"
+}
+
+# build_node_id_map 把登记回读到的 node_id 拼成 jq 用的映射:机器名 → node_id。
+build_node_id_map() {
+    NODE_ID_MAP="$(for k in "${!NODE_IDS[@]}"; do
+        jq -cn --arg k "$k" --arg v "${NODE_IDS[$k]}" '{($k):$v}'
+    done | jq -s 'add // {}')"
+    export NODE_ID_MAP
+}
 
 # register_hosts <name=addr>...:逐台 node add(控制面主动 Register)。
 register_hosts() {
@@ -87,13 +142,16 @@ register_hosts() {
             rhel9*)    distro=rhel;   version=9 ;;
             *)         distro="";     version="" ;;
         esac
-        if "$HOST_BIN" node add "$addr" --agent-id "$name" \
-            --distro "$distro" --distro-version "$version" --hostname "$name"; then
-            ok "node add $name($addr)"
+        local out
+        if out="$("$HOST_BIN" node add "$addr" --agent-id "$name" \
+            --distro "$distro" --distro-version "$version" --hostname "$name")"; then
+            NODE_IDS["$name"]="$(jq -r '.node.node_id' <<<"$out")"
+            ok "node add $name($addr) → node_id=${NODE_IDS[$name]}"
         else
             bad "node add $name($addr)"
         fi
     done
+    build_node_id_map
 }
 
 # verify_node_list:node list 的台数与 support_level 诚实度。
@@ -107,13 +165,14 @@ verify_node_list() {
     echo "  node list: $json"
 }
 
-# submit_and_check <夹具> <期望 status> <额外 jq 断言>
+# submit_and_check <已渲染的 Plan 文件> <期望 status> <额外 jq 断言>
 submit_and_check() {
-    local fixture="$1" want="$2" extra="$3" json
-    json="$("$HOST_BIN" plan submit "$FIXTURES/$fixture")"
-    assert_jq "$fixture → status=$want" ".status == \"$want\"" "$json"
-    assert_jq "$fixture → $extra" "$extra" "$json"
-    echo "  plan submit $fixture: $json"
+    local planfile="$1" want="$2" extra="$3" json name
+    name="$(basename "$planfile")"
+    json="$("$HOST_BIN" plan submit "$planfile")"
+    assert_jq "$name → status=$want" ".status == \"$want\"" "$json"
+    assert_jq "$name → $extra" "$extra" "$json"
+    echo "  plan submit $name: $json"
     LAST_PLAN_JSON="$json"
 }
 
@@ -122,18 +181,33 @@ run_matrix() {
     register_hosts "${hosts[@]}"
     verify_node_list "${#hosts[@]}"
 
+    local TMPD
+    TMPD="$(mktemp -d)"
+
     step "低危腿:package.set nginx(low)"
-    submit_and_check plan-low-nginx.json complete \
-        'all(.results[]; .tx_id != "")'
+    if render_plan "$FIXTURES/plan-low-nginx.json" "$TMPD/low.json"; then
+        submit_and_check "$TMPD/low.json" complete \
+            'all(.results[]; .tx_id != "")'
+    else
+        bad "渲染低危夹具失败"
+    fi
 
     step "高危腿:package.set kernel-core(high,含一台无回滚点)"
-    submit_and_check plan-high-kernel.json dirty \
-        'any(.results[]; (.message | ascii_downcase | contains("snapshot")))'
+    local nosnap="${NODE_IDS[legacy-no-snapshot]:-}"
+    if [ -z "$nosnap" ]; then
+        bad "没有名为 legacy-no-snapshot 的被控机(--hosts 少了它)"
+    elif render_plan "$FIXTURES/plan-high-kernel.json" "$TMPD/high.json" "$nosnap"; then
+        submit_and_check "$TMPD/high.json" dirty \
+            'any(.results[]; (.message | ascii_downcase | contains("snapshot")))'
+    else
+        bad "渲染高危夹具失败"
+    fi
 
     step "人审恢复(spec §4.3 三选一;本脚本演练 --skip)"
     local plan_id legacy
     plan_id="$(echo "$LAST_PLAN_JSON" | jq -r '.plan_id')"
-    legacy="legacy-no-snapshot"
+    # --skip 收的是 Plan 里的 machine_id,渲染后它就是被控机的 node_id。
+    legacy="$nosnap"
     if "$HOST_BIN" plan advance "$plan_id" --skip "$legacy" | tee /tmp/plan-c-advance.json | jq -e . >/dev/null; then
         ok "plan advance --skip $legacy"
         assert_jq "被 skip 的节点已从待跑批次摘掉" \
