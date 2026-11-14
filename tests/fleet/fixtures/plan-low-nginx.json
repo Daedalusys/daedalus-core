@@ -4,8 +4,7 @@
     {
       "kind": "package",
       "target": "nginx",
-      "spec": { "version": "1.24.0" },
-      "expected_diff": "- nginx 1.22.1\n+ nginx 1.24.0\n",
+      "expected_diff": "- nginx (absent)\n+ nginx (present)\n",
       "risk_class": "low"
     }
   ],

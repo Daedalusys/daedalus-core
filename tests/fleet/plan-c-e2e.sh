@@ -5,13 +5,21 @@
 #
 # 用法:
 #   tests/fleet/plan-c-e2e.sh --selftest
-#       不 ssh、不依赖真机:校验两份夹具 + 跑 core 里的真 mTLS 端到端判据
+#       不 ssh、不依赖真机:校验夹具 + 跑 core 里的真 mTLS 端到端判据
 #       (tests/integration/fleet_e2e_test.go:loopback TCP + 双向证书 + 真
 #       Scheduler + 真夹具)。CI 与开发机都能跑。
 #   tests/fleet/plan-c-e2e.sh --hosts ubuntu24=10.0.0.11 debian12=10.0.0.12 rhel9=10.0.0.13
-#       真机矩阵:逐台登记 → 低危 Plan → 高危 Plan(含一台无回滚点)→ 人审恢复。
-#       需要:三台机已按 daedalus-agent 的 install.sh 装好并 active;控制面本机
+#       真机矩阵:逐台登记 → 口径 C(声明版本不符)→ 低危 Plan → 高危 Plan
+#       (含一台无回滚点)→ 人审恢复 → 混合 Plan(agent 落地 + atomic 停手)。
+#       需要:各台机已按 daedalus-agent 的 install.sh 装好并 active;控制面本机
 #       有 mTLS 客户端凭证(DAEDALUS_FLEET_CLIENT_CERT / _KEY / DAEDALUS_FLEET_CA)。
+#
+# 环境变量:
+#   DAEDALUS_FLEET_GUEST_ALIASES
+#       夹具机器名 → ssh 主机别名的映射(形如 "ubuntu24-a=vmu legacy-no-snapshot=vmc")。
+#       控制面地址(`--hosts`)指的是 agent gRPC 端口,与"怎么登进那台机核实"是两件事;
+#       口径 C 与混合两条腿要在目标机上独立核实(装没装上 / 收没收到 intent),
+#       缺别名即判 FAIL —— 核实不了就不算绿,不拿控制面回报顶替。
 #
 # 退出码:0 全部断言通过;非 0 表示某一步断言失败(逐条打印)。
 #
@@ -45,8 +53,9 @@ assert_jq() {
 # ---------------------------------------------------------------- selftest ----
 
 run_selftest() {
-    step "夹具结构(两份 Plan 必须能被 objectmodel.Plan 解进并通过校验)"
-    for f in plan-low-nginx.json plan-high-kernel.json plan-high-container.json; do
+    step "夹具结构(每份 Plan 必须能被 objectmodel.Plan 解进并通过校验)"
+    for f in plan-low-nginx.json plan-high-kernel.json plan-high-container.json \
+             plan-version-mismatch.json plan-mixed-atomic-agent.json; do
         if [ -f "$FIXTURES/$f" ]; then
             ok "夹具存在:$f"
         else
@@ -57,6 +66,18 @@ run_selftest() {
     assert_jq "低危夹具:machines 3 台且 max_risk=low" \
         '.blast_radius.max_risk == "low" and (.machines | length) == 3 and (.intents | length) == 1 and .batching.strategy == "count"' \
         "$(cat "$FIXTURES/plan-low-nginx.json")"
+    # Plan 的 intents 是全局的(一套 intents 对所有机器),声明一个"三台都满足"的
+    # 版本是不可能的 —— Ubuntu 24.04 是 1.24.0、Debian 12 是 1.22.1、RHEL 9 是
+    # 1.20.1。低危腿因此不带任何版本诉求(口径 C 之后,声明版本就必须真能对上)。
+    assert_jq "低危夹具不带版本诉求(否则必有一台如实失败)" \
+        '(.intents[0] | has("spec") | not) and (.intents[0].expected_diff | contains("1.24.0") | not)' \
+        "$(cat "$FIXTURES/plan-low-nginx.json")"
+    assert_jq "口径 C 夹具:单台、低危、声明必然不满足的版本 9.9.9" \
+        '(.machines | length) == 1 and .intents[0].kind == "package" and .intents[0].target == "nginx" and .intents[0].spec.version == "9.9.9" and .intents[0].risk_class == "low" and .blast_radius.count == 1 and .blast_radius.max_risk == "low" and .blast_radius.kind_breakdown.package == 1' \
+        "$(cat "$FIXTURES/plan-version-mismatch.json")"
+    assert_jq "混合夹具:agent 在前 atomic 在后、size=1、高危 package 且不带版本" \
+        '.intents[0].kind == "package" and (.intents[0] | has("spec") | not) and .intents[0].risk_class == "high" and (.machines | length) == 2 and .machines[0].kind == "agent" and .machines[1].kind == "atomic" and .batching.strategy == "count" and .batching.size == 1 and .blast_radius.count == 2 and .blast_radius.max_risk == "high" and .blast_radius.kind_breakdown.package == 1' \
+        "$(cat "$FIXTURES/plan-mixed-atomic-agent.json")"
     assert_jq "高危夹具:max_risk=high 且含 legacy-no-snapshot 目标机" \
         '.blast_radius.max_risk == "high" and ([.machines[].machine_id] | index("legacy-no-snapshot")) != null and (.intents[0].target == "kernel-core")' \
         "$(cat "$FIXTURES/plan-high-kernel.json")"
@@ -89,6 +110,22 @@ run_selftest() {
     else
         bad "render_plan 高危夹具失败"
     fi
+    if render_plan "$FIXTURES/plan-version-mismatch.json" "$tmp/version.json"; then
+        assert_jq "口径 C 夹具换成 node_id 且版本诉求原样保留" \
+            '.machines[0].machine_id == "n-u24" and .intents[0].spec.version == "9.9.9"' \
+            "$(cat "$tmp/version.json")"
+    else
+        bad "render_plan 口径 C 夹具失败"
+    fi
+    if render_plan "$FIXTURES/plan-mixed-atomic-agent.json" "$tmp/mixed.json"; then
+        # 顺序是这条腿的前提:先让 agent 那台真落地,再让 atomic 那台停手;
+        # 渲染只改 machine_id,不动先后 —— 顺序被改写则断言失去意义。
+        assert_jq "混合夹具渲染后仍是 agent 在前、atomic 在后" \
+            '.machines[0].machine_id == "n-u24" and .machines[1].machine_id == "n-nosnap" and (.machines|length) == 2' \
+            "$(cat "$tmp/mixed.json")"
+    else
+        bad "render_plan 混合夹具失败"
+    fi
     export NODE_ID_MAP='{"ubuntu24-a":"n-u24"}'
     if render_plan "$FIXTURES/plan-low-nginx.json" "$tmp/bad.json" 2>/dev/null; then
         bad "反证:映射不全时 render_plan 必须拒"
@@ -102,6 +139,20 @@ run_selftest() {
     else
         ok "反证:首批机器不在夹具里时 render_plan 拒绝"
     fi
+
+    step "目标机别名:夹具机器名 → ssh 主机别名(独立核实用)"
+    export DAEDALUS_FLEET_GUEST_ALIASES='ubuntu24-a=vmu legacy-no-snapshot=vmc'
+    if [ "$(guest_alias ubuntu24-a)" = "vmu" ] && [ "$(guest_alias legacy-no-snapshot)" = "vmc" ]; then
+        ok "别名映射按空白分隔解析(ubuntu24-a→vmu / legacy-no-snapshot→vmc)"
+    else
+        bad "别名映射解析不对:got $(guest_alias ubuntu24-a) / $(guest_alias legacy-no-snapshot)"
+    fi
+    if [ -z "$(guest_alias debian12-a)" ]; then
+        ok "未登记的机器名解析为空(调用方据此判 FAIL,不静默跳过核实)"
+    else
+        bad "未登记的机器名不该解析出别名:got $(guest_alias debian12-a)"
+    fi
+    unset DAEDALUS_FLEET_GUEST_ALIASES
 
     step "失败路径:控制面报错时逐条记 FAIL,不整轮中断"
     local stub before
@@ -169,6 +220,64 @@ STUB
 # -------------------------------------------------------------- 真机矩阵 ----
 
 declare -A NODE_IDS=()
+declare -A ADDRS=()
+
+# ---------------------------------------------------- 目标机独立核实(ssh) ----
+#
+# 控制面回报的 tx_id / status 只证明"控制面认为成功了"。下面这组助手直连目标机,
+# 用包管理器实况与 agent 自己的审计链核实 —— 控制面说谎或只是落后时才看得出来。
+
+# guest_alias <夹具机器名>:从 DAEDALUS_FLEET_GUEST_ALIASES 取 ssh 主机别名。
+guest_alias() {
+    local name="$1" pair
+    for pair in ${DAEDALUS_FLEET_GUEST_ALIASES:-}; do
+        if [ "${pair%%=*}" = "$name" ]; then
+            printf '%s' "${pair#*=}"
+            return 0
+        fi
+    done
+    printf ''
+}
+
+# guest_exec <夹具机器名> <远端命令>:别名缺失即返回非 0(调用方据此记 FAIL)。
+guest_exec() {
+    local name="$1" cmd="$2" alias
+    alias="$(guest_alias "$name")"
+    if [ -z "$alias" ]; then
+        echo "guest_exec: $name 没有 ssh 别名(设 DAEDALUS_FLEET_GUEST_ALIASES)" >&2
+        return 1
+    fi
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$alias" "$cmd"
+}
+
+# guest_audit_count <夹具机器名>:agent 本地哈希链的行数。
+#
+# 「这条 intent 到没到过这台机」在 agent 侧唯一可信的凭据就是这条链:链上没有
+# 新行 = RPC 没到(fail-closed 的拒绝也会写一行,故"没有记录"本身就是证据)。
+# 文件不存在(一次都没写过)按 0 行算。
+guest_audit_count() {
+    # 重定向必须由 root 那侧的 shell 做(`sudo wc -l < file` 会被登录用户的
+    # shell 抢先重定向 → Permission denied),故改用 cat | wc -l。
+    guest_exec "$1" 'sudo cat /var/lib/daedalus-agent/audit/chain.jsonl 2>/dev/null | wc -l' |
+        tr -dc '0-9'
+}
+
+# reset_nginx_baseline <夹具机器名>:把 nginx 从目标机摘干净(幂等)。
+#
+# 要证明"这一次真的装上了",目标机上留着上一轮的 nginx 会把断言变成 no-op 的
+# 空过。卸载完再复核一次现状:复核不通就返回非 0,绝不假装基线干净。
+reset_nginx_baseline() {
+    local name="$1" cmd
+    case "$name" in
+        ubuntu24*|debian12*) cmd='sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq nginx' ;;
+        rhel9*|centos*|legacy-no-snapshot) cmd='sudo dnf -y remove nginx' ;;
+        *) echo "reset_nginx_baseline: 未知发行版 $name" >&2; return 1 ;;
+    esac
+    guest_exec "$name" "$cmd" >/dev/null 2>&1 || true
+    guest_exec "$name" 'dpkg-query -W -f="\${Status}" nginx 2>/dev/null | grep -q "install ok installed" && exit 1
+rpm -q nginx >/dev/null 2>&1 && exit 1
+exit 0'
+}
 
 # render_plan <src> <dst> [snapshotless_first]
 # 夹具是模板:机器名由夹具自定,真 node_id 由 agent 在 Register 时自报
@@ -223,12 +332,32 @@ register_hosts() {
         if out="$("$HOST_BIN" node add "$addr" --agent-id "$name" \
             --distro "$distro" --distro-version "$version" --hostname "$name")"; then
             NODE_IDS["$name"]="$(jq -r '.node.node_id' <<<"$out")"
+            ADDRS["$name"]="$addr"
             ok "node add $name($addr) → node_id=${NODE_IDS[$name]}"
         else
             bad "node add $name($addr)"
         fi
     done
     build_node_id_map
+}
+
+# register_atomic <name> <addr>:把同一台机按 atomic 形态重新登记。
+#
+# 准入看的是注册表里的节点形态(intentHasRollbackPoint 读 n.Kind),不是 Plan 里
+# 声明的 kind;要演示 atomic 分支就必须让注册行真的写着 atomic。同一 agent 进程
+# 未重启 → node_id 不变,registry 行被覆盖,不会多出一台。
+# support_level 故意不给 --distro:不知道发行版分级就不打 supported(与首轮登记同款)。
+register_atomic() {
+    local name="$1" addr="$2" out
+    if out="$("$HOST_BIN" node add "$addr" --agent-id "$name" --kind atomic --hostname "$name")"; then
+        NODE_IDS["$name"]="$(jq -r '.node.node_id' <<<"$out")"
+        ADDRS["$name"]="$addr"
+        ok "node add $name($addr) --kind atomic → node_id=${NODE_IDS[$name]}"
+        build_node_id_map
+    else
+        bad "node add $name($addr) --kind atomic"
+        return 1
+    fi
 }
 
 # verify_node_list:node list 的台数与 support_level 诚实度。
@@ -284,6 +413,156 @@ run_recovery_skip() {
     fi
 }
 
+# run_version_mismatch_leg <临时目录>:口径 C 的正面证据(daedalus-agent#32)。
+#
+# 声明 version=9.9.9 是必然不满足的诉求:agent 照常安装(Ubuntu 24.04 源里是
+# 1.24.0,声明并不改变装什么),装完核对实际版本主干,不符就如实报
+# PERSISTENT_FAILURE —— 不换源、不降级、不自动回滚。断言全部落在 agent 端
+# (包管理器实况 + agent 审计链),不采信控制面的 status 文案。
+run_version_mismatch_leg() {
+    local tmp="$1" machine=ubuntu24-a json ver line
+    step "口径 C 腿:声明版本与实际不符 → 如实 PERSISTENT(包仍被装上)"
+    if [ -z "${NODE_IDS[$machine]:-}" ]; then
+        bad "口径 C 腿缺少目标机 $machine(--hosts 少了它)"
+        return 0
+    fi
+    # 先清基线:nginx 已装时这条腿会退化成 no-op,"装上了"就不再是证据。
+    if ! reset_nginx_baseline "$machine"; then
+        bad "口径 C 腿:清理 $machine 的 nginx 基线失败(断言会退化成空过,故记 FAIL)"
+        return 0
+    fi
+    ok "基线:$machine 上 nginx 已确认未安装"
+
+    if ! render_plan "$FIXTURES/plan-version-mismatch.json" "$tmp/version.json"; then
+        bad "渲染口径 C 夹具失败"
+        return 0
+    fi
+    if ! json="$("$HOST_BIN" plan submit "$tmp/version.json")"; then
+        bad "plan-version-mismatch.json → plan submit 失败(控制面报错)"
+        return 0
+    fi
+    LAST_PLAN_JSON="$json"
+    echo "  plan submit plan-version-mismatch.json: $json"
+    local pid
+    pid="$(jq -r '.plan_id' <<<"$json")"
+    assert_jq "口径 C 腿 → status=dirty(单台持久失败)" \
+        '.status == "dirty"' "$json"
+    assert_jq "口径 C 腿 → 结果 PERSISTENT_FAILURE(控制面词表 persistent_failure)" \
+        '(.results | length) == 1 and .results[0].outcome == "persistent" and .results[0].result == "persistent_failure"' \
+        "$json"
+    assert_jq "口径 C 腿 → 文案含 declared=9.9.9 与 actual=" \
+        '(.results[0].message | contains("declared=9.9.9")) and (.results[0].message | contains("actual="))' \
+        "$json"
+
+    # 独立核实①:包确实被装上了 —— 口径 C 是"装完再核对",失败不撤销安装。
+    if ver="$(guest_exec "$machine" 'dpkg-query -W -f="\${Version}" nginx' 2>&1)" && [ -n "$ver" ]; then
+        ok "目标机实况:$machine 的 nginx 版本 = $ver"
+        case "$ver" in
+            1.24.0*) ok "目标机实况:版本主干 1.24.0 = Ubuntu 24.04 源里的实际版本(≠ 声明的 9.9.9)" ;;
+            *) bad "目标机实况:nginx 版本 $ver 与预期的 1.24.0* 不符" ;;
+        esac
+    else
+        bad "目标机实况:nginx 没装上($ver)—— 那就不是「装完核对版本」的证据"
+    fi
+    # 独立核实②:agent 审计链上有这次失败,且原因就是版本比对。
+    # 按本 Plan 的 id 过滤,旧轮次留下的同名文案不算数。
+    if line="$(guest_exec "$machine" "sudo grep -h \"$pid\" /var/lib/daedalus-agent/audit/chain.jsonl | grep \"declared=9.9.9\" | tail -n 1")" &&
+        [ -n "$line" ]; then
+        ok "agent 审计链留痕(原文):$line"
+    else
+        bad "agent 审计链上没有本 Plan 的 declared=9.9.9 失败记录(控制面文案不足以证明是 agent 判的)"
+    fi
+}
+
+# run_mixed_leg <临时目录>:混合 Plan —— agent 那台真落地,atomic 那台在下发前停手。
+#
+# 准入用的是**注册表里的节点形态**(intentHasRollbackPoint 读 n.Kind),所以先把
+# vmc 按 atomic 重新登记一次;vmu 保持 agent。atomic 那台一次 RPC 都不该收到 ——
+# 用 agent 侧审计链的行数证明,而不是只信控制面"没下发"的说法。
+#
+# 前提:agent 那台的 nginx 必须未装。高危 package 若是 no-op(包已到位),执行器
+# 产不出回滚句柄,agent 会按"高危无句柄"拒绝 —— 那条腿就变成了另一件事。
+run_mixed_leg() {
+    local tmp="$1" agent_m=ubuntu24-a atomic_m=legacy-no-snapshot
+    local agent atomic addr json before after agent_ver lines
+    step "混合腿:agent 落地 + atomic 停手(整批 dirty,停在 atomic 那一批)"
+    agent="${NODE_IDS[$agent_m]:-}"
+    atomic="${NODE_IDS[$atomic_m]:-}"
+    addr="${ADDRS[$atomic_m]:-}"
+    if [ -z "$agent" ] || [ -z "$atomic" ] || [ -z "$addr" ]; then
+        bad "混合腿缺少目标机(--hosts 需要 $agent_m 与 $atomic_m)"
+        return 0
+    fi
+    register_atomic "$atomic_m" "$addr" || return 0
+    if ! reset_nginx_baseline "$agent_m"; then
+        bad "混合腿:清理 $agent_m 的 nginx 基线失败(高危 no-op 会被 agent 按无句柄拒绝)"
+        return 0
+    fi
+    ok "基线:$agent_m 上 nginx 已确认未安装"
+
+    before="$(guest_audit_count "$atomic_m")"
+    if [ -z "$before" ]; then
+        bad "混合腿:读不到 $atomic_m 的 agent 审计链行数(核实通道不通)"
+        return 0
+    fi
+    ok "混合腿前置:$atomic_m 的 agent 审计链 = $before 行"
+
+    if ! render_plan "$FIXTURES/plan-mixed-atomic-agent.json" "$tmp/mixed.json"; then
+        bad "渲染混合夹具失败"
+        return 0
+    fi
+    if ! json="$("$HOST_BIN" plan submit "$tmp/mixed.json")"; then
+        bad "plan-mixed-atomic-agent.json → plan submit 失败(控制面报错)"
+        return 0
+    fi
+    LAST_PLAN_JSON="$json"
+    echo "  plan submit plan-mixed-atomic-agent.json: $json"
+    local pid
+    pid="$(jq -r '.plan_id' <<<"$json")"
+
+    assert_jq "混合腿 → status=dirty" '.status == "dirty"' "$json"
+    assert_jq "混合腿 → 两个子批、agent 那台在第一批" \
+        "(.batches | length) == 2 and (.batches[0].node_ids == [\"$agent\"])" "$json"
+    assert_jq "混合腿 → agent 那台真落地:成功 + 非空 tx_id(注册形态 agent)" \
+        "any(.results[]; .node_id == \"$agent\" and .node_kind == \"agent\" and .outcome == \"success\" and .tx_id != \"\")" \
+        "$json"
+    assert_jq "混合腿 → atomic 那台停手:持久失败、无 tx_id、注册形态 atomic" \
+        "any(.results[]; .node_id == \"$atomic\" and .node_kind == \"atomic\" and .outcome == \"persistent\" and .tx_id == \"\")" \
+        "$json"
+    assert_jq "混合腿 → 拒绝文案点名「无回滚点」" \
+        "any(.results[]; .node_id == \"$atomic\" and (.message | contains(\"无回滚点\")))" \
+        "$json"
+    assert_jq "混合腿 → 只有这两条结果(没有第三个节点被动过)" \
+        "(.results | length) == 2" "$json"
+
+    # 独立核实①:atomic 那台 0 次 RPC —— agent 审计链行数不变,且链上找不到本 Plan。
+    after="$(guest_audit_count "$atomic_m")"
+    if [ "$before" = "$after" ]; then
+        ok "atomic 那台 0 次 RPC:agent 审计链 $before → $after 行(未增长)"
+    else
+        bad "atomic 那台审计链从 $before 增到 $after 行:拒绝前不该有任何 RPC 到达"
+    fi
+    if lines="$(guest_exec "$atomic_m" "sudo grep -c \"$pid\" /var/lib/daedalus-agent/audit/chain.jsonl || true")" &&
+        [ "${lines:-1}" = "0" ]; then
+        ok "atomic 那台审计链里没有本 Plan($pid)的任何一行(0)"
+    else
+        bad "atomic 那台审计链里出现了本 Plan($pid)的记录(计数 ${lines:-?})"
+    fi
+
+    # 独立核实②:agent 那台真的装上了,且 agent 审计链有这次 apply。
+    if agent_ver="$(guest_exec "$agent_m" 'dpkg-query -W -f="\${Version}" nginx' 2>&1)" && [ -n "$agent_ver" ]; then
+        ok "agent 那台实况:nginx 已装 = $agent_ver"
+    else
+        bad "agent 那台实况:nginx 未装上($agent_ver)—— 控制面说成功不算数"
+    fi
+    if lines="$(guest_exec "$agent_m" "sudo grep -c \"$pid\" /var/lib/daedalus-agent/audit/chain.jsonl || true")" &&
+        [ "${lines:-0}" -ge 1 ]; then
+        ok "agent 那台审计链里有这次 apply 的记录($pid 共 $lines 行,身份即 intent_id)"
+    else
+        bad "agent 那台审计链里找不到本 Plan($pid)的记录(计数 ${lines:-?})"
+    fi
+}
+
 run_matrix() {
     local hosts=("$@")
     register_hosts "${hosts[@]}"
@@ -292,6 +571,13 @@ run_matrix() {
     local TMPD
     TMPD="$(mktemp -d)"
 
+    # 口径 C 腿放在低危腿前面:此时 vmu 的 nginx 还是基线(未装),"装上后才核对
+    # 版本"才是干净的证据;跑过一次之后 vmu 上已有 nginx,再做就只能算 no-op。
+    run_version_mismatch_leg "$TMPD"
+
+    # 低危腿不带版本诉求:Plan 的 intents 是**全局的**(一套 intents 对所有机器),
+    # Ubuntu 24.04 是 1.24.0 / Debian 12 是 1.22.1 / RHEL 9 是 1.20.1 —— 声明任何一个
+    # 版本都等于让其余两台在口径 C 下如实失败。要验版本口径就走上面那条专门的腿。
     step "低危腿:package.set nginx(low)"
     if render_plan "$FIXTURES/plan-low-nginx.json" "$TMPD/low.json"; then
         submit_and_check "$TMPD/low.json" complete \
@@ -317,7 +603,12 @@ run_matrix() {
     echo
     echo "  提示:回滚路径由人执行(控制面不代跑远程回滚)。dirty 时 plan status 会给出"
     echo "        每台已成功节点的本地命令:daedalus-tx rollback <tx_id>。"
+
+    # 混合腿必须排在 container 腿之后:两条腿都用 vmc,前者要求它按 agent 登记,
+    # 后者要把它重登记成 atomic(行按 node_id 覆盖,顺序反了 container 腿就换了分支)。
+    run_mixed_leg "$TMPD"
 }
+
 
 # ------------------------------------------------------------------ main ----
 
