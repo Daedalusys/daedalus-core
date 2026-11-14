@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# provision-kvm-hosts.sh — 在 KVM 宿主上幂等拉起五台异构被控机(vmu/vmd/vmc/vma/vmr),
+# provision-kvm-hosts.sh — 在 KVM 宿主上幂等拉起六台异构被控机(vmu/vmd/vmc/vma/vmr/vmr10),
 # 并把**共享 PKI** 与 agent 配置预置进各 guest。
-# 五台 = 三台异构(Ubuntu/Debian/CentOS)+ 一台 AlmaLinux 9(vma)+ 一台 RHEL 9(vmr);
+# 六台 = 三台异构(Ubuntu/Debian/CentOS)+ 一台 AlmaLinux 9(vma)+ 一台 RHEL 9(vmr)
+#        + 一台 RHEL 10(vmr10);
 # vma 是 RHEL 9 行的**临时验证宿主**(内存按 RHEL 9 验收门槛 ≥2 GB 单列),
-# vmr 是真正的 RHEL 9 宿主(镜像需人工预置,包源临时指向 AlmaLinux 9)。
+# vmr 是真正的 RHEL 9 宿主、vmr10 是真正的 RHEL 10 宿主(镜像需人工预置,见 GUEST_IMAGE_URL)。
 #
 # 三条不能破的不变量(改脚本前先读):
-#   - 五台 guest 共用**同一张 CA**:agent 首启会在 ca_path/ca_key_path 自举一张自己的
+#   - 六台 guest 共用**同一张 CA**:agent 首启会在 ca_path/ca_key_path 自举一张自己的
 #     CA,而控制面对一个 Plan 里的所有节点只持有一份客户端证书 —— 各持一套 CA 时
 #     plan submit 谁都握不上手。故必须在 agent install 之前把同一张 CA 与各自签发
 #     的 server 证书铺进 /etc/daedalus-agent/tls/(agent 只在 CertPath 缺失时才自举,
@@ -18,7 +19,7 @@
 #     (只针对 vmc;vma/vmr 装 rsync,btrfs/snapper 留给后续单独的靶机。)
 #
 # 用法:
-#   tests/fleet/provision-kvm-hosts.sh --up                    (默认)幂等拉起五台 guest
+#   tests/fleet/provision-kvm-hosts.sh --up                    (默认)幂等拉起六台 guest
 #   tests/fleet/provision-kvm-hosts.sh --status                打印各 guest 状态
 #   tests/fleet/provision-kvm-hosts.sh --destroy [--purge-images]
 #   tests/fleet/provision-kvm-hosts.sh --selftest              本机干跑(不 ssh/不碰 KVM/不联网)
@@ -59,13 +60,15 @@ ok()   { echo "  ok   - $*"; pass=$((pass + 1)); }
 bad()  { echo "  FAIL - $*" >&2; fail=$((fail + 1)); }
 step() { echo; echo "== $*"; }
 
-# --- 五台 guest 的事实表 ---------------------------------------------------
-# 三台异构(Ubuntu / Debian / CentOS)+ 一台 AlmaLinux 9(vma)+ 一台 RHEL 9(vmr)。
-# vma 是 RHEL 9 行的临时验证宿主;vmr 才是真 RHEL 9(镜像需人工预置,见 GUEST_IMAGE_URL)。
+# --- 六台 guest 的事实表 ---------------------------------------------------
+# 三台异构(Ubuntu / Debian / CentOS)+ 一台 AlmaLinux 9(vma)+ 一台 RHEL 9(vmr)
+# + 一台 RHEL 10(vmr10)。
+# vma 是 RHEL 9 行的临时验证宿主;vmr / vmr10 才是真 RHEL 9 / 10(镜像需人工预置,
+# 见 GUEST_IMAGE_URL)。
 
-GUEST_NAMES=(vmu vmd vmc vma vmr)
-GUEST_FAMILY=(ubuntu debian centos almalinux rhel)
-GUEST_AGENT_ID=(e2e-u24 e2e-d12 e2e-c9 e2e-a9 e2e-r99)
+GUEST_NAMES=(vmu vmd vmc vma vmr vmr10)
+GUEST_FAMILY=(ubuntu debian centos almalinux rhel rhel)
+GUEST_AGENT_ID=(e2e-u24 e2e-d12 e2e-c9 e2e-a9 e2e-r99 e2e-r103)
 GUEST_IMAGE=(
   noble-server-cloudimg-amd64.img
   debian-12-genericcloud-amd64.qcow2
@@ -74,6 +77,8 @@ GUEST_IMAGE=(
   AlmaLinux-9-GenericCloud-9.8-20261112.x86_64.qcow2
   # RHEL 9.9 KVM Guest Image:Red Hat 开发者订阅下载,需人工放进 images/。
   rhel-9.9-x86_64-kvm.qcow2
+  # RHEL 10.3 KVM Guest Image:同上,人工预置;矩阵里 rhel 10 一行长期无宿主证据。
+  rhel-10.3-x86_64-kvm.qcow2
 )
 GUEST_IMAGE_URL=(
   https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
@@ -83,20 +88,37 @@ GUEST_IMAGE_URL=(
   # 哨兵:Red Hat 的下载链带 _auth_ 签名且会过期,不能入库;此处不写 URL,
   # 由 fleet_remote_images 特判为"不下载",缺镜像即失败并提示人工预置。
   PREINSTALLED
+  PREINSTALLED
 )
-GUEST_SSH_PORT=(9501 9502 9503 9504 9505)
-GUEST_AGENT_PORT=(9471 9472 9473 9474 9475)
+GUEST_SSH_PORT=(9501 9502 9503 9504 9505 9506)
+GUEST_AGENT_PORT=(9471 9472 9473 9474 9475 9476)
 
 GUEST_USER="daedalus"          # guest 内建账号(cloud-init 创建)
 # 宿主内存有限且已有负载:前三台各 1G 足够跑 apt/dnf 与一个静态 agent;
-# vma / vmr 是 RHEL 9 行,验收门槛要求 ≥2 GB,故各 2048。
-GUEST_MEM_MB=(1024 1024 1024 2048 2048)
+# vma / vmr / vmr10 是 RHEL 行,验收门槛要求 ≥2 GB,故各 2048。
+GUEST_MEM_MB=(1024 1024 1024 2048 2048 2048)
 GUEST_CPUS=2
 GUEST_DISK_SIZE=12G
 GUEST_AGENT_LISTEN=9443        # guest 内 agent 监听端口
 
 FLEET_SSH_BEGIN="# BEGIN daedalus-fleet-kvm (managed by tests/fleet/provision-kvm-hosts.sh)"
 FLEET_SSH_END="# END daedalus-fleet-kvm"
+
+# fleet_guest_rhel_major <下标>:从镜像文件名取 RHEL 主版本(9 / 10)。
+# 未订阅时的装包源要按代际指向同族 AlmaLinux —— 把 RHEL 10 指到 Alma 9 的源
+# 会装出错版本依赖,所以取不到就报错,绝不猜。
+fleet_guest_rhel_major() {
+    local i="$1" img major
+    img="${GUEST_IMAGE[i]}"
+    case "$img" in
+        rhel-*) major="${img#rhel-}"; major="${major%%.*}" ;;
+        *) return 1 ;;
+    esac
+    case "$major" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s' "$major"
+}
 
 # fleet_layout_validate:端口/命名/镜像的静态自检。任一冲突即返回 1。
 fleet_layout_validate() {
@@ -641,10 +663,11 @@ fleet_remote_guest_packages() {
             echo "  ok   - $name:dnf makecache + rsync 已装(有回滚点)"
             ;;
         rhel)
-            # RHEL 9 有两种可达状态:
+            # RHEL 9 / 10 有两种可达状态:
             # ① 已注册订阅(SCA)→ 官方仓库可用,直接 dnf;
             # ② 未注册 → 官方仓库不可用(dnf 报 no enabled repos),临时把源指向
-            #    AlmaLinux 9(同族 ABI 同源);这是测试手段,证据里必须注明"官方仓库未验"。
+            #    与镜像**同代**的 AlmaLinux(同族 ABI 同源);这是测试手段,
+            #    证据里必须注明"官方仓库未验"。
             # 判定放在 guest 里做:subscription-manager identity 成功即视为已注册。
             local registered=no
             if fleet_remote_ssh "$name" 'sudo subscription-manager identity >/dev/null 2>&1' >/dev/null 2>&1; then
@@ -656,34 +679,38 @@ fleet_remote_guest_packages() {
                 fleet_remote_pkg_retry "$name" "dnf install rsync(Red Hat 官方仓库)" \
                     'sudo LC_ALL=C dnf -y install rsync' || return 1
             else
-                local repo_file
-                repo_file="$(cat <<'REPO'
-# 仅用于测试:RHEL 9 未订阅,装包源临时指向 AlmaLinux 9(ABI 同源);
+                local repo_file major
+                major="$(fleet_guest_rhel_major "$i")" || {
+                    echo "  FAIL - $name:从镜像名 ${GUEST_IMAGE[i]} 取不出 RHEL 主版本(装包源无法定代)" >&2
+                    return 1
+                }
+                repo_file="$(cat <<REPO
+# 仅用于测试:RHEL ${major} 未订阅,装包源临时指向 AlmaLinux ${major}(同族 ABI 同源);
 # 证据里必须注明"官方仓库未验"。
-[daedalus-alma9-baseos]
-name=AlmaLinux 9 BaseOS (test only)
-baseurl=https://repo.almalinux.org/almalinux/9/BaseOS/$basearch/os/
+[daedalus-alma${major}-baseos]
+name=AlmaLinux ${major} BaseOS (test only)
+baseurl=https://repo.almalinux.org/almalinux/${major}/BaseOS/\$basearch/os/
 enabled=1
 gpgcheck=1
-gpgkey=https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-9
+gpgkey=https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-${major}
 
-[daedalus-alma9-appstream]
-name=AlmaLinux 9 AppStream (test only)
-baseurl=https://repo.almalinux.org/almalinux/9/AppStream/$basearch/os/
+[daedalus-alma${major}-appstream]
+name=AlmaLinux ${major} AppStream (test only)
+baseurl=https://repo.almalinux.org/almalinux/${major}/AppStream/\$basearch/os/
 enabled=1
 gpgcheck=1
-gpgkey=https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-9
+gpgkey=https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-${major}
 REPO
 )"
-                fleet_remote_pkg_retry "$name" "写入 Alma 9 测试仓库" \
+                fleet_remote_pkg_retry "$name" "写入 Alma ${major} 测试仓库" \
                     "printf '%s\n' '$repo_file' | sudo tee /etc/yum.repos.d/daedalus-test-alma.repo >/dev/null" \
                     || return 1
                 # --disablerepo='*' 把订阅缺失时的空仓库集合彻底关掉,只留测试源。
-                fleet_remote_pkg_retry "$name" "dnf makecache(Alma 9 测试源)" \
-                    "sudo LC_ALL=C dnf -y --disablerepo='*' --enablerepo='daedalus-alma9-*' makecache" \
+                fleet_remote_pkg_retry "$name" "dnf makecache(Alma ${major} 测试源)" \
+                    "sudo LC_ALL=C dnf -y --disablerepo='*' --enablerepo='daedalus-alma${major}-*' makecache" \
                     || return 1
-                fleet_remote_pkg_retry "$name" "dnf install rsync(Alma 9 测试源)" \
-                    "sudo LC_ALL=C dnf -y --disablerepo='*' --enablerepo='daedalus-alma9-*' install rsync" \
+                fleet_remote_pkg_retry "$name" "dnf install rsync(Alma ${major} 测试源)" \
+                    "sudo LC_ALL=C dnf -y --disablerepo='*' --enablerepo='daedalus-alma${major}-*' install rsync" \
                     || return 1
             fi
             # 断言结果而不是假定命令成功:rsync 必须在位(有回滚点)。
@@ -696,7 +723,7 @@ REPO
             if [ "$registered" = yes ]; then
                 echo "  ok   - $name:Red Hat 官方仓库 makecache + rsync 已装(有回滚点;已注册订阅)"
             else
-                echo "  ok   - $name:Alma 9 测试源 makecache + rsync 已装(有回滚点;官方仓库未验)"
+                echo "  ok   - $name:Alma $(fleet_guest_rhel_major "$i") 测试源 makecache + rsync 已装(有回滚点;官方仓库未验)"
             fi
             ;;
         centos)
@@ -865,7 +892,7 @@ fleet_remote_up() {
     step "宿主 ssh 配置"
     fleet_remote_ssh_config
 
-    step "五台 guest"
+    step "六台 guest"
     for i in "${!GUEST_NAMES[@]}"; do
         fleet_remote_guest_up "$i" || return 1
     done
@@ -885,7 +912,7 @@ fleet_remote_status() {
     # 局部变量别叫 bad —— 共享库里 bad() 是个函数,同名局部变量会把它遮掉。
     local i name d pid alive sp ap ssh_state fwd_state listener not_ok=0
     step "宿主:$HOSTNAME($(id -un))"
-    step "五台被控机(三台异构 + AlmaLinux 9 + RHEL 9)"
+    step "六台被控机(三台异构 + AlmaLinux 9 + RHEL 9 + RHEL 10)"
     for i in "${!GUEST_NAMES[@]}"; do
         name="${GUEST_NAMES[i]}"; d="$FLEET_WORK/vms/$name"
         sp="${GUEST_SSH_PORT[i]}"; ap="${GUEST_AGENT_PORT[i]}"
@@ -922,7 +949,7 @@ fleet_remote_status() {
     step "宿主上的产物"
     ls -l "$FLEET_WORK/pki" 2>/dev/null | sed 's/^/  /' || true
     if [ "$not_ok" -eq 0 ]; then
-        echo "  ok   - 五台 guest 全部在跑且 ssh 可达"
+        echo "  ok   - 六台 guest 全部在跑且 ssh 可达"
     else
         echo "  FAIL - 至少一台 guest 没起来或 ssh 不通(见上)" >&2
     fi
@@ -1129,8 +1156,8 @@ run_selftest() {
         ok "反证:GUEST_MEM_MB 与 GUEST_NAMES 长度不一致被拒"
     fi
 
-    step "guest 事实表(三台异构 + AlmaLinux 9 + RHEL 9)"
-    if [ "${#GUEST_NAMES[@]}" -eq 5 ] &&
+    step "guest 事实表(三台异构 + AlmaLinux 9 + RHEL 9 + RHEL 10)"
+    if [ "${#GUEST_NAMES[@]}" -eq 6 ] &&
         [ "${GUEST_NAMES[3]}" = "vma" ] &&
         [ "${GUEST_FAMILY[3]}" = "almalinux" ] &&
         [ "${GUEST_AGENT_ID[3]}" = "e2e-a9" ] &&
@@ -1142,10 +1169,16 @@ run_selftest() {
         [ "${GUEST_AGENT_ID[4]}" = "e2e-r99" ] &&
         [ "${GUEST_SSH_PORT[4]}" = "9505" ] &&
         [ "${GUEST_AGENT_PORT[4]}" = "9475" ] &&
-        [ "${GUEST_MEM_MB[4]}" = "2048" ]; then
-        ok "五台 guest 就位:vma=Alma 9 / e2e-a9 / 9504+9474 / 2048MB;vmr=RHEL 9 / e2e-r99 / 9505+9475 / 2048MB"
+        [ "${GUEST_MEM_MB[4]}" = "2048" ] &&
+        [ "${GUEST_NAMES[5]}" = "vmr10" ] &&
+        [ "${GUEST_FAMILY[5]}" = "rhel" ] &&
+        [ "${GUEST_AGENT_ID[5]}" = "e2e-r103" ] &&
+        [ "${GUEST_SSH_PORT[5]}" = "9506" ] &&
+        [ "${GUEST_AGENT_PORT[5]}" = "9476" ] &&
+        [ "${GUEST_MEM_MB[5]}" = "2048" ]; then
+        ok "六台 guest 就位:vma=Alma 9 / e2e-a9 / 9504+9474 / 2048MB;vmr=RHEL 9 / e2e-r99 / 9505+9475 / 2048MB;vmr10=RHEL 10 / e2e-r103 / 9506+9476 / 2048MB"
     else
-        bad "guest 事实表不是预期五台(vma/vmr 缺失或字段不对)"
+        bad "guest 事实表不是预期六台(vma/vmr/vmr10 缺失或字段不对)"
     fi
     case "${GUEST_IMAGE[3]}" in
         AlmaLinux-9-GenericCloud-*.qcow2) ok "vma 基础镜像钉了 AlmaLinux 9 日期版本:${GUEST_IMAGE[3]}" ;;
@@ -1165,12 +1198,34 @@ run_selftest() {
     else
         bad "vmr 镜像 URL 不是 PREINSTALLED,可能把签名链接写进了仓库"
     fi
+    if [ "${GUEST_IMAGE[5]}" = "rhel-10.3-x86_64-kvm.qcow2" ]; then
+        ok "vmr10 基础镜像文件名正确:${GUEST_IMAGE[5]}"
+    else
+        bad "vmr10 基础镜像名不对:${GUEST_IMAGE[5]}"
+    fi
+    if [ "${GUEST_IMAGE_URL[5]}" = "PREINSTALLED" ]; then
+        ok "vmr10 镜像 URL 是哨兵 PREINSTALLED(仓库里不留会过期的签名链接)"
+    else
+        bad "vmr10 镜像 URL 不是 PREINSTALLED,可能把签名链接写进了仓库"
+    fi
     if [ "${GUEST_MEM_MB[0]}" = "1024" ] && [ "${GUEST_MEM_MB[1]}" = "1024" ] &&
         [ "${GUEST_MEM_MB[2]}" = "1024" ] &&
-        [ "${GUEST_MEM_MB[3]}" = "2048" ] && [ "${GUEST_MEM_MB[4]}" = "2048" ]; then
-        ok "vmu/vmd/vmc 仍各 1024MB,vma/vmr 各 2048MB"
+        [ "${GUEST_MEM_MB[3]}" = "2048" ] && [ "${GUEST_MEM_MB[4]}" = "2048" ] &&
+        [ "${GUEST_MEM_MB[5]}" = "2048" ]; then
+        ok "vmu/vmd/vmc 仍各 1024MB,vma/vmr/vmr10 各 2048MB"
     else
-        bad "内存分配被改动(期望 1024/1024/1024/2048/2048)"
+        bad "内存分配被改动(期望 1024/1024/1024/2048/2048/2048)"
+    fi
+    # 装包源按代际定:RHEL 10 未订阅时必须指向 Alma 10 的源,不能沿用 Alma 9。
+    if [ "$(fleet_guest_rhel_major 4)" = "9" ] && [ "$(fleet_guest_rhel_major 5)" = "10" ]; then
+        ok "RHEL 主版本从镜像名取对(vmr→9,vmr10→10)"
+    else
+        bad "RHEL 主版本取错(vmr→$(fleet_guest_rhel_major 4 2>/dev/null),vmr10→$(fleet_guest_rhel_major 5 2>/dev/null))"
+    fi
+    if fleet_guest_rhel_major 3 >/dev/null 2>&1; then
+        bad "非 RHEL guest(vma)居然取出了 RHEL 主版本"
+    else
+        ok "非 RHEL guest 取 RHEL 主版本时失败(不猜)"
     fi
     for i in "${!GUEST_NAMES[@]}"; do
         echo "       ${GUEST_NAMES[i]}: family=${GUEST_FAMILY[i]} agent_id=${GUEST_AGENT_ID[i]} mem=${GUEST_MEM_MB[i]}MB ssh=${GUEST_SSH_PORT[i]} agent=${GUEST_AGENT_PORT[i]}"
@@ -1182,8 +1237,8 @@ run_selftest() {
     eval "$(printf '%s\n' "$REMOTE_LIB" | sed -n '/^fleet_remote_images()/,/^}$/p')"
     local imgwork="$tmp/imgwork"
     mkdir -p "$imgwork/images"
-    # 前四台伪装成"镜像已就位"(-s 通过 + qemu-img info 打桩),把断言集中到 vmr 那一项。
-    for j in 0 1 2 3; do printf 'x' > "$imgwork/images/${GUEST_IMAGE[j]}"; done
+    # 除最后一台外全部伪装成"镜像已就位"(-s 通过 + qemu-img info 打桩),把断言集中到 vmr10 那一项。
+    for j in 0 1 2 3 4; do printf 'x' > "$imgwork/images/${GUEST_IMAGE[j]}"; done
     saved_fleet_work="${FLEET_WORK:-}"
     saved_qemu_img_fn="$(declare -f qemu-img || true)"
     saved_curl_fn="$(declare -f curl || true)"
@@ -1191,7 +1246,7 @@ run_selftest() {
     qemu-img() { return 0; }
     curl() { echo called >> "$tmp/curl_called"; return 99; }
     if fleet_remote_images > "$tmp/img_out" 2>&1; then
-        bad "vmr 镜像缺失(只有 PREINSTALLED 哨兵)居然没被判失败"
+        bad "vmr10 镜像缺失(只有 PREINSTALLED 哨兵)居然没被判失败"
     elif [ -e "$tmp/curl_called" ]; then
         bad "PREINSTALLED 仍触发了下载(curl 被调用)"
     elif grep -q "需人工预置" "$tmp/img_out"; then
@@ -1246,6 +1301,14 @@ run_selftest() {
         *"packages: [sudo]"*) bad "RHEL guest(vmr)不该写 packages: [sudo](未订阅时 dnf 装包必失败)" ;;
         *) ok "RHEL guest(vmr)不写 packages(未订阅时 dnf 装 sudo 会失败)" ;;
     esac
+    case "$(fleet_render_user_data 5 "k")" in
+        *"groups: [wheel]"*) ok "RHEL guest(vmr10)落进 wheel 组" ;;
+        *) bad "RHEL guest(vmr10)的组不对" ;;
+    esac
+    case "$(fleet_render_user_data 5 "k")" in
+        *"packages: [sudo]"*) bad "RHEL guest(vmr10)不该写 packages: [sudo](未订阅时 dnf 装包必失败)" ;;
+        *) ok "RHEL guest(vmr10)不写 packages(未订阅时 dnf 装 sudo 会失败)" ;;
+    esac
     case "$(fleet_render_meta_data 1)" in
         *"instance-id: vmd-001"*) ok "meta-data 的 instance-id 正确" ;;
         *) bad "meta-data 的 instance-id 不对" ;;
@@ -1265,6 +1328,10 @@ run_selftest() {
     case "$(fleet_render_agent_config 4)" in
         *"agent_id: e2e-r99"*) ok "config.yaml 带 vmr 自己的 agent_id" ;;
         *) bad "config.yaml 的 agent_id 不对(vmr)" ;;
+    esac
+    case "$(fleet_render_agent_config 5)" in
+        *"agent_id: e2e-r103"*) ok "config.yaml 带 vmr10 自己的 agent_id" ;;
+        *) bad "config.yaml 的 agent_id 不对(vmr10)" ;;
     esac
     for k in cert_path key_path ca_path ca_key_path; do
         case "$(fleet_render_agent_config 0)" in
@@ -1346,15 +1413,31 @@ run_selftest() {
     else
         bad "vmr 的 -m 不是 2048(实际 $(printf '%s\n' "$out" | grep -A1 -x -- '-m' | tail -1))"
     fi
-    # 前三台的内存不许被顺带改掉;vma/vmr 各 2048。
+    # vmr10(RHEL 10):内存 2048 与两个转发口必须逐台渲染对。
+    out="$(fleet_render_qemu_args 5 "/tmp/vmr10")"
+    case "$out" in
+        *"hostfwd=tcp:127.0.0.1:9506-:22"*) ok "vmr10 的 ssh 端口转发已渲染(9506)" ;;
+        *) bad "vmr10 的 ssh hostfwd 没渲染对" ;;
+    esac
+    case "$out" in
+        *"hostfwd=tcp:127.0.0.1:9476-:9443"*) ok "vmr10 的 agent 端口转发已渲染(9476)" ;;
+        *) bad "vmr10 的 agent hostfwd 没渲染对" ;;
+    esac
+    if [ "$(printf '%s\n' "$out" | grep -A1 -x -- '-m' | tail -1)" = "2048" ]; then
+        ok "vmr10 的 -m 是 2048(RHEL 10 验收门槛 ≥2 GB)"
+    else
+        bad "vmr10 的 -m 不是 2048(实际 $(printf '%s\n' "$out" | grep -A1 -x -- '-m' | tail -1))"
+    fi
+    # 前三台的内存不许被顺带改掉;vma/vmr/vmr10 各 2048。
     if [ "$(fleet_render_qemu_args 0 "/tmp/vmu" | grep -A1 -x -- '-m' | tail -1)" = "1024" ] &&
         [ "$(fleet_render_qemu_args 1 "/tmp/vmd" | grep -A1 -x -- '-m' | tail -1)" = "1024" ] &&
         [ "$(fleet_render_qemu_args 2 "/tmp/vmc" | grep -A1 -x -- '-m' | tail -1)" = "1024" ] &&
         [ "$(fleet_render_qemu_args 3 "/tmp/vma" | grep -A1 -x -- '-m' | tail -1)" = "2048" ] &&
-        [ "$(fleet_render_qemu_args 4 "/tmp/vmr" | grep -A1 -x -- '-m' | tail -1)" = "2048" ]; then
-        ok "vmu/vmd/vmc 仍各 1024,vma/vmr 各 2048(内存不被串台)"
+        [ "$(fleet_render_qemu_args 4 "/tmp/vmr" | grep -A1 -x -- '-m' | tail -1)" = "2048" ] &&
+        [ "$(fleet_render_qemu_args 5 "/tmp/vmr10" | grep -A1 -x -- '-m' | tail -1)" = "2048" ]; then
+        ok "vmu/vmd/vmc 仍各 1024,vma/vmr/vmr10 各 2048(内存不被串台)"
     else
-        bad "内存渲染与事实表不一致(期望 1024/1024/1024/2048/2048)"
+        bad "内存渲染与事实表不一致(期望 1024/1024/1024/2048/2048/2048)"
     fi
 
     step "包管理器撞锁的重试语义(失败不能被吞成成功)"
@@ -1459,8 +1542,8 @@ run_selftest() {
     fi
     if grep -q "Host vmu" "$tmp/ssh_config" && grep -q "Host vmd" "$tmp/ssh_config" &&
         grep -q "Host vmc" "$tmp/ssh_config" && grep -q "Host vma" "$tmp/ssh_config" &&
-        grep -q "Host vmr" "$tmp/ssh_config"; then
-        ok "标记块里有 vmu/vmd/vmc/vma/vmr 五个 Host 条目"
+        grep -q "Host vmr" "$tmp/ssh_config" && grep -q "Host vmr10" "$tmp/ssh_config"; then
+        ok "标记块里有 vmu/vmd/vmc/vma/vmr/vmr10 六个 Host 条目"
     else
         bad "标记块内容不全"
     fi
