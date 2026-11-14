@@ -319,6 +319,11 @@ jobs:
           # 无明文凭据、单元只在 live 触发、加速源只当传输通道且按 digest 钉死、target
           # 不指向加速源)。它此前没有任何 workflow 跑它 —— 静态门禁不接线就等于不存在。
           bash tests/ci/iso-autoinstall-test.sh
+          # 上面那条是静态 grep(脚本里有没有那几行);这条真跑 install_all_sources:
+          # 假 bootc 驱动瞬时失败/超时/fatal/预算耗尽四种结局。重试与分类的正确性只在
+          # 行为上可见 —— 静态断言能通过而重试逻辑照样可以退化成"永远重试"或"把 fatal
+          # 当 transient 重试"(用重试掩盖真缺陷)。
+          bash tests/ci/iso-install-retry-test.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:

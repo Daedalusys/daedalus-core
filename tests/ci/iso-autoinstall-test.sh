@@ -89,9 +89,11 @@ if [ -f "$INST" ]; then
     # mounted" 收场 —— 那句错不含挂载点,会把真正的首因盖掉。
     hasre '^[[:space:]]+umount_target_disk[[:space:]]*$' "$INST"
     st $? "规则12 循环体里调用 umount_target_disk(每次尝试前清理)"
-    for_line="$(grep -n '^for src in' "$INST" | head -1 | cut -d: -f1)"
+    # 位置关系只看"谁在谁里面":主流程整体在函数里,for/while/done 都带缩进,
+    # 所以这几个定位模式必须容忍前导空白(断言本身一个字没放宽)。
+    for_line="$(grep -nE '^[[:space:]]*for src in' "$INST" | head -1 | cut -d: -f1)"
     umount_line="$(grep -n '^[[:space:]]*umount_target_disk[[:space:]]*$' "$INST" | head -1 | cut -d: -f1)"
-    done_line="$(awk -v f="${for_line:-0}" 'NR>f && /^done$/ {print NR; exit}' "$INST")"
+    done_line="$(awk -v f="${for_line:-0}" 'NR>f && /^[[:space:]]*done$/ {print NR; exit}' "$INST")"
     install_line="$(grep -n 'bootc install to-disk' "$INST" | head -1 | cut -d: -f1)"
     if [ -n "$for_line" ] && [ -n "$umount_line" ] && [ -n "$done_line" ] && [ -n "$install_line" ] \
        && [ "$umount_line" -gt "$for_line" ] && [ "$umount_line" -lt "$done_line" ] \
