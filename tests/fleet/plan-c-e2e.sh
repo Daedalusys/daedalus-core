@@ -46,7 +46,7 @@ assert_jq() {
 
 run_selftest() {
     step "夹具结构(两份 Plan 必须能被 objectmodel.Plan 解进并通过校验)"
-    for f in plan-low-nginx.json plan-high-kernel.json; do
+    for f in plan-low-nginx.json plan-high-kernel.json plan-high-container.json; do
         if [ -f "$FIXTURES/$f" ]; then
             ok "夹具存在:$f"
         else
@@ -60,6 +60,9 @@ run_selftest() {
     assert_jq "高危夹具:max_risk=high 且含 legacy-no-snapshot 目标机" \
         '.blast_radius.max_risk == "high" and ([.machines[].machine_id] | index("legacy-no-snapshot")) != null and (.intents[0].target == "kernel-core")' \
         "$(cat "$FIXTURES/plan-high-kernel.json")"
+    assert_jq "container 高危夹具:既无内建回滚点也无执行器凭据,是 RF1 的落点" \
+        '.intents[0].kind == "container" and .blast_radius.max_risk == "high" and .blast_radius.kind_breakdown.container == 1' \
+        "$(cat "$FIXTURES/plan-high-container.json")"
 
     step "端到端判据(真 mTLS + 真 Scheduler + 真夹具;loopback,不需要真机)"
     export GOMODCACHE="${GOMODCACHE:-/tmp/opencode/go-modcache}"
@@ -297,11 +300,11 @@ run_matrix() {
         bad "渲染低危夹具失败"
     fi
 
-    step "高危腿:package.set kernel-core(high,含一台无回滚点)"
+    step "高危腿:container(high,该 kind 既无内建回滚点也无执行器凭据 → 下发前拒)"
     local nosnap="${NODE_IDS[legacy-no-snapshot]:-}"
     if [ -z "$nosnap" ]; then
         bad "没有名为 legacy-no-snapshot 的被控机(--hosts 少了它)"
-    elif render_plan "$FIXTURES/plan-high-kernel.json" "$TMPD/high.json" "$nosnap"; then
+    elif render_plan "$FIXTURES/plan-high-container.json" "$TMPD/high.json" "$nosnap"; then
         submit_and_check "$TMPD/high.json" dirty \
             'any(.results[]; (.message | ascii_downcase | contains("snapshot")))'
     else
