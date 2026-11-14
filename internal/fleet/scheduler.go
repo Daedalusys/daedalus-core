@@ -277,6 +277,19 @@ func (s *Scheduler) Run(ctx context.Context, plan objectmodel.Plan) (*PlanRun, e
 	return run, nil
 }
 
+// refusalMessage 说明"为什么这条高危 intent 不发"。文案只讲节点**实有的**事实 ——
+// 旧实现固定打印常量 snapshotCapNone 再拼自报值,同一句里出现
+// "capability=NONE/\"RSYNC_TARGET\"" 这种自相矛盾:读者会以为节点没有回滚点,
+// 而拒绝的真实原因是该 kind 没有还原手段(真机验收撞过,daedalus-core#131)。
+func refusalMessage(n Node, kind objectmodel.Kind) string {
+	if n.Kind == objectmodel.MachineKindAgent {
+		return fmt.Sprintf("节点 %s 无回滚点(agent 节点:%s 类变更既无内建回滚点、执行器也不产回滚凭据;自报 snapshot capability=%q):high-risk intent 拒绝下发——无回滚点 ≠ 可继续",
+			n.NodeID, kind, n.SnapshotCap)
+	}
+	return fmt.Sprintf("节点 %s 无回滚点(未确证宿主快照能力,自报 snapshot capability=%q):high-risk intent 拒绝下发——无回滚点 ≠ 可继续",
+		n.NodeID, n.SnapshotCap)
+}
+
 // runOne 下发一条 intent,并按分桶决定重试/暂停;总是返回一条 StepResult。
 func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
 	risk := s.effectiveRisk(t.Intent)
@@ -286,8 +299,7 @@ func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
 		return s.fill(t, StepResult{
 			Outcome: OutcomeN3,
 			Result:  agentv1.ApplyIntentResult_APPLY_INTENT_RESULT_REFUSED_SNAPSHOT_CAPABILITY_NONE,
-			Message: fmt.Sprintf("节点 %s 无回滚点(snapshot capability=%s/%q):high-risk intent 拒绝下发——无回滚点 ≠ 可继续",
-				t.Node.NodeID, snapshotCapNone, t.Node.SnapshotCap),
+			Message: refusalMessage(t.Node, t.Intent.Kind),
 		})
 	}
 

@@ -90,6 +90,30 @@ func lowIntent() objectmodel.Intent {
 	return objectmodel.Intent{Kind: objectmodel.KindPackage, Target: "nginx", RiskClass: objectmodel.RiskClassLow}
 }
 
+// TestRefusalMessage_NamesActualCapability 钉住拒绝文案只讲节点**实有的**事实:
+// 旧文案固定打印常量 SNAPSHOT_CAPABILITY_NONE 再拼自报值,同一句里出现
+// "capability=NONE/\"RSYNC_TARGET\"" —— 运维看日志会以为那台机器没有回滚点
+// (真机验收撞过,daedalus-core#131)。
+func TestRefusalMessage_NamesActualCapability(t *testing.T) {
+	agent := Node{NodeID: "n1", Kind: objectmodel.MachineKindAgent, SnapshotCap: "SNAPSHOT_CAPABILITY_RSYNC_TARGET"}
+	msg := refusalMessage(agent, objectmodel.KindContainer)
+	if !strings.Contains(msg, "SNAPSHOT_CAPABILITY_RSYNC_TARGET") {
+		t.Errorf("文案应写出节点自报的能力, got %q", msg)
+	}
+	if strings.Contains(msg, "SNAPSHOT_CAPABILITY_NONE") {
+		t.Errorf("文案不得出现节点没有的常量 NONE(自相矛盾), got %q", msg)
+	}
+	if !strings.Contains(msg, "无回滚点") {
+		t.Errorf("文案仍应点名拒绝原因, got %q", msg)
+	}
+
+	atomic := Node{NodeID: "n2", Kind: objectmodel.MachineKindAtomic, SnapshotCap: "SNAPSHOT_CAPABILITY_NONE"}
+	amsg := refusalMessage(atomic, objectmodel.KindPackage)
+	if strings.Contains(amsg, "SNAPSHOT_CAPABILITY_NONE/") {
+		t.Errorf("atomic 文案也不得打印\"常量/自报值\"那种拼接, got %q", amsg)
+	}
+}
+
 // highContainerIntent 是"既无内建回滚点、执行器也产不出凭据"的高危 intent:
 // container 改的是宿主状态,agent 没有它的执行器,也不承诺还原。
 func highContainerIntent() objectmodel.Intent {
