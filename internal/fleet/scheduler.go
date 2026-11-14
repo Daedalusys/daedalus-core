@@ -47,17 +47,23 @@ func nodeHasRollbackPoint(n Node) bool {
 	return true
 }
 
-// intentHasRollbackPoint 报告这条 intent 在这个节点上有没有**可承诺的**回滚点。
-// agent 节点只按 kind 判:
-//   - kind 维度:file 有 agent 内建的单文件 copy,与宿主无关。
-//   - 宿主快照能力不参与准入。能力回答的是「怎么还原」,不是「有没有还原点」;
-//     把 LVM / snapper / btrfs 算进来会让 package 高危在卷级宿主上被放行,而
-//     lvconvert --merge 要卸载或重启才生效,agent 承诺不了即时还原。
+// intentHasRollbackPoint 报告这条 intent 在这个节点上有没有**可承诺的**还原手段。
 //
-// atomic 节点沿用原判定(仍按宿主快照能力),它的回滚由 daedalus-tx 一侧承担。
+// agent 节点按 kind 判,且与 agent 自己的准入同一张表(objectmodel.AdmitsHighRisk):
+//   - file:agent 内建单文件/目录 copy,与宿主无关;
+//   - package / service:执行器在 apply **之后**填进事务的回滚凭据
+//     (dnf history undo / apt before-state / 单元快照),与宿主快照能力无关;
+//   - 其余 kind:两样都没有,高危不下发。
+//
+// 宿主快照能力(SnapshotCapability)不参与 agent 的准入:它回答的是"怎么还原
+// 文件/卷",不是"能不能撤一次装包"。把它算进来会让 btrfs/LVM 节点被误放行
+// (卷快照撤不了包管理器事务),同时把凭据机制完好的节点误拒 —— 真机验收里
+// 就是这个表现(package 高危在 agent 节点恒拒,而 agent 收得下)。
+//
+// atomic 节点沿用原判定(按宿主快照能力),它的回滚由 daedalus-tx 一侧承担。
 func intentHasRollbackPoint(n Node, kind objectmodel.Kind) bool {
 	if n.Kind == objectmodel.MachineKindAgent {
-		return objectmodel.HasRollbackPoint(kind)
+		return objectmodel.AdmitsHighRisk(kind)
 	}
 	return nodeHasRollbackPoint(n)
 }

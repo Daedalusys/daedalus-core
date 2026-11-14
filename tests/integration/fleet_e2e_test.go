@@ -154,17 +154,18 @@ func TestFleetE2E_LowRiskPlanCompletes(t *testing.T) {
 	}
 }
 
-// TestFleetE2E_HighRiskPlanStopsOnNodeWithoutSnapshot 是 RF1:目标机没有回滚点时,
-// 高危 intent 在**下发前**就被拒,且文案点名 snapshot 能力;整批转 dirty。
+// TestFleetE2E_HighRiskPlanStopsOnNodeWithoutSnapshot 是 RF1:该 kind 既没有内建
+// 回滚点、执行器也产不出回滚凭据时(container),高危 intent 在**下发前**就被拒,
+// 且文案点名 snapshot 能力;整批转 dirty,一个 RPC 都不发。
+//
+// 2026-11-15:准入改为与执行侧同口径(objectmodel.AdmitsHighRisk)后,"没有还原
+// 手段"不再由节点自报的 snapshot 能力决定,而由 kind 决定 —— 所以这条用例改用
+// container 夹具:package / service 有执行器凭据,本来就该下发(见下一条)。
 func TestFleetE2E_HighRiskPlanStopsOnNodeWithoutSnapshot(t *testing.T) {
 	agent := &fakeAgent{}
 	addr := startFakeAgent(t, agent)
-	plan := loadFixture(t, "plan-high-kernel.json")
+	plan := loadFixture(t, "plan-high-container.json")
 	reg := registerFixtureMachines(t, addr, plan)
-
-	// 把"无回滚点"那台排到第一批,确保它先被判定。
-	plan.Machines = []objectmodel.Machine{plan.Machines[1], plan.Machines[0]}
-	plan.BlastRadius.Count = len(plan.Machines)
 
 	run, err := fleet.NewScheduler(reg, policy.Default()).Run(context.Background(), plan)
 	if err != nil {
@@ -181,7 +182,31 @@ func TestFleetE2E_HighRiskPlanStopsOnNodeWithoutSnapshot(t *testing.T) {
 		t.Errorf("拒绝文案应点名 snapshot 能力, got %q", first.Message)
 	}
 	if len(agent.applied) != 0 {
-		t.Errorf("无回滚点节点不得收到 RPC, agent 却收到 %d 条", len(agent.applied))
+		t.Errorf("无还原手段的 kind 不得收到 RPC, agent 却收到 %d 条", len(agent.applied))
+	}
+}
+
+// TestFleetE2E_HighRiskPackageAdmittedOnAgentNodes 钉住 2026-11-15 定的口径:
+// package 高危在 agent 节点上**要**下发 —— 执行器靠 dnf/apt 的回滚凭据还原,
+// 节点自报的宿主快照能力(BTRFS/LVM/rsync/NONE)不参与这条判定。
+//
+// 反证意义:改动之前控制面按 kind==file 判,package 高危在 agent 节点恒拒,
+// 而 agent 其实收得下 —— 同一份契约两种口径,真机验收就是这么撞上的。
+func TestFleetE2E_HighRiskPackageAdmittedOnAgentNodes(t *testing.T) {
+	agent := &fakeAgent{}
+	addr := startFakeAgent(t, agent)
+	plan := loadFixture(t, "plan-high-kernel.json")
+	reg := registerFixtureMachines(t, addr, plan)
+
+	run, err := fleet.NewScheduler(reg, policy.Default()).Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != objectmodel.PlanStatusComplete {
+		t.Fatalf("status = %q, want complete(%+v)", run.Status, run.Results)
+	}
+	if len(agent.applied) != len(plan.Machines) {
+		t.Errorf("package 高危应下发到每台,agent 收到 %d 条, want %d", len(agent.applied), len(plan.Machines))
 	}
 }
 

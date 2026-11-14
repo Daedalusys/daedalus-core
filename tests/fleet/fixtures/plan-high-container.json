@@ -1,0 +1,22 @@
+{
+  "id": "0f0f0f0f0f0f0f0f",
+  "intents": [
+    {
+      "kind": "container",
+      "target": "daedalus-demo",
+      "expected_diff": "none\n",
+      "risk_class": "high"
+    }
+  ],
+  "machines": [
+    { "machine_id": "ubuntu24-a", "kind": "agent", "support_level": "supported" },
+    { "machine_id": "legacy-no-snapshot", "kind": "agent", "support_level": "experimental" }
+  ],
+  "batching": { "strategy": "count", "size": 1 },
+  "blast_radius": {
+    "count": 2,
+    "kind_breakdown": { "container": 1 },
+    "max_downtime_ns": 30000000000,
+    "max_risk": "high"
+  }
+}
