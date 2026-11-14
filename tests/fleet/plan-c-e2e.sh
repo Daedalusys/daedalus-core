@@ -92,6 +92,74 @@ run_selftest() {
     else
         ok "反证:映射不全时 render_plan 拒绝提交"
     fi
+
+    export NODE_ID_MAP='{"ubuntu24-a":"n-u24","legacy-no-snapshot":"n-nosnap"}'
+    if render_plan "$FIXTURES/plan-high-kernel.json" "$tmp/nope.json" n-absent 2>/dev/null; then
+        bad "反证:首批机器不在夹具里时必须拒(否则批次顺序守卫静默失效)"
+    else
+        ok "反证:首批机器不在夹具里时 render_plan 拒绝"
+    fi
+
+    step "失败路径:控制面报错时逐条记 FAIL,不整轮中断"
+    local stub before
+    stub="$tmp/stub-host"
+    cat > "$stub" <<'STUB'
+#!/usr/bin/env bash
+# 桩控制面:只用于校验驱动自身的失败路径,不连任何真机
+sub="$1"; shift
+case "$sub" in
+  node)
+    case "$1" in
+      add)
+        shift; id=""
+        while [ $# -gt 0 ]; do [ "$1" = "--agent-id" ] && id="$2"; shift; done
+        printf '{"node":{"node_id":"n-%s"}}\n' "$id"
+        ;;
+      list) echo '{"nodes":[]}' ;;
+    esac
+    ;;
+  plan)
+    case "$1" in
+      submit)
+        if [ "${STUB_SUBMIT_FAIL:-}" = 1 ]; then
+            echo "plan submit: 桩故意失败" >&2
+            exit 1
+        fi
+        echo '{"plan_id":"p1","status":"complete","results":[{"node_id":"n-u24","tx_id":"tx-1"}]}'
+        ;;
+      advance) echo "${STUB_ADVANCE_JSON:-{\}}" ;;
+    esac
+    ;;
+esac
+STUB
+    chmod +x "$stub"
+
+    out="$( ( export STUB_SUBMIT_FAIL=1; HOST_BIN="$stub"
+            submit_and_check "$tmp/plan.json" complete 'true'
+          ) 2>&1)"
+    case "$out" in
+        *"plan submit 失败"*) ok "plan submit 失败 → 记 1 条 FAIL 并继续(不整轮中断)" ;;
+        *) bad "plan submit 失败未按预期记 FAIL: $out" ;;
+    esac
+
+    out="$( ( LAST_PLAN_JSON=""
+            HOST_BIN="$stub" run_recovery_skip n-nosnap "$tmp/adv.json"
+          ) 2>&1)"
+    case "$out" in
+        *"高危腿未提交"*) ok "高危腿未提交时,人审恢复步直接记 FAIL 而不是拿旧 Plan 演练" ;;
+        *) bad "高危腿未提交时未按预期 FAIL: $out" ;;
+    esac
+
+    out="$( ( LAST_PLAN_JSON='{"plan_id":"p1","status":"dirty"}'
+            export HOST_BIN="$stub"
+            export STUB_ADVANCE_JSON='{"batches":[{"index":0,"node_ids":["n-u24"]}],"results":[{"node_id":"n-nosnap","message":"skipped-by-human: x"}]}'
+            run_recovery_skip n-nosnap "$tmp/adv.json"
+          ) 2>&1)"
+    if [ "$(grep -c '^  bad' <<<"$out")" -eq 0 ] && [ "$(grep -c '^  ok' <<<"$out")" -eq 4 ]; then
+        ok "高危腿已提交时,--skip 三条断言全过(含剩余批次只剩另一台)"
+    else
+        bad "safe path 断言不全绿: $out"
+    fi
     rm -rf "$tmp"
 }
 
@@ -117,7 +185,13 @@ render_plan() {
         .machines |= map(.machine_id = ($m[.machine_id]))
         | if $first == "" then .
           else .machines |= (map(select(.machine_id == $first)) + map(select(.machine_id != $first)))
-          end' "$src" > "$dst"
+          end' "$src" > "$dst" || return 1
+    # 替换后才校验:调用方传的是 node_id,夹具里写的是模板名,只有渲染后两者才对得上。
+    if [ -n "$first" ] && ! jq -e --arg f "$first" \
+        '[.machines[].machine_id] | index($f) != null' "$dst" >/dev/null; then
+        echo "render_plan: 要排第一批的机器 $first 不在夹具里" >&2
+        return 1
+    fi
 }
 
 # build_node_id_map 把登记回读到的 node_id 拼成 jq 用的映射:机器名 → node_id。
@@ -158,7 +232,11 @@ register_hosts() {
 verify_node_list() {
     step "node list 契约"
     local want="$1" json
-    json="$("$HOST_BIN" node list)"
+    # 控制面报错时记 FAIL 并继续:整轮中断会让后面的断言一条都不跑,红跑看不出卡在哪。
+    if ! json="$("$HOST_BIN" node list)"; then
+        bad "node list 失败(控制面报错)"
+        return 0
+    fi
     assert_jq "节点数 = $want" ".nodes | length == $want" "$json"
     assert_jq "每行都带 support_level 且取值合法" \
         'all(.nodes[]; .support_level == "supported" or .support_level == "experimental")' "$json"
@@ -169,11 +247,38 @@ verify_node_list() {
 submit_and_check() {
     local planfile="$1" want="$2" extra="$3" json name
     name="$(basename "$planfile")"
-    json="$("$HOST_BIN" plan submit "$planfile")"
+    if ! json="$("$HOST_BIN" plan submit "$planfile")"; then
+        bad "$name → plan submit 失败(控制面报错)"
+        return 0
+    fi
     assert_jq "$name → status=$want" ".status == \"$want\"" "$json"
     assert_jq "$name → $extra" "$extra" "$json"
     echo "  plan submit $name: $json"
     LAST_PLAN_JSON="$json"
+}
+
+# run_recovery_skip <被 skip 的 node_id> <advance 输出落盘路径>
+# 人审恢复腿:高危腿没提交就没什么可 skip 的 —— 此时直接记 FAIL,
+# 不能拿上一次的 PlanRun 接着演练(会把"低危腿的 plan_id"当成高危腿的)。
+run_recovery_skip() {
+    local legacy="$1" out="$2" plan_id
+    if [ -z "${LAST_PLAN_JSON:-}" ]; then
+        bad "高危腿未提交,跳过 --skip 演练(没有可推进的 Plan)"
+        return 0
+    fi
+    plan_id="$(jq -r '.plan_id' <<<"$LAST_PLAN_JSON")"
+    if "$HOST_BIN" plan advance "$plan_id" --skip "$legacy" | tee "$out" | jq -e . >/dev/null; then
+        ok "plan advance --skip $legacy"
+        assert_jq "被 skip 的节点已从待跑批次摘掉" \
+            "[.batches[].node_ids[]] | index(\"$legacy\") == null" "$(cat "$out")"
+        assert_jq "剩余批次只剩另一台(不是\"本来就没有\"的空过)" \
+            "(.batches | length) == 1" "$(cat "$out")"
+        assert_jq "被 skip 的结果标成人已接受" \
+            "any(.results[]; .node_id == \"$legacy\" and (.message | startswith(\"skipped-by-human:\")))" \
+            "$(cat "$out")"
+    else
+        bad "plan advance --skip $legacy"
+    fi
 }
 
 run_matrix() {
@@ -204,20 +309,8 @@ run_matrix() {
     fi
 
     step "人审恢复(spec §4.3 三选一;本脚本演练 --skip)"
-    local plan_id legacy
-    plan_id="$(echo "$LAST_PLAN_JSON" | jq -r '.plan_id')"
     # --skip 收的是 Plan 里的 machine_id,渲染后它就是被控机的 node_id。
-    legacy="$nosnap"
-    if "$HOST_BIN" plan advance "$plan_id" --skip "$legacy" | tee /tmp/plan-c-advance.json | jq -e . >/dev/null; then
-        ok "plan advance --skip $legacy"
-        assert_jq "被 skip 的节点已从待跑批次摘掉" \
-            "[.batches[].node_ids[]] | index(\"$legacy\") == null" "$(cat /tmp/plan-c-advance.json)"
-        assert_jq "被 skip 的结果标成人已接受" \
-            "any(.results[]; .node_id == \"$legacy\" and (.message | startswith(\"skipped-by-human:\")))" \
-            "$(cat /tmp/plan-c-advance.json)"
-    else
-        bad "plan advance --skip $legacy"
-    fi
+    run_recovery_skip "${nosnap:-}" "$TMPD/advance.json"
     echo
     echo "  提示:回滚路径由人执行(控制面不代跑远程回滚)。dirty 时 plan status 会给出"
     echo "        每台已成功节点的本地命令:daedalus-tx rollback <tx_id>。"
