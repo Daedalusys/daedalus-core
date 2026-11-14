@@ -55,6 +55,7 @@ func TestMapDesiredObserved_UnknownKindErrors(t *testing.T) {
 		t.Fatal("未实现 kind 应报错")
 	}
 }
+
 // === Task 5: drift compute with four-mode semantics ===
 
 func TestCompute_UnmanagedEmpty(t *testing.T) {

@@ -22,7 +22,7 @@ var (
 
 // SetViewLoaderForTest / SetStateReaderForTest / ResetInjections 是三个测试 hook。
 // 生产代码不许调;测试文件 t.Cleanup(ResetInjections) 复原默认实现。
-func SetViewLoaderForTest(fn func() (*desiredview.View, error))     { viewLoader = fn }
+func SetViewLoaderForTest(fn func() (*desiredview.View, error))   { viewLoader = fn }
 func SetStateReaderForTest(fn func() ([]state.StateEntry, error)) { stateReader = fn }
 func ResetInjections() {
 	viewLoader = func() (*desiredview.View, error) { return desiredview.Load() }

@@ -129,9 +129,11 @@ func TestUnitMissing(t *testing.T) {
 
 // TestRescue_DisableVnc_IdempotentWhenNotInstalled:回归 —— 真机上在一台
 // 从未开过 VNC 的机器跑 `daedalus-host rescue disable-vnc` 得到:
+//
 //	Failed to disable unit: Unit xrdp.service does not exist
 //	rescue: systemctl disable --now 失败: exit status 1
 //	EXIT=1
+//
 // 但“本就没开”正是 disable 想达到的状态,报非零是自相矛盾(且会让自动化
 // 脚本误判)。这里钉:unit 缺失 → 仍 exitOK,且 stderr 给出说明。
 func TestRescue_DisableVnc_IdempotentWhenNotInstalled(t *testing.T) {
@@ -176,8 +178,10 @@ func TestRescue_DisableVnc_RealFailureStillFails(t *testing.T) {
 
 // TestRescue_EnableVnc_InstallsXrdpWhenNotInstalled:回归 —— 真机上在 headless
 // 镜像跑 `daedalus-host rescue enable-vnc` 得到:
+//
 //	rescue: 写 startwm.sh 失败: open /etc/xrdp/startwm.sh: no such file or directory
 //	EXIT=1
+//
 // 根因:/etc/xrdp 目录由 xrdp 包创建,而 headless 镜像不装 xrdp。
 // 这里钉:状态为 not-installed 时,dnf 装包必须排在写 startwm.sh **之前**,
 // 且走 EPEL → COPR 的既有顺序;最终 exitOK 且 startwm.sh 真落盘。
@@ -365,6 +369,7 @@ func assertOrder(t *testing.T, calls []string, needles ...string) {
 // 但 disable-vnc 之后 `systemctl show xrdp` 报的是 **masked** 不是 not-found,
 // 于是 enable-vnc 认为“装过了,跳过安装”,紧接着写 /etc/xrdp/startwm.sh 仍然
 // ENOENT。真机输出:
+//
 //	rescue: WARN sesman.ini depth 未调整: open /etc/xrdp/sesman.ini: no such file or directory
 //	rescue: 写 startwm.sh 失败: open /etc/xrdp/startwm.sh: no such file or directory
 //	EXIT=1

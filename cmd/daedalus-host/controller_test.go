@@ -42,6 +42,7 @@ func TestCmdController_Start_ExitsClean(t *testing.T) {
 		t.Fatal("controller start 未在 SIGTERM 后退出")
 	}
 }
+
 // 单元里写的 ExecStart argv 必须能被本二进制的旗标集解析。
 // 这条钉住 daedalus-host-controller.service 与 CLI 的一致性:
 // 单元路径/旗标任一漂移,本测即红。
