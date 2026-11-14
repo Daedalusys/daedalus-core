@@ -20,7 +20,14 @@
 #       核实 → 高危 Plan(package 在该节点无回滚点)当场 dirty。
 #       需要:
 #         - 控制面 mTLS 客户端凭证:DAEDALUS_FLEET_CLIENT_CERT / _KEY / DAEDALUS_FLEET_CA
-#         - agent 出货 tarball:DAEDALUS_AGENT_TARBALL=<path>(内含 bin/ 与 scripts/)
+#         - agent 出货包(二选一,**都缺或都给即退出 1**):
+#             DAEDALUS_AGENT_RELEASE=vX.Y.Z  从 GitHub Release 取件并核对
+#                                            SHA256SUMS(发布态正路;装完逐台断言
+#                                            被控端自报 `<版本> commit=`)
+#             DAEDALUS_AGENT_TARBALL=<path>  本地 tarball(开发态旁路,内含 bin/ 与
+#                                            scripts/;不校验,也不断言版本)
+#           取件跑在驱动机上,故驱动机需有可用的 gh(已 gh auth login);
+#           目标机不需要 gh —— 包由本驱动经 ssh 送过去。
 #         - 目标机有 systemd 与免密 sudo(install.sh 的前置)
 #         - **各目标机的 agent 必须共用同一张 CA**:agent 首启会自举自己的 CA,而
 #           控制面对一个 Plan 里的所有节点只持有一份客户端证书,三台各一套 CA 时
@@ -42,13 +49,24 @@ set -euo pipefail
 # 看不出是哪一步。留一条 ERR 线索指名出错行,便于事后定位。
 trap 'echo "agent-e2e: 第 $LINENO 行意外失败(exit=$?)" >&2' ERR
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
 HOST_BIN="${DAEDALUS_HOST_BIN:-$ROOT/bin/daedalus-host}"
 SSH="${DAEDALUS_SSH:-ssh}"
 JQ="${DAEDALUS_JQ:-jq}"
 AGENT_PORT="${DAEDALUS_AGENT_PORT:-9443}"
 WANT_PKG="${DAEDALUS_E2E_PACKAGE:-nginx}"
 POLICY_FILE="$ROOT/files/system/opt/daedalus/shared/policy.toml"
+
+# 取件层:release 资产名推导 / 下载 + 校验和 / 装完的版本断言。三个函数只在这一处
+# 定义,真机矩阵与自检共用同一份判定代码。
+# shellcheck source=tests/fleet/lib/agent-release.sh
+. "$HERE/lib/agent-release.sh"
+
+# 本轮解析出的 agent 出货 tarball(绝对路径),由 resolve_agent_tarball 填。全轮
+# 只解析一次:release 模式下重复下载是纯浪费,且每台机器各下一份会让"哪个包装的"
+# 出现多个版本。
+AGENT_TARBALL_RESOLVED=""
 
 # 用仓内那份真实 policy.toml 判风险,而不是回退内置默认值 —— 判定表本身就是
 # 单一事实源,用副本会掩盖"策略改动影响 Plan 判定"这类问题。操作者已显式
@@ -239,12 +257,50 @@ remote_first_addr() {
     "$SSH" -n "$1" "hostname -I 2>/dev/null | awk '{print \$1}'" 2>/dev/null
 }
 
-# install_agent_on <key> <ssh>:把出货 tarball 送到目标机,解出它自带的
-# scripts/ 后跑 install.sh(install.sh 以自身所在目录为 SCRIPT_DIR 找同级脚本)。
+# resolve_agent_tarball:决定本轮从哪儿取 agent 出货包,返回 0 则
+# AGENT_TARBALL_RESOLVED 是一个可读 tarball 的绝对路径。
+#
+# 两种来源**二选一**,都缺或都给都算配置错误(退出 1):猜一个来源比直接报错更
+# 危险 —— 猜成 release 会拉不出东西,猜成本地包会把开发机上的裸构建当成发布版
+# 装上机器,而那正是本改造要退役的做法。
+resolve_agent_tarball() {
+    local rel="${DAEDALUS_AGENT_RELEASE:-}" tb="${DAEDALUS_AGENT_TARBALL:-}"
+    if [ -n "$rel" ] && [ -n "$tb" ]; then
+        echo "DAEDALUS_AGENT_RELEASE 与 DAEDALUS_AGENT_TARBALL 只能给一个(两个来源并存无法判断该信谁)" >&2
+        return 1
+    fi
+    if [ -n "$rel" ]; then
+        local dir
+        dir="$(mktemp -d)"
+        if ! AGENT_TARBALL_RESOLVED="$(fetch_agent_release "$rel" "$dir")"; then
+            echo "从 release ${rel} 取件失败(见上一条);本地自造包可改走 DAEDALUS_AGENT_TARBALL" >&2
+            return 1
+        fi
+        echo "  取件来源:release ${rel} → ${AGENT_TARBALL_RESOLVED}"
+        return 0
+    fi
+    if [ -n "$tb" ]; then
+        if [ ! -r "$tb" ]; then
+            echo "DAEDALUS_AGENT_TARBALL 指定的包不可读:${tb}" >&2
+            return 1
+        fi
+        AGENT_TARBALL_RESOLVED="$(cd "$(dirname "$tb")" && pwd)/$(basename "$tb")"
+        echo "  取件来源:本地 tarball(开发态旁路,不校验来源、不断言版本)→ ${AGENT_TARBALL_RESOLVED}"
+        return 0
+    fi
+    echo "缺少 agent 取件来源,二选一:" >&2
+    echo "  DAEDALUS_AGENT_RELEASE=vX.Y.Z  从 GitHub Release 取件并核对 SHA256SUMS(发布态正路)" >&2
+    echo "  DAEDALUS_AGENT_TARBALL=<path>  用本地 tarball(开发态旁路,内含 bin/ 与 scripts/)" >&2
+    return 1
+}
+
+# install_agent_on <key> <ssh>:把**已解析好的**出货 tarball 送到目标机,解出它
+# 自带的 scripts/ 后跑 install.sh(install.sh 以自身所在目录为 SCRIPT_DIR 找同级
+# 脚本)。取件来源的解析只在 resolve_agent_tarball 做一次,这里不重复下载。
 install_agent_on() {
-    local key="$1" alias="$2" tarball="${DAEDALUS_AGENT_TARBALL:-}"
+    local key="$1" alias="$2" tarball="${AGENT_TARBALL_RESOLVED:-}"
     if [ -z "$tarball" ] || [ ! -r "$tarball" ]; then
-        echo "  ${key}: 未提供可读的 DAEDALUS_AGENT_TARBALL(agent 出货 tarball)" >&2
+        echo "  ${key}: 没有可读的 agent 出货 tarball(先跑 resolve_agent_tarball)" >&2
         return 1
     fi
     local work base
@@ -411,7 +467,8 @@ run_selftest() {
 # -------------------------------------------------------------- 真机矩阵 ----
 
 run_matrix() {
-    local specs=("$@") n="${#specs[@]}"
+    local specs=("$@")
+    local n="${#specs[@]}"
     local -a keys=() sshs=() dials=() distros=() vers=() agent_ids=()
     local i spec key part alias addr osrel id ver
 
@@ -447,8 +504,14 @@ run_matrix() {
     done
 
     step "逐台安装 daedalus-agent(出货 install.sh)"
+    echo "  agent 包:${AGENT_TARBALL_RESOLVED}"
+    # 装成功的下标集合:版本断言只对装成功的台子跑,"装失败"与"版本不对"是两种
+    # 缺陷,不该混成一条。
+    local -a installed=()
     for ((i = 0; i < n; i++)); do
+        installed[i]=0
         if install_agent_on "${keys[i]}" "${sshs[i]}"; then
+            installed[i]=1
             ok "${keys[i]}: install.sh 退出 0"
             # 单台取不到 agent_id 不该把整个矩阵打断(set -e 下命令替换失败会直接
             # 退出):记成失败继续,让后面的台子照样跑到。
@@ -460,6 +523,32 @@ run_matrix() {
             bad "${keys[i]}: install.sh 失败"
         fi
     done
+
+    # 版本断言:装完必须能自证"机器上跑的就是这个 tag 的发布产物"。判据是二进制
+    # 自己吐的 version(不采信包名、不采信 install.sh 的回显):裸构建只会自报
+    # `0.1.0-dev`,拼不出 `commit=`,所以这一条同时钉住"版本对"与"是发布产物"。
+    # 单台失败记 bad 而不中断:整轮的价值在于"哪几台不对",不是第一台不对就收工。
+    step "被控端版本断言(release 模式:须自报 <版本> commit=)"
+    if [ -z "${DAEDALUS_AGENT_RELEASE:-}" ]; then
+        echo "  跳过:本轮走 DAEDALUS_AGENT_TARBALL 开发态旁路,没有可断言的发布版本"
+    else
+        local expect="${DAEDALUS_AGENT_RELEASE#v}" checked=0
+        for ((i = 0; i < n; i++)); do
+            if [ "${installed[i]}" -ne 1 ]; then
+                echo "  ${keys[i]}: 安装没成功,版本断言无从谈起(已在上一步记 FAIL)"
+                continue
+            fi
+            checked=$((checked + 1))
+            if assert_agent_version "${sshs[i]}" "$expect"; then
+                ok "${keys[i]}: 自报版本含 ${expect} commit=(确是 release ${DAEDALUS_AGENT_RELEASE} 的产物)"
+            else
+                bad "${keys[i]}: 自报版本不是 ${expect} 的发布构建(装错包,或装成了裸构建)"
+            fi
+        done
+        if [ "$checked" -eq 0 ]; then
+            bad "没有任何一台装成功,版本断言一台也没跑成"
+        fi
+    fi
 
     step "登记被控机(daedalus-host node add)"
     for ((i = 0; i < n; i++)); do
@@ -617,7 +706,7 @@ while [ $# -gt 0 ]; do
             continue
             ;;
         --package) shift; WANT_PKG="${1:-nginx}" ;;
-        -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,42p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "未知参数:$1" >&2; exit 2 ;;
     esac
     shift
@@ -642,6 +731,11 @@ case "$mode" in
                 exit 2
             fi
         done
+        # 取件来源必须在**动手装之前**定下来:配错(两个都给 / 都不给)时先报错退出 1,
+        # 而不是装到一半才发现没包可用,留下半轮被改过的机器。
+        if ! resolve_agent_tarball; then
+            exit 1
+        fi
         # 每次矩阵用独立的 fleet 根:node_id 每次 Register 都会轮换,复用同一个
         # 注册表会把上一轮的僵尸行算进"节点数"断言里。
         export DAEDALUS_FLEET_DIR
@@ -650,7 +744,7 @@ case "$mode" in
         run_matrix "${hosts[@]}"
         ;;
     *)
-        sed -n '2,30p' "${BASH_SOURCE[0]}"
+        sed -n '2,42p' "${BASH_SOURCE[0]}"
         exit 2
         ;;
 esac
