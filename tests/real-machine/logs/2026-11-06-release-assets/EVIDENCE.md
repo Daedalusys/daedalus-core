@@ -139,3 +139,13 @@ $ gh api repos/Daedalusys/daedalus-core/git/ref/tags/743a0bf107a4
   (`tests/ci/release-asset-name-test.sh` 的 tag 用例 + 本地假 gh harness 的 tag 用例),
   没有真的打过 tag 出货。
 - `deploy-verify-kvm` 的红未在本计划内修复(见 core#88)。
+
+## 附记(2026-11-15):本文件里的 Release 链接已失效,证据仍以上表 sha256 为准
+
+2026-11-15 对 core 仓的 release 做了保留策略清理:31 个 release / 约 59GB 资产 → 只留最新 2 个
+(`1fb53c1e93bc`、`30fc589cd69e`)/ 约 5.3GB。上文 `<releases/tag/9683defbf631>` 那条链接、
+以及被引用的 `qcow2-9683defbf631.qcow2` / `iso-9683defbf631.iso` 都已删除。
+
+**这不影响本文件的证据效力**:判定"发布制品与本次 run 验证的是同一份"靠的是上表的
+字节数与 sha256,不是那个链接。清理理由:每次出货档都会新增一份 ~1.3GB qcow2(部分还带
+~1.5GB ISO),31 个累计 59GB,而镜像的实际供料来源是 `ghcr.io` 而不是 release 资产。
