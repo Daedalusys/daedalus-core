@@ -9,7 +9,8 @@
 # 四条(缺 key 的条目记 BLOCKED: no key,不算失败也不算通过)
 #   1. `daedalus --dry-run "<一句话>"` 能否在不依赖 key 的情况下产出翻译;
 #   2. watchdog:DAEDALUS_WATCHDOG_TIMEOUT_MS 生效 → rc=124 且无残留进程;
-#   3. Deno 权限边界:向 --allow-write 之外的路径写文件必须被 Deno 拒;
+#   3. Deno 权限边界:deno run 下向 --allow-write 之外的路径写文件必须被 Deno 以
+#      NotCapable 拒,且白名单内可写(正向对照;PermissionDenied 是 OS 拒绝,不算);
 #   4. 有 DAEDALUS_LLM_API_KEY 时才跑真 provider,并核对审计链仍 intact。
 #
 # 已知事实(实测口径,与计划的默认假设不同,如实记录):
@@ -67,18 +68,55 @@ else
     fi
 fi
 
-say "A11-3 · Deno 权限边界(manifest --allow-write 之外的路径必须被拒)"
-# 用 manifest 里的 --allow-write 集合跑 deno eval,尝试写 /etc/probe-copilot-denied。
-# 这是 Deno 真权限边界(manifest entrypoint 旗标就是生产用的那套)。
-DENO_TEST='try{Deno.writeTextFileSync("/etc/probe-copilot-denied","x");console.log("WROTE")}catch(e){console.log("DENIED:"+e.name)}'
-D3="$(gssh "deno eval --allow-write=/var/log/daedalus,/tmp,'\$HOME/.local/share/daedalus' '$DENO_TEST' 2>&1" 2>&1)"
-printf '%s\n' "$D3" | sed 's/^/      /' | tee -a "$DRIVER_LOG"
-D3B="$(gssh "deno eval --allow-write=/var/log/daedalus,/tmp,'\$HOME/.local/share/daedalus' 'try{Deno.writeTextFileSync(Deno.env.get(\"HOME\")+\"/.local/share/daedalus/probe-ok\",\"x\");console.log(\"WROTE_ALLOWED\")}catch(e){console.log(\"DENIED:\"+e.name)}' 2>&1" 2>&1)"
-printf '%s\n' "$D3B" | sed 's/^/      /' | tee -a "$DRIVER_LOG"
-if printf '%s' "$D3" | grep -q 'DENIED:PermissionDenied'; then
-    driver_verdict PASS "A11-3 Deno 拒写 --allow-write 之外的 /etc(白名单内路径可写,见上)"
+say "A11-3 · Deno 权限边界(deno run + manifest 的 --allow-write 集合)"
+# ★ 判据只能用 `deno run`,不能用 `deno eval`(本探针旧版写法,已证实是假绿):
+#   · `deno eval` 是"代码片段"入口,不施加 Deno 权限边界:白名单外的写入在那里只会
+#     撞 OS 的 EACCES(/etc 属 root),而 e.name 恰好也是 PermissionDenied。于是
+#     "看到 PermissionDenied 就算被 Deno 拦住了"证明的是文件系统权限,与 manifest
+#     旗标完全无关;且 2.9.x 起 `deno eval` 连 --allow-write 旗标都不接受(usage 错),
+#     那条命令根本没有跑起来过。
+#   · 真边界抛的是 NotCapable(Deno 2.x 的权限异常名),不是 PermissionDenied。
+#   · 必须配正向对照(白名单内可写),否则"全拒"也能让负对照通过。
+# 复现证据(同一台机、同一 deno):probe-copilot-sandbox.sh 的 S5 —— deno eval 加
+# --deny-write 仍写成功、query 白名单外返回 granted;deno run 才抛 NotCapable。
+GUEST_HOME="$(gssh 'echo $HOME' 2>&1 | tr -d '\r' | sed -n '/^\//p' | tail -n 1)"
+# 生产旗标只认 host 构造的那份(LAUNCH),不在这里另抄一份 allow-write 清单 ——
+# 抄一份就会与 manifest 漂移,而漂移后的探针测的是假旗标。
+ALLOW_WRITE="$(printf '%s\n' "$LAUNCH" | sed -n "s/.*--allow-write=\([^ ']*\).*/\1/p" | head -n 1)"
+if [ -z "$GUEST_HOME" ] || [ -z "$ALLOW_WRITE" ]; then
+    driver_verdict FAIL "A11-3 取不到 guest HOME 或 manifest 的 --allow-write(host 构造命令里没有该旗标,上限 120 字): ${LAUNCH:0:120}"
 else
-    driver_verdict FAIL "A11-3 Deno 未拒绝白名单外写入: $(printf '%s' "$D3" | head -1)"
+    # 生产侧的 $HOME 占位由 wrapper 在 exec 前展开;两边指的是同一个目录,这里用
+    # guest 的真实 HOME 展开同一位。
+    ALLOW_WRITE="${ALLOW_WRITE//\$HOME/"$GUEST_HOME"}"
+    A11_3_OUTSIDE="$GUEST_HOME/.daedalus-probe-outside"       # OS 层可写,但不在白名单
+    A11_3_INSIDE="$GUEST_HOME/.local/share/daedalus/probe-ok" # 白名单内(正向对照)
+    # 脚本经 base64 过 ssh:gssh 把 stdin 接成 /dev/null,heredoc 传不进去;
+    # 而把 JS 直接拼进远端命令行会被远程 shell 的引号规则撕碎。
+    A11_3_JS='const [outside, inside] = Deno.args;
+function attempt(p) {
+  try { Deno.writeTextFileSync(p, "x"); return "WROTE"; }
+  catch (e) { return "DENIED:" + e.name; }
+}
+console.log("outside=" + attempt(outside));
+console.log("inside=" + attempt(inside));'
+    A11_3_B64="$(printf '%s' "$A11_3_JS" | base64 | tr -d '\n')"
+    gssh "printf '%s' '$A11_3_B64' | base64 -d > /tmp/probe-a11-3.ts" >/dev/null 2>&1
+    gssh "mkdir -p '$GUEST_HOME/.local/share/daedalus' && rm -f '$A11_3_OUTSIDE' '$A11_3_INSIDE'" >/dev/null 2>&1
+    D3="$(gssh "deno run --no-prompt --allow-write='$ALLOW_WRITE' /tmp/probe-a11-3.ts '$A11_3_OUTSIDE' '$A11_3_INSIDE' 2>&1" 2>&1)"
+    printf '%s\n' "$D3" | sed 's/^/      /' | tee -a "$DRIVER_LOG"
+    A11_3_OUT_LINE="$(printf '%s\n' "$D3" | grep -m1 '^outside=' || true)"
+    A11_3_IN_LINE="$(printf '%s\n' "$D3" | grep -m1 '^inside=' || true)"
+    A11_3_LEFTOVER=0
+    gssh "test -e '$A11_3_OUTSIDE'" >/dev/null 2>&1 && A11_3_LEFTOVER=1
+    if [ "$A11_3_OUT_LINE" = "outside=DENIED:NotCapable" ] &&
+        [ "$A11_3_IN_LINE" = "inside=WROTE" ] &&
+        [ "$A11_3_LEFTOVER" -eq 0 ]; then
+        driver_verdict PASS "A11-3 manifest 的 --allow-write 是真边界:白名单外 NotCapable 且文件未生成,白名单内可写(正向对照)"
+    else
+        driver_verdict FAIL "A11-3 边界判据不成立:outside=[$A11_3_OUT_LINE] inside=[$A11_3_IN_LINE] 白名单外文件存在=$A11_3_LEFTOVER(NotCapable=Deno 拦;PermissionDenied=OS 拒,后者不算)"
+    fi
+    gssh "rm -f /tmp/probe-a11-3.ts '$A11_3_INSIDE'" >/dev/null 2>&1 || true
 fi
 
 say "A11-4 · 真 provider(有 key 才跑)"
