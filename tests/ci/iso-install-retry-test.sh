@@ -204,6 +204,159 @@ fi
 has '/run/daedalus-iso-install-summary.txt' "$VERIFY"
 st $? "接线 iso-verify.sh 装机失败时收集 summary(否则证据只活在 live 根里)"
 
+# ------------------------------------------------ 清盘判据:设备子目录挂载(识别) --
+# 线上形态:bootc 拉镜像时把 /dev/vda3 的子目录 /ostree/bootc/storage 挂到
+# /run/bootc/storage。findmnt -S /dev/vda 匹配不到(源是 vda3 不是整盘),lsblk 也不列
+# 这种"挂载根不是 /"的项 —— 两个老来源同时漏,清盘就判"干净"。这里把两个老来源桩成
+# "看不见"(正是线上行为),让断言只压在 mountinfo 这条新来源上,顺带钉住前缀歧义红线。
+mkdir -p "$WORK/blind"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$WORK/blind/findmnt"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$WORK/blind/lsblk"
+chmod +x "$WORK/blind/findmnt" "$WORK/blind/lsblk"
+
+# 桩 mountinfo:第 5 列是挂载点,`-` 之后第二列是源设备。
+mi="$WORK/mountinfo.subvol"
+cat >"$mi" <<'EOF'
+36 35 98:0 / / rw - xfs /dev/vda rw
+37 36 98:1 /ostree/bootc/storage /run/bootc/storage rw - xfs /dev/vda3 rw
+38 36 98:2 / /mnt/other rw - xfs /dev/vdb3 rw
+39 36 98:3 / /mnt/ten rw - xfs /dev/vda10 rw
+EOF
+out="$(PATH="$WORK/blind:$PATH" DAEDALUS_MOUNTINFO="$mi" bash -c "
+  DAEDALUS_ISO_AUTOINSTALL_LIB=1 source '$INST'
+  DEV=/dev/vda
+  target_mountpoints")"
+[ "$(printf '%s\n' "$out" | grep -cx '/run/bootc/storage')" = 1 ]
+st $? "清盘判据 设备子目录挂载被看见(/run/bootc/storage;实得 [$(printf '%s' "$out" | tr '\n' ' ')])"
+[ "$(printf '%s\n' "$out" | grep -cx '/')" = 1 ]
+st $? "清盘判据 整盘挂载仍被看见(/)"
+[ "$(printf '%s\n' "$out" | grep -cx '/mnt/other')" = 0 ]
+st $? "清盘判据 前缀歧义:/dev/vdb3 不得命中"
+# 目标盘恒为整盘(主流程强制 lsblk TYPE=disk),所以 vda10 就是它的第 10 个分区:
+# 漏掉它 = 残留挂载没清 = 又回到本次要修的那个故障,必须命中。
+[ "$(printf '%s\n' "$out" | grep -cx '/mnt/ten')" = 1 ]
+st $? "清盘判据 两位数字分区 /dev/vda10 必须命中(它是 vda 的真分区)"
+
+# 设备命名规则不同:nvme0n1 的分区带 p(nvme0n1p3)。只认一位数字后缀的话这类盘全漏。
+mi_nvme="$WORK/mountinfo.nvme"
+cat >"$mi_nvme" <<'EOF'
+40 36 259:0 / / rw - xfs /dev/nvme0n1 rw
+41 36 259:3 /ostree/bootc/storage /run/bootc/storage rw - xfs /dev/nvme0n1p3 rw
+42 36 259:5 /srv/data /mnt/nvme-bracket rw - xfs /dev/nvme0n1p4[/srv/data] rw
+43 36 259:4 / /mnt/nvme-other rw - xfs /dev/nvme0n2p3 rw
+EOF
+out="$(PATH="$WORK/blind:$PATH" DAEDALUS_MOUNTINFO="$mi_nvme" bash -c "
+  DAEDALUS_ISO_AUTOINSTALL_LIB=1 source '$INST'
+  DEV=/dev/nvme0n1
+  target_mountpoints")"
+[ "$(printf '%s\n' "$out" | grep -cx '/run/bootc/storage')" = 1 ]
+st $? "清盘判据 NVMe 分区子目录挂载被看见(/dev/nvme0n1p3;实得 [$(printf '%s' "$out" | tr '\n' ' ')])"
+[ "$(printf '%s\n' "$out" | grep -cx '/')" = 1 ]
+st $? "清盘判据 NVMe 整盘挂载仍被看见(/)"
+[ "$(printf '%s\n' "$out" | grep -cx '/mnt/nvme-bracket')" = 1 ]
+st $? "清盘判据 NVMe 分区 findmnt 风格「设备[子目录]」被看见(/dev/nvme0n1p4[/srv/data])"
+[ "$(printf '%s\n' "$out" | grep -cx '/mnt/nvme-other')" = 0 ]
+st $? "清盘判据 前缀歧义:/dev/nvme0n2p3 不得命中"
+
+# 读不到 mountinfo 时不得"没有挂载点"——那会把清盘退化成"看不见就当干净"(假绿)。
+out="$(PATH="$WORK/blind:$PATH" DAEDALUS_MOUNTINFO="$WORK/mountinfo.不存在" bash -c "
+  DAEDALUS_ISO_AUTOINSTALL_LIB=1 source '$INST'
+  DEV=/dev/vda
+  target_mountpoints")"
+[ -n "$(printf '%s' "$out" | tr -d '[:space:]')" ]
+st $? "清盘判据 mountinfo 读不到时不返回空(否则清盘失明还算干净)"
+
+# ------------------------------------- 清盘判据:端到端复现线上那次失败(行为) --
+# 假 bootc 除按 $BOOTC_PLAN 消费 rc 外,还模拟真实 bootc 的前置判断:目标盘上还有残留
+# 挂载就拒绝落盘(真实报错 "Device /dev/vda is mounted")。清盘没把子目录挂载挂掉时,
+# 第二个源就根本轮不到成功 —— 这正是线上那次红(第 1 个源超时后卡死在清盘)。
+mkdir -p "$WORK/e2ebin"
+cat >"$WORK/e2ebin/bootc" <<'FAKE'
+#!/usr/bin/env bash
+mi="${DAEDALUS_MOUNTINFO:?端到端假 bootc 需要桩 mountinfo}"
+if awk '$5 == "/run/bootc/storage" { found = 1 } END { exit !found }' "$mi"; then
+    printf 'error: Installing to disk: Creating rootfs: Device /dev/vda is mounted\n' >&2
+    exit 1
+fi
+plan="${BOOTC_PLAN:?假 bootc 需要 BOOTC_PLAN}"
+line="$(head -1 "$plan" 2>/dev/null)"
+[ -n "$line" ] || { printf 'fake bootc: plan 已耗尽\n' >&2; exit 98; }
+tail -n +2 "$plan" >"$plan.next" && mv "$plan.next" "$plan"
+msg="${line#*|}"
+case "$msg" in ''|-) : ;; *) printf '%s\n' "$msg" >&2 ;; esac
+exit "${line%%|*}"
+FAKE
+chmod +x "$WORK/e2ebin/bootc"
+
+# 与 lib_eval 相同,但**保留真实的 umount_target_disk** —— 清盘判据本身就是要验的东西,
+# 桩掉它等于把被测代码换成桩。umount/swapoff 桩成"真的把挂载从桩 mountinfo 里删掉"
+# (内核在卸载后就是这么做的),让"清理前 / 清理后"两次复查看到同一份会变化的状态。
+lib_eval_real_umount() {
+    (
+        set +u
+        export PATH="$WORK/blind:$WORK/e2ebin:$PATH"
+        export DAEDALUS_ISO_AUTOINSTALL_LIB=1
+        # shellcheck disable=SC1090
+        source "$INST" || exit 90
+        set +u
+        TTY="${LIB_TTY:?}"
+        umount() {
+            local a mp=""
+            for a in "$@"; do case "$a" in -*) ;; *) mp="$a" ;; esac; done
+            printf 'umount %s\n' "$mp" >>"${LIB_UMOUNT_LOG:?}"
+            [ -n "$mp" ] || return 0
+            awk -v mp="$mp" '$5 != mp' "$MOUNTINFO" >"$MOUNTINFO.next" &&
+                mv "$MOUNTINFO.next" "$MOUNTINFO"
+        }
+        swapoff() { return 0; }
+        sleep() { :; }
+        eval "$1"
+    )
+}
+
+run_install_e2e() { # run_install_e2e <标签> <桩 mountinfo> <plan>
+    local tag="$1" mi="$2" plan="$3"
+    local sum="$WORK/summary.$tag" ulog="$WORK/umount.$tag"
+    local log="$WORK/install.$tag" tty="$WORK/tty.$tag"
+    : >"$sum"; : >"$ulog"
+    DAEDALUS_MOUNTINFO="$mi" BOOTC_PLAN="$plan" LIB_TTY="$tty" LIB_UMOUNT_LOG="$ulog" \
+    lib_eval_real_umount "
+        DEV=/dev/vda
+        IMGREF='ghcr.io/daedalusys/daedalus-os:test'
+        SRC_REF='ghcr.1ms.run/daedalusys/daedalus-os:test'
+        HTTP_PROXY_URL=''
+        SRC_TIMEOUT=900
+        RETRIES=1
+        BACKOFF=1
+        BACKOFF_MAX=60
+        INSTALL_BUDGET=2100
+        INSTALL_LOG='$log'
+        INSTALL_SUMMARY='$sum'
+        trap 'printf \"OUTCOME installed=%s attempts=%s\n\" \"\${installed:-?}\" \"\${attempts:-?}\"' EXIT
+        install_all_sources
+    "
+}
+
+# 第 1 个源超时(rc=124)且目标盘上留着 vda3 的子目录挂载 → 清盘必须真的把它挂掉,
+# 让第 2 个源跑起来并成功。修之前清盘看不见它,第二个源一次都跑不到(线上原样)。
+e2e_mi="$WORK/mountinfo.e2e"
+cat >"$e2e_mi" <<'EOF'
+36 35 98:0 / / rw - xfs /dev/vda rw
+37 36 98:1 /ostree/bootc/storage /run/bootc/storage rw - xfs /dev/vda3 rw
+38 36 98:2 / /mnt/other rw - xfs /dev/vdb3 rw
+EOF
+printf '%s\n' '124|-' '0|-' >"$WORK/plan.e2e"
+out="$(run_install_e2e e2e "$e2e_mi" "$WORK/plan.e2e")"; rc=$?
+contains "$out" 'installed=1 attempts=2'
+st $? "端到端 第一个源超时后清盘 → 第二个源跑起来并成功(期望 installed=1 attempts=2;实得 $(printf '%s' "$out" | tr '\n' ' '))"
+[ "$rc" -eq 0 ]; st $? "端到端 换源后成功正常返回(rc=$rc)"
+[ "$(grep -cx 'umount /run/bootc/storage' "$WORK/umount.e2e" 2>/dev/null)" = 1 ]
+st $? "端到端 子目录挂载被真正 umount(umount 记录:$(printf '%s' "$(tr '\n' ' ' <"$WORK/umount.e2e" 2>/dev/null)"))"
+[ "$(grep -cx 'umount /mnt/other' "$WORK/umount.e2e" 2>/dev/null)" = 0 ]
+st $? "端到端 前缀歧义盘 /dev/vdb3 的挂载不得被 umount"
+[ "$(nlines "$WORK/summary.e2e")" = 2 ]
+st $? "端到端 摘要行数 == attempts(2;实得 $(nlines "$WORK/summary.e2e"))"
+
 echo
 printf -- '---------------- %d 条通过 / %d 条失败 ----------------\n' "$pass_n" "$fail_n"
 if [ "$fail_n" -eq 0 ]; then
