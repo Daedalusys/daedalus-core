@@ -473,10 +473,11 @@ iso *args:
     #!/usr/bin/env bash
     set -euo pipefail
     # 把脚本读的开关原样透传下去(sudo 会清环境);未设置的不传,让脚本用自己的默认值。
-    # VERIFY_IMAGE_DIGEST 漏传会让加速源被静默禁用,故两个 digest/builder 开关也在列。
+    # 装机拉取只走代理(ISO_INSTALL_PROXY):外部加速镜像已退役,这里不再透传
+    # VERIFY_INSTALL_MIRROR —— 脚本读了也没用,留着只会让人以为它还能开。
     env_args=()
     for v in VERIFY_WORK VERIFY_IMAGE VERIFY_IMAGE_DIGEST VERIFY_BUILDER_IMAGE \
-             VERIFY_INSTALL_MIRROR VERIFY_REQUIRE_INSTALL VERIFY_MEM VERIFY_BOOT_TIMEOUT \
+             VERIFY_REQUIRE_INSTALL VERIFY_MEM VERIFY_BOOT_TIMEOUT \
              VERIFY_INSTALL_TIMEOUT VERIFY_SSH_PORT VERIFY_DISK_SIZE; do
         [ -n "${!v:-}" ] && env_args+=("$v=${!v}")
     done

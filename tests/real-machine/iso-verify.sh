@@ -41,12 +41,10 @@
 # 环境变量
 #   VERIFY_WORK     工作目录(默认:$SUDO_USER 家目录下 daedalus-iso-verify)
 #   VERIFY_IMAGE    基准镜像(默认 ghcr.io/daedalusys/daedalus-os:latest)
-#   VERIFY_INSTALL_MIRROR  guest 装机的**安装源加速镜像**(可选,形如 ghcr.1ms.run):
-#                   guest 要从 registry 拉 1.26GB,而从自托管 runner 所在网络到 ghcr.io
-#                   实测只有 ~60KB/s(同一台机 codeload.github.com 有 16MB/s),那是路径
-#                   问题不是代码问题。加速镜像只当**传输通道**:源 ref 按 manifest digest
-#                   钉死(逐层校验内容),装好系统的 target ref 仍是规范 ghcr 地址。
-#                   加速源不可用时自动回落直连。留空 = 不启用。
+#   VERIFY_INSTALL_MIRROR  **已退役**,不再支持。外部加速镜像(ghcr.1ms.run)本身是单点:
+#                   blob 会被它重定向到另一个 CDN 主机,实测 TLS 握手超时或整段挂死,
+#                   一挂就是整腿红(core#138,近 5 次 run 红 4 次)。guest 装机改走代理
+#                   (见 ISO_INSTALL_PROXY),代理不可用时行为就是直连 + 超时红,没有第三方。
 #   VERIFY_MEM      引导内存 MiB(默认 8192;装机时要把镜像拉进 live 环境,4G 偏紧)
 #   VERIFY_BOOT_TIMEOUT   等 live 系统可 SSH 的秒数(默认 600)
 #   VERIFY_INSTALL_TIMEOUT 等装机完成的秒数(默认 2400)
@@ -65,7 +63,6 @@
 set -uo pipefail
 
 IMAGE="${VERIFY_IMAGE:-ghcr.io/daedalusys/daedalus-os:latest}"
-INSTALL_MIRROR="${VERIFY_INSTALL_MIRROR:-}"
 # 拉取代理(可选)。优先级:仓库 secret(workflow 注入 ISO_INSTALL_PROXY)>
 # runner 自己环境里的 VERIFY_INSTALL_PROXY。地址**从不打印**:
 #   - guest 侧:派生后经 QEMU SMBIOS(type=1 serial)在本次引导里递入 ——
@@ -195,31 +192,14 @@ cp -f "$SCRIPT_DIR/iso-autoinstall.sh" "$SCRIPT_DIR/iso-autoinstall.service" "$V
 podman run --rm "$IMAGE" cat /etc/os-release > "$VM/os-release.expected" 2>/dev/null \
     || { echo "读基准镜像的 os-release 失败" >&2; exit 2; }
 
-# 安装源加速镜像(可选)。guest 装机要从 registry 拉 1.26GB,而自托管 runner 所在网络到
-# ghcr.io 实测只有 ~60KB/s —— 同一台机 codeload.github.com 有 16MB/s,所以这是「到 ghcr
-# 这条路径」的问题,不是本机链路的问题,也不是等一等就会恢复的抖动。
-# 加速镜像只当**传输通道**:源 ref 按 manifest digest 钉死,containers/image 会逐层校验
-# 内容;装好系统的 target ref 仍是规范地址(更新通道不能被第三方接管)。
-INSTALL_SOURCE_REF=""
+# 装机拉取通道:**只走代理**(外部加速镜像已退役,见文件头的 VERIFY_INSTALL_MIRROR 说明)。
+# guest 侧从 registry 拉 1.26GB,直连只有 ~60KB/s(宿主的 codeload 有 16MB/s,所以这是
+# 「到 ghcr 这条路」的问题);代理地址经 SMBIOS 递进 guest,不在宿主 export ——
+# podman build 会把 127.0.0.1 形态的代理原样递进构建容器,dnf 会连不上。
 if [ -n "$GUEST_PROXY" ]; then
-    info "guest 拉取走代理(地址不打印;加速镜像本次不用)"
-elif [ -n "$INSTALL_MIRROR" ]; then
-    case "$IMAGE" in
-        localhost/*|./*|/*) warn "本地镜像 $IMAGE 不走加速源,忽略 VERIFY_INSTALL_MIRROR" ;;
-        *)
-            _rest="${IMAGE#*/}"; _repo="${_rest%%:*}"; _repo="${_repo%%@*}"
-            _digest="${VERIFY_IMAGE_DIGEST:-}"
-            if [ -z "$_digest" ] && [ "$(type -t artifact_fp_remote_digest 2>/dev/null)" = function ]; then
-                _digest="$(artifact_fp_remote_digest "$IMAGE" 2>/dev/null || true)"
-            fi
-            if [ -n "$_digest" ] && [ -n "$_repo" ]; then
-                INSTALL_SOURCE_REF="${INSTALL_MIRROR}/${_repo}@${_digest}"
-                info "安装源加速: $INSTALL_SOURCE_REF(digest 钉死;target 仍是 $IMAGE)"
-            else
-                warn "拿不到 $IMAGE 的 manifest digest → 不启用加速源(回落直连)"
-            fi
-            ;;
-    esac
+    info "guest 拉取走代理(地址不打印)"
+else
+    warn "未配置装机代理(ISO_INSTALL_PROXY 为空):guest 将直连 ghcr.io,大概率 900s 内装不完"
 fi
 
 cat > "$VM/Containerfile" <<EOF
@@ -249,7 +229,6 @@ RUN set -eux; \\
     printf 'label: "DAEDALUS_ISO"\\nkernel_args:\\n  - "console=ttyS0,115200n8"\\n  - "daedalus.install.disk=/dev/vda"\\ngrub2:\\n  default: 0\\n  timeout: 3\\n' \\
         > /usr/lib/image-builder/bootc/iso.yaml; \\
     printf 'DAEDALUS_INSTALL_IMGREF=%s\\n' "${IMAGE}" > /etc/daedalus/iso-install.conf; \\
-    printf 'DAEDALUS_INSTALL_SOURCE_IMGREF=%s\\n' "${INSTALL_SOURCE_REF}" >> /etc/daedalus/iso-install.conf; \\
     install -m 0755 /tmp/iso-autoinstall.sh /usr/local/bin/daedalus-iso-autoinstall; \\
     install -m 0644 /tmp/iso-autoinstall.service /usr/lib/systemd/system/daedalus-iso-autoinstall.service; \\
     ln -sf /usr/lib/systemd/system/daedalus-iso-autoinstall.service \\
