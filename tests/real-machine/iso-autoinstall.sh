@@ -15,17 +15,20 @@
 #     装好的系统里同一份文件不会被再次触发。
 #
 # 失败语义(为什么不是「一次失败整腿红」)
-#   拉 1.5G 镜像时第三方加速源偶发 TLS 超时,一次抖动就把整条门禁判红,而同一个 commit
-#   重跑又绿 —— 那是外因,不是装机逻辑缺陷。所以:
+#   拉 1.3G 镜像时网络偶发 TLS 超时,一次抖动就把整条门禁判红,而同一个 commit 重跑又绿
+#   —— 那是外因,不是装机逻辑缺陷。所以:
 #     - 瞬时网络失败(见 is_transient_log)同源退避重试,次数由 DAEDALUS_INSTALL_RETRIES 定;
 #     - 失败分三类(transient / timeout / fatal),fatal **不重试**:用重试掩盖真缺陷更贵;
 #     - 全程有总预算 DAEDALUS_INSTALL_BUDGET,且必须严格小于外层 iso-verify.sh 的
 #       INSTALL_TIMEOUT —— 否则外层会把"预算耗尽"笼统报成 TIMEOUT,那正是要消灭的假因。
+#   CI 里现在只有**一个**源(规范 ref,经代理拉取);外部加速镜像已退役(core#138)。
 #
 # /etc/daedalus/iso-install.conf 的键
-#   DAEDALUS_INSTALL_IMGREF           规范 ref:既是兜底安装源,也是装好系统的 target
-#                                    (target 决定后续更新通道,不能指向加速镜像)
-#   DAEDALUS_INSTALL_SOURCE_IMGREF    可选:优先安装源(加速镜像),按 manifest digest 钉死
+#   DAEDALUS_INSTALL_IMGREF           规范 ref:既是安装源,也是装好系统的 target
+#                                    (target 决定后续更新通道)
+#   DAEDALUS_INSTALL_SOURCE_IMGREF    可选:**CI 不再写这个键**(加速镜像已退役)。
+#                                    脚本仍支持"另一个源优先试、失败回落规范 ref",
+#                                    留给本地/诊断用;需要时按 manifest digest 钉死。
 #   DAEDALUS_INSTALL_SOURCE_TIMEOUT   可选:单个源的装机时限(默认 900 秒)
 #   DAEDALUS_INSTALL_RETRIES          可选:同一个源瞬时失败的重试次数(默认 1;每源共 1+N 次)
 #   DAEDALUS_INSTALL_BUDGET           可选:全部尝试的总预算秒数(默认 2100,必须 < 外层 2400)

@@ -192,9 +192,16 @@ if [ -f "$VERIFY" ]; then
     # 规则9:段二必须是**默认硬判据**,而且出货档 workflow 也要显式写死 ——
     # 否则装机链(单元 / kernel args / dmsquash-live)任何一处退化都会被 LIVE_OK 掩盖成绿。
     hasre 'VERIFY_REQUIRE_INSTALL:-1' "$VERIFY"; st $? "规则9 脚本默认要求装完能引导(不是可选)"
-    # 规则11:加速源是**传输通道**,不是信任锚 —— 写进 payload 的源 ref 必须按 digest 钉死
-    # (containers/image 逐层校验),否则加速镜像就能决定我们装进去的是什么。
-    hasre 'VERIFY_INSTALL_MIRROR' "$VERIFY"; st $? "规则11 加速源可配(VERIFY_INSTALL_MIRROR)"
+    # 规则11(已改):外部加速镜像(ghcr.1ms.run)**退役** —— guest 拉取只走代理一条路。
+    # 它本身是单点:blob 会被重定向到另一个 CDN 主机,实测 TLS 握手超时或整段挂死,
+    # 一挂就是整腿红(core#138:近 5 次 run 红 4 次)。这里守**不许把它接回去**。
+    # 只看**非注释行**:注释里写明"已退役"是对的,不能因为提到名字就判红。
+    verify_code="$(grep -vE '^[[:space:]]*#' "$VERIFY" 2>/dev/null)"
+    if printf '%s\n' "$verify_code" | grep -qE 'VERIFY_INSTALL_MIRROR|INSTALL_MIRROR=|INSTALL_SOURCE_REF='; then
+        st 1 "规则11 iso-verify.sh 不得再读/再算加速镜像(VERIFY_INSTALL_MIRROR / INSTALL_MIRROR / INSTALL_SOURCE_REF)"
+    else
+        st 0 "规则11 iso-verify.sh 里没有加速镜像的可执行落点"
+    fi
     has 'ISO_INSTALL_PROXY' "$VERIFY"; st $? "规则15 iso-verify.sh 读 workflow 注入的代理"
     has 'VERIFY_INSTALL_PROXY:-}' "$VERIFY"; st $? "规则15 runner 环境可兜底;默认空(不配代理时行为不变)"
     # 代理只对「guest 内装机」有意义,宿主构建容器**绝不许**拿到它:
@@ -234,11 +241,18 @@ if [ -f "$VERIFY" ]; then
             st 0 "规则15 workflow 里没有字面代理地址"
         fi
     fi
-    hasre 'INSTALL_SOURCE_REF=.*@' "$VERIFY"
-    st $? "规则11 写进 payload 的加速源按 digest 钉死(@sha256:...)"
     if [ -f "$REPO/.github/workflows/build.yml" ]; then
-        hasre 'VERIFY_INSTALL_MIRROR' "$REPO/.github/workflows/build.yml"
-        st $? "规则11 出货档 workflow 显式写明加速源(可审)"
+        wf_code="$(grep -vE '^[[:space:]]*#' "$REPO/.github/workflows/build.yml" 2>/dev/null)"
+        if printf '%s\n' "$wf_code" | grep -qE 'VERIFY_INSTALL_MIRROR'; then
+            st 1 "规则11 出货档 workflow 不得再设 VERIFY_INSTALL_MIRROR(加速源退役)"
+        else
+            st 0 "规则11 出货档 workflow 不再配置加速源"
+        fi
+        if printf '%s\n' "$wf_code" | grep -qE '1ms\.run|dockerproxy|mirror\.'; then
+            st 1 "规则11 出货档 workflow 的可执行行里不得出现第三方加速器地址"
+        else
+            st 0 "规则11 出货档 workflow 的可执行行里没有第三方加速器地址"
+        fi
     else
         st 1 "规则11 出货档 workflow 存在:$REPO/.github/workflows/build.yml"
     fi
