@@ -232,8 +232,31 @@ st $? "清盘判据 设备子目录挂载被看见(/run/bootc/storage;实得 [$(
 st $? "清盘判据 整盘挂载仍被看见(/)"
 [ "$(printf '%s\n' "$out" | grep -cx '/mnt/other')" = 0 ]
 st $? "清盘判据 前缀歧义:/dev/vdb3 不得命中"
-[ "$(printf '%s\n' "$out" | grep -cx '/mnt/ten')" = 0 ]
-st $? "清盘判据 前缀歧义:/dev/vda10 不得命中"
+# 目标盘恒为整盘(主流程强制 lsblk TYPE=disk),所以 vda10 就是它的第 10 个分区:
+# 漏掉它 = 残留挂载没清 = 又回到本次要修的那个故障,必须命中。
+[ "$(printf '%s\n' "$out" | grep -cx '/mnt/ten')" = 1 ]
+st $? "清盘判据 两位数字分区 /dev/vda10 必须命中(它是 vda 的真分区)"
+
+# 设备命名规则不同:nvme0n1 的分区带 p(nvme0n1p3)。只认一位数字后缀的话这类盘全漏。
+mi_nvme="$WORK/mountinfo.nvme"
+cat >"$mi_nvme" <<'EOF'
+40 36 259:0 / / rw - xfs /dev/nvme0n1 rw
+41 36 259:3 /ostree/bootc/storage /run/bootc/storage rw - xfs /dev/nvme0n1p3 rw
+42 36 259:5 /srv/data /mnt/nvme-bracket rw - xfs /dev/nvme0n1p4[/srv/data] rw
+43 36 259:4 / /mnt/nvme-other rw - xfs /dev/nvme0n2p3 rw
+EOF
+out="$(PATH="$WORK/blind:$PATH" DAEDALUS_MOUNTINFO="$mi_nvme" bash -c "
+  DAEDALUS_ISO_AUTOINSTALL_LIB=1 source '$INST'
+  DEV=/dev/nvme0n1
+  target_mountpoints")"
+[ "$(printf '%s\n' "$out" | grep -cx '/run/bootc/storage')" = 1 ]
+st $? "清盘判据 NVMe 分区子目录挂载被看见(/dev/nvme0n1p3;实得 [$(printf '%s' "$out" | tr '\n' ' ')])"
+[ "$(printf '%s\n' "$out" | grep -cx '/')" = 1 ]
+st $? "清盘判据 NVMe 整盘挂载仍被看见(/)"
+[ "$(printf '%s\n' "$out" | grep -cx '/mnt/nvme-bracket')" = 1 ]
+st $? "清盘判据 NVMe 分区 findmnt 风格「设备[子目录]」被看见(/dev/nvme0n1p4[/srv/data])"
+[ "$(printf '%s\n' "$out" | grep -cx '/mnt/nvme-other')" = 0 ]
+st $? "清盘判据 前缀歧义:/dev/nvme0n2p3 不得命中"
 
 # 读不到 mountinfo 时不得"没有挂载点"——那会把清盘退化成"看不见就当干净"(假绿)。
 out="$(PATH="$WORK/blind:$PATH" DAEDALUS_MOUNTINFO="$WORK/mountinfo.不存在" bash -c "

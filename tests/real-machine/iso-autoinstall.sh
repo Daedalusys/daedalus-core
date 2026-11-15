@@ -115,15 +115,21 @@ target_mountpoints() {
       # mountinfo 的可选字段(shared:/master:/propagate_from:)会让 `-` 分隔符的位置浮动,
       # 所以源设备按「找到 `-` 之后的第二个字段」取,不写死列号。
       awk -v dev="$DEV" '
+        # 分区后缀按**设备命名规则**判(不看 lsblk):末位是数字的设备(nvme0n1 /
+        # mmcblk0 / loop0)分区带 p(nvme0n1p3),末位不是数字的(vda / sda)直接拼数字
+        # (vda3);数字位数不限 —— vda10 就是 vda 的第 10 个分区,漏了它等于漏清挂载。
+        # 末尾再允许 findmnt 风格的「设备[子目录]」。
+        BEGIN {
+          pat = (substr(dev, length(dev), 1) ~ /[0-9]/) \
+                ? "^(p?[0-9]+)?(\\[.*\\])?$" : "^[0-9]*(\\[.*\\])?$"
+        }
         { mp = $5; src = ""
           for (i = 7; i <= NF; i++) if ($i == "-") { src = $(i + 2); break }
           if (src == "") next
+          # 前缀不同的设备直接排除(/dev/vdb3、/dev/nvme0n2p3 不得命中):前缀拼接
+          # 歧义会把别的设备当目标盘清掉,这是红线。
           if (substr(src, 1, length(dev)) != dev) next
-          tail = substr(src, length(dev) + 1)
-          # 精确前缀,只认这几种:整盘本身、一位数字的分区(vda3)、findmnt 风格的
-          # "设备[子目录]"。`$DEV` 后面多一位数字的一律不算(/dev/vda 不得命中
-          # /dev/vda10、/dev/vdb3):前缀拼接歧义会把别的设备当目标盘清掉,这是红线。
-          if (tail == "" || tail ~ /^[0-9]$/ || tail ~ /^[0-9]?\[.*\]$/) print mp
+          if (substr(src, length(dev) + 1) ~ pat) print mp
         }' "$MOUNTINFO" 2>/dev/null
     } | while read -r mp; do
         case "$mp" in /*) printf '%s\n' "$mp" ;; esac
