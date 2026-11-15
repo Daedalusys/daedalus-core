@@ -13,6 +13,7 @@
 //	daedalus-host verify <id> [-dir <插件目录>]
 //	daedalus-host run-plugin <id> [-dir <插件目录>] [-- 追加参数...]
 //	daedalus-host render-unit <id> [-dir <插件目录>]
+//	daedalus-host bootc {status|switch <imgref> --digest sha256:<hex>|rollback} [--yes]
 //
 // 插件目录默认 /opt/daedalus/plugins(镜像内构建期内建),可被环境变量
 // DAEDALUS_PLUGIN_DIR 或 -dir 旗标覆盖(旗标优先)。
@@ -99,6 +100,12 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	case "plan":
 		// 跨机 Plan 的提交/查询/人在环恢复(审计同理按子命令落)。
 		return cmdPlan(stdout, stderr, args)
+	case "bootc":
+		// 本机 bootc 部署管理(只读状态 / 切换 / 回滚);写操作要 --yes,语义见 bootc.go。
+		// 特权动作与 rescue 同一条纪律:直接做、但必须留审计(拒绝也留痕)。
+		code := cmdBootc(stdout, stderr, args)
+		hostAudit("host_bootc", pluginDir, bootcAuditTarget(args), code)
+		return code
 	case "inspect", "verify", "run-plugin", "render-unit":
 		id, tail, err := parseIDArgs(args)
 		if err != nil {
