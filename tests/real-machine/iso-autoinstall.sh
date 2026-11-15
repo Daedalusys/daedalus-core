@@ -92,14 +92,39 @@ with_transport() {
     esac
 }
 
+# 挂载表。真机恒为 /proc/self/mountinfo;变量只为让行为门禁能用桩文件驱动。
+MOUNTINFO="${DAEDALUS_MOUNTINFO:-/proc/self/mountinfo}"
+
 # target_mountpoints —— 列出 $DEV 及其分区上的挂载点。
 #
-# 两个来源必须取并集:`findmnt -S $DEV` 只匹配**整盘**挂载,分区挂载只有 lsblk 看得见;
+# 三个来源必须取并集:`findmnt -S $DEV` 只匹配**整盘**挂载,分区挂载只有 lsblk 看得见,
+# 而「设备的**子目录**被挂载」两个来源都看不见(见下面 awk 注释)。
 # 只用其中一个,"检查通过"就可能只是"没看见"。
 # 非绝对路径的条目(`[SWAP]` 这类渲染占位符)不是挂载点,跳过。
 target_mountpoints() {
+    # 读不到 mountinfo 时**绝不**返回"没有挂载点":那会把清盘退化成"看不见就当干净"。
+    # 把 $DEV 自己当成挂载点交回去 —— 卸载会失败、现场大声报错,好过静默放行。
+    [ -r "$MOUNTINFO" ] || { printf '%s\n' "$DEV"; return 0; }
     { findmnt -rno TARGET -S "$DEV" 2>/dev/null
       lsblk -rno MOUNTPOINT "$DEV" 2>/dev/null
+      # 设备**子目录**挂载:bootc 拉镜像时把 /dev/vda3 的 /ostree/bootc/storage 挂到
+      # /run/bootc/storage。这种形态 findmnt -S "$DEV" 匹配不到(源是 vda3 不是整盘),
+      # lsblk 也不列挂载点(挂载根不是 /)。漏了它的后果是实测过的:第一个源超时后清盘
+      # 判"干净"→ 复查又判"还挂着"→ 直接放弃,第二个源一次都没跑。
+      #
+      # mountinfo 的可选字段(shared:/master:/propagate_from:)会让 `-` 分隔符的位置浮动,
+      # 所以源设备按「找到 `-` 之后的第二个字段」取,不写死列号。
+      awk -v dev="$DEV" '
+        { mp = $5; src = ""
+          for (i = 7; i <= NF; i++) if ($i == "-") { src = $(i + 2); break }
+          if (src == "") next
+          if (substr(src, 1, length(dev)) != dev) next
+          tail = substr(src, length(dev) + 1)
+          # 精确前缀,只认这几种:整盘本身、一位数字的分区(vda3)、findmnt 风格的
+          # "设备[子目录]"。`$DEV` 后面多一位数字的一律不算(/dev/vda 不得命中
+          # /dev/vda10、/dev/vdb3):前缀拼接歧义会把别的设备当目标盘清掉,这是红线。
+          if (tail == "" || tail ~ /^[0-9]$/ || tail ~ /^[0-9]?\[.*\]$/) print mp
+        }' "$MOUNTINFO" 2>/dev/null
     } | while read -r mp; do
         case "$mp" in /*) printf '%s\n' "$mp" ;; esac
     done | sort -u
