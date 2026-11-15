@@ -67,10 +67,15 @@ set -uo pipefail
 IMAGE="${VERIFY_IMAGE:-ghcr.io/daedalusys/daedalus-os:latest}"
 INSTALL_MIRROR="${VERIFY_INSTALL_MIRROR:-}"
 # 拉取代理(可选)。优先级:仓库 secret(workflow 注入 ISO_INSTALL_PROXY)>
-# runner 自己环境里的 VERIFY_INSTALL_PROXY。地址**从不打印**,只用于拉取:
-#   - 宿主侧:脚本内 export 给 podman(pull/build),不污染 workflow 其它步骤;
+# runner 自己环境里的 VERIFY_INSTALL_PROXY。地址**从不打印**:
 #   - guest 侧:派生后经 QEMU SMBIOS(type=1 serial)在本次引导里递入 ——
 #     **不写进 payload**,因为 payload 会烘成 ISO 并晋级成 Release 资产。
+#   - 宿主侧:**不 export**(见下)。代理地址几乎总是 127.0.0.1 形态,而 podman 会把
+#     代理环境变量原样递进构建容器的 RUN 步骤 —— 容器里的 127.0.0.1 是容器自己,
+#     于是 `dnf` 报 `Failed to connect to 127.0.0.1 port 7890`、payload 镜像派生直接失败
+#     (run 43664603334 的实测)。宿主到 ghcr.io 本来就是通的(与 guest 里 60KB/s 那条路
+#     不是同一条),构建容器内走直连才是对的;`podman build` 另加 --http-proxy=false 兜底
+#     (runner 自己的环境里若还留着代理变量,也不会漏进构建)。
 # 空 ⇒ 不启用代理,行为与以前完全一致。
 INSTALL_PROXY="${ISO_INSTALL_PROXY:-${VERIFY_INSTALL_PROXY:-}}"
 GUEST_PROXY=""
@@ -78,10 +83,7 @@ if [ -n "$INSTALL_PROXY" ]; then
     case "$INSTALL_PROXY" in
         *@*) die "代理地址不得携带凭据(它会进串口日志与 artifact)" ;;
     esac
-    export HTTPS_PROXY="$INSTALL_PROXY"
-    export HTTP_PROXY="$INSTALL_PROXY"
-    export NO_PROXY="localhost,127.0.0.1"
-    info "拉取走代理(地址不打印;加速镜像本次不用)"
+    info "guest 拉取走代理(地址不打印;加速镜像本次不用;宿主构建容器不注入代理)"
     GUEST_PROXY="$(printf '%s' "$INSTALL_PROXY" | sed 's#//127\.0\.0\.1#//10.0.2.2#; s#//localhost#//10.0.2.2#')"
     case "$GUEST_PROXY" in
         *//10.0.2.2:*) : ;;
@@ -264,7 +266,7 @@ else
     warn "找不到 artifact-fingerprint.sh → 无条件重拉 $IMAGE(不做新鲜度比对)"
     podman pull "$IMAGE" >>"$LOG" 2>&1 || die "拉取 $IMAGE 失败"
 fi
-podman build --security-opt label=disable -t localhost/daedalus-iso-payload -f "$VM/Containerfile" "$VM" >>"$LOG" 2>&1 \
+podman build --security-opt label=disable --http-proxy=false -t localhost/daedalus-iso-payload -f "$VM/Containerfile" "$VM" >>"$LOG" 2>&1 \
     || { bad "派生 payload 镜像失败,见 $LOG"; exit 1; }
 ok "payload 镜像就绪: localhost/daedalus-iso-payload"
 
