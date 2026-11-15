@@ -197,7 +197,16 @@ if [ -f "$VERIFY" ]; then
     hasre 'VERIFY_INSTALL_MIRROR' "$VERIFY"; st $? "规则11 加速源可配(VERIFY_INSTALL_MIRROR)"
     has 'ISO_INSTALL_PROXY' "$VERIFY"; st $? "规则15 iso-verify.sh 读 workflow 注入的代理"
     has 'VERIFY_INSTALL_PROXY:-}' "$VERIFY"; st $? "规则15 runner 环境可兜底;默认空(不配代理时行为不变)"
-    has 'export HTTPS_PROXY=' "$VERIFY"; st $? "规则15 宿主侧 podman 也走代理(脚本内 export)"
+    # 代理只对「guest 内装机」有意义,宿主构建容器**绝不许**拿到它:
+    # podman 会把代理环境变量原样递进 RUN 步骤,容器里的 127.0.0.1 是容器自己,
+    # 于是 dnf 报 "Failed to connect to 127.0.0.1 port 7890"、payload 派生失败
+    # (run 43664603334 实测)。宿主到 ghcr 本来就是通的。
+    if has 'export HTTPS_PROXY=' "$VERIFY"; then
+        st 1 "规则15 宿主侧不得 export 代理(podman build 会把 127.0.0.1 递进构建容器 → dnf 连不上)"
+    else
+        st 0 "规则15 宿主侧不 export 代理(只经 SMBIOS 递 guest)"
+    fi
+    hasre 'podman build .*--http-proxy=false' "$VERIFY"; st $? "规则15 构建容器显式 --http-proxy=false(runner 环境残留的代理也不许漏进去)"
     has 'smbios' "$VERIFY"; st $? "规则15 代理经 QEMU SMBIOS 递进 guest"
     has '*@*) die' "$VERIFY"; st $? "规则15 verify 侧也拒绝带凭据的代理"
     # 反向断言:代理**不得**写进 payload 的 conf(payload 会被烘成 ISO 并晋级成
