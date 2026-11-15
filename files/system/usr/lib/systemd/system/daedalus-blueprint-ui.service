@@ -1,0 +1,38 @@
+[Unit]
+Description=Daedalus Blueprint 本地 Web UI(127.0.0.1)
+# 蓝图管理界面的常驻进程:与 daedalus.blueprint 是**同一个二进制**的另一种模式
+# (`daedalus-blueprint ui`)。为什么单独起进程而不是塞进 MCP 服务器:MCP 那条路径是
+# 每次调用起一个进程(daedalus wrapper exec、stdio 用完即退),它活不过一次工具调用;
+# 而页面需要一个常驻监听者。两者共用同一份业务函数(blueprintSummaries / renderOnce /
+# applyOnce),所以"人点按钮"和"AI 调工具"走的是同一套判定与审计,不存在第二套逻辑。
+#
+# 端口固定 127.0.0.1:8787(只监听回环;跨站请求由 Host/Origin/自定义头/loopback 四道
+# 闸挡住 —— 见 blueprint/cmd/daedalus-blueprint/ui.go)。
+#
+# **默认不启用**:本单元是 opt-in。想用界面时:
+#   systemctl start daedalus-blueprint-ui
+#   xdg-open http://127.0.0.1:8787/
+# 不放进镜像默认 enable 的理由:开一个监听端口是产品决策,不该由"装了 Daedalus"隐含。
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/opt/daedalus/plugins/daedalus.blueprint/bin/daedalus-blueprint ui --listen 127.0.0.1:8787
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+CPUQuota=50%
+MemoryMax=256M
+# 与 daedalus-blueprint.service 同一组落盘目录:界面点"应用"走的是同一个 applyOnce,
+# 写的是同一批蓝图输出路径。ProtectSystem=strict 下 /etc 只读,必须显式放行。
+ReadWritePaths=/etc/nginx/conf.d /etc/haproxy /etc/postgresql /etc/redis
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

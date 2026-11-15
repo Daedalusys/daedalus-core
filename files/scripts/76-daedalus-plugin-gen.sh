@@ -52,8 +52,12 @@ POLICY="${ROOT%/}/opt/daedalus/shared/policy.toml"
 # ReadWritePaths 输出目录由单元自带(76 脚本第 7 条只禁 shell/fs 的 /opt 遮蔽/重绑定,
 # ReadWritePaths 不拦 policy 读取,保留放行合法)。
 CAPS="fs shell pkg sysinfo service blueprint dupe diskclean organize trace proc osstate snapshot"
-# core 自身的 4 个 systemd 单元不是能力插件(不经插件 manifest 渲染),反向集合比对时排除。
-CORE_UNITS="audit audit-rotate env host-controller"
+# core 自身的 systemd 单元不是能力插件(不经插件 manifest 渲染),反向集合比对时排除:
+#   audit / audit-rotate / env / host-controller —— core 服务本体;
+#   blueprint-ui —— daedalus.blueprint 二进制的**另一种模式**(`daedalus-blueprint ui`,
+#   常驻监听 127.0.0.1:8787 供人看蓝图);它与 MCP 那一条共用同一份业务函数,但本身
+#   不经 manifest 渲染(ExecStart 写死在单元里),故同样必须排除,否则反向集合永远不等。
+CORE_UNITS="audit audit-rotate env host-controller blueprint-ui"
 
 fail() { echo "76-daedalus-plugin-gen: 错误: $*" >&2; exit 1; }
 
