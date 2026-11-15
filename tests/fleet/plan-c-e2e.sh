@@ -32,6 +32,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FIXTURES="$ROOT/tests/fleet/fixtures"
 HOST_BIN="${DAEDALUS_HOST_BIN:-$ROOT/bin/daedalus-host}"
 
+# 目标机审计链取证(数行数)与 agent-e2e 高危腿共用同一份实现:两边都靠"链上
+# 有没有新行"证明 intent 到没到过那台机,口径不许各写一套。
+# shellcheck source=tests/fleet/lib/agent-audit.sh
+. "$ROOT/tests/fleet/lib/agent-audit.sh"
+
 pass=0
 fail=0
 
@@ -254,12 +259,16 @@ guest_exec() {
 #
 # 「这条 intent 到没到过这台机」在 agent 侧唯一可信的凭据就是这条链:链上没有
 # 新行 = RPC 没到(fail-closed 的拒绝也会写一行,故"没有记录"本身就是证据)。
-# 文件不存在(一次都没写过)按 0 行算。
+# 文件不存在(一次都没写过)按 0 行算。实现本体在 lib/agent-audit.sh,
+# agent-e2e 的高危腿用的是同一份。
 guest_audit_count() {
-    # 重定向必须由 root 那侧的 shell 做(`sudo wc -l < file` 会被登录用户的
-    # shell 抢先重定向 → Permission denied),故改用 cat | wc -l。
-    guest_exec "$1" 'sudo cat /var/lib/daedalus-agent/audit/chain.jsonl 2>/dev/null | wc -l' |
-        tr -dc '0-9'
+    local alias
+    alias="$(guest_alias "$1")"
+    if [ -z "$alias" ]; then
+        echo "guest_audit_count: $1 没有 ssh 别名(设 DAEDALUS_FLEET_GUEST_ALIASES)" >&2
+        return 1
+    fi
+    agent_audit_count "$alias" ssh -o BatchMode=yes -o ConnectTimeout=10
 }
 
 # reset_nginx_baseline <夹具机器名>:把 nginx 从目标机摘干净(幂等)。
