@@ -150,6 +150,9 @@ verify-headless:
 verify-units:
     ./tests/build/systemd-units.sh --selftest
     ./tests/build/systemd-units.sh
+    # blueprint-ui 单元:监听必须回环、沙箱 drop-in 与 MCP 那条入口逐行相等、CORE_UNITS 双表齐备。
+    ./tests/build/blueprint-ui-unit.sh --selftest
+    ./tests/build/blueprint-ui-unit.sh
 
 # 插件清单集合相等门禁:76 CAPS / 插件单元 / 插件 manifest / plugins release 供料 四份必须一致。
 # 先跑 --selftest 自证门禁没变瞎,再比对真实仓库。不需要镜像,CI test job 与本机都能跑。
