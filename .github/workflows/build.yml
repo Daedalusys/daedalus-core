@@ -843,7 +843,7 @@ jobs:
 
       - name: Stage KVM evidence (logs only; disk images excluded)
         # 证据包过去传的是整个 run 工作目录(qcow2 也会一并上传),
-        # 30 天保留 → 2026-11-16 实测 GitHub 上积了 206.71 GB。磁盘不可重造的
+        # 30 天保留 → 2026-11-16 实测 GitHub 上积了 371 GB / 187 个 artifact。磁盘不可重造的
         # 部分在 Release 里已有;不可重造的是日志。这里只把 ≤8 MiB 的小文件挑进
         # evidence/ 子目录。staging 失败不能让一条绿的部署腿变红,但必须留 warning。
         if: always()
@@ -927,7 +927,7 @@ jobs:
 
       - name: Stage switch evidence (logs only; disk images excluded)
         # 证据包过去传的是整个 run 工作目录(switch-target.tar 1.3GB 一并上传),
-        # 30 天保留 → 2026-11-16 实测 GitHub 上积了 206.71 GB。磁盘不可重造的
+        # 30 天保留 → 2026-11-16 实测 GitHub 上积了 371 GB / 187 个 artifact。磁盘不可重造的
         # 部分在 Release 里已有;不可重造的是日志。这里只把 ≤8 MiB 的小文件挑进
         # evidence/ 子目录。staging 失败不能让一条绿的部署腿变红,但必须留 warning。
         if: always()
@@ -1036,7 +1036,7 @@ jobs:
 
       - name: Stage ISO evidence (logs only; disk images excluded)
         # 证据包过去传的是整个 run 工作目录(target-disk.qcow2 2.3GB 一并上传),
-        # 30 天保留 → 2026-11-16 实测 GitHub 上积了 206.71 GB。被验证的 ISO 在
+        # 30 天保留 → 2026-11-16 实测 GitHub 上积了 371 GB / 187 个 artifact。被验证的 ISO 在
         # Release 晋级链里有自己的一份;要留的是判「引导到哪一步」的日志。
         # 这里只把 ≤8 MiB 的小文件挑进 evidence/ 子目录。
         if: always()
@@ -1186,7 +1186,7 @@ jobs:
 
       - name: Stage guest-probe evidence (logs only; disk images excluded)
         # 证据包过去传的是整个 run 工作目录(a2-source.tar 1.3GB 与 a2-vdb.qcow2
-        # 一并上传),30 天保留 → 2026-11-16 实测 GitHub 上积了 206.71 GB。
+        # 一并上传),30 天保留 → 2026-11-16 实测 GitHub 上积了 371 GB / 187 个 artifact。
         # 探针的判据全在日志里(probe-*.log 1.5K–39K),磁盘没有诊断价值。
         if: always()
         shell: bash

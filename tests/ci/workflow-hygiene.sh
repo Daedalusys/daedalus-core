@@ -180,7 +180,7 @@ function flush_step() {
     if (cur_uses ~ /^actions\/upload-artifact@/) {
         # 规则10:上传路径不得指向 run 工作目录**根** —— 那个目录里躺着磁盘
         # (switch-target.tar 1.3GB / target-disk.qcow2 2.3GB),整目录上传就是
-        # 把磁盘当证据传(2026-11-16 实测:GitHub 上积了 206.71 GB)。
+        # 把磁盘当证据传(2026-11-16 实测:GitHub 上积了 371 GB / 187 个 artifact)。
         # 合法形态:落到 stage-evidence.sh 生成的 …/evidence 子目录。
         v = cur_path
         sub(/[ \t]+$/, "", v)

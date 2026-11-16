@@ -3,8 +3,8 @@
 #
 # 为什么需要:实机腿的证据上传曾把**整个 run 工作目录**传上去 ——
 # switch-target.tar 1.3GB / target-disk.qcow2 2.3GB / a2-source.tar 1.3GB,
-# 每轮各一份、30 天保留 → 2026-11-16 实测 GitHub 上积了 206.71 GB
-# (core 最近 100 个 artifact)。而证据本身全是 1.5KB–102KB 的日志。
+# 每轮各一份、30 天保留 → 2026-11-16 实测 GitHub 上积了 371 GB / 187 个 artifact
+# (core 全量,翻完所有分页)。而证据本身全是 1.5KB–102KB 的日志。
 #
 # 筛选口径是**大小上限**(默认 8 MiB),不是扩展名白名单:不同腿的日志名各不相同
 # (probe-*.log / serial-*.log / bootc-switch-verify.log),按名字筛必然漏;
