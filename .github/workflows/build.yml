@@ -315,6 +315,9 @@ jobs:
           bash tests/real-machine/lib/artifact-fingerprint.selftest.sh
           bash tests/real-machine/lib/guest-driver.selftest.sh
           bash tests/real-machine/lib/cleanup-verify-work.selftest.sh
+          # 证据挑选是「证据包不再上传磁盘镜像」的唯一执行点:它 fail-open 会让
+          # 200 GB 级 artifact 长回来,它 fail-closed 会把失败现场一起丢掉。
+          bash tests/real-machine/lib/stage-evidence.selftest.sh
           # ISO 无人值守装机的静态门禁:装机脚本的底线(只按内核参数选盘、目标是整盘、
           # 无明文凭据、单元只在 live 触发、加速源只当传输通道且按 digest 钉死、target
           # 不指向加速源)。它此前没有任何 workflow 跑它 —— 静态门禁不接线就等于不存在。
