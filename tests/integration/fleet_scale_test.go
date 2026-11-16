@@ -235,6 +235,68 @@ func TestFleetScale_UnreachableNodeDirtiesAndStops(t *testing.T) {
 		n, deadIdx, elapsed.Round(time.Millisecond), len(run.Results), run.StoppedAt.Index)
 }
 
+// TestFleetScale_TransientRetryOnlyFailedMachine 是 spec G9「低危操作的瞬时失败
+// 才允许自动重试」的字面判据:第 137 台前两次回 Unavailable,第三次成功。
+//
+// 判据必须是**计数**:它收到 3 次 ApplyIntent,其余 199 台各 1 次。只看最终
+// status=complete 会同时掩盖"全部重试了一遍"和"重试了别的机器"两种缺陷。
+func TestFleetScale_TransientRetryOnlyFailedMachine(t *testing.T) {
+	n := scaleN(t)
+	pki := newScalePKI(t)
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	agents, addrs := startScaleAgents(t, pki, n)
+	retryIdx := scaleIndex(n, 137)
+	if n < 2 {
+		t.Skipf("需要至少 2 台机器,当前 DAEDALUS_SCALE_N=%d", n)
+	}
+	// 前两次瞬时失败,第三次成功:重试预算(policy transient_retry_max=3)足够。
+	agents[retryIdx].failFirstN.Store(2)
+	registerScaleNodes(t, reg, addrs)
+
+	plan := scalePlan(t, n, objectmodel.BatchingCount, 50, objectmodel.KindPackage, objectmodel.RiskClassLow)
+	start := time.Now()
+	run, err := fleet.NewScheduler(reg, policy.Default()).Run(context.Background(), plan)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if run.Status != objectmodel.PlanStatusComplete {
+		t.Fatalf("status = %v, want complete", run.Status)
+	}
+	if got := len(run.Results); got != n {
+		t.Fatalf("results = %d, want %d", got, n)
+	}
+	// 核心断言:只有那台被重试,且恰好重试 2 次(共 3 次)。
+	if got := agents[retryIdx].calls.Load(); got != 3 {
+		t.Fatalf("第 %d 台收到 %d 次 ApplyIntent, want 3(1 次首发 + 2 次重试)", retryIdx, got)
+	}
+	for i, ag := range agents {
+		if i == retryIdx {
+			continue
+		}
+		if got := ag.calls.Load(); got != 1 {
+			t.Fatalf("第 %d 台收到 %d 次 ApplyIntent, want 1(不许被连坐重试)", i, got)
+		}
+	}
+	res, ok := resultFor(run, machineID(retryIdx))
+	if !ok {
+		t.Fatalf("结果里没有第 %d 台的记录", retryIdx)
+	}
+	if res.Outcome.String() != "success" {
+		t.Fatalf("第 %d 台 outcome = %s, want success", retryIdx, res.Outcome)
+	}
+	if res.TxID == "" {
+		t.Fatalf("重试成功后仍须带 tx_id: %+v", res)
+	}
+
+	t.Logf("RETRY %d 节点:第 %d 台 %d 次 ApplyIntent,其余各 1 次,耗时 %s",
+		n, retryIdx, agents[retryIdx].calls.Load(), elapsed.Round(time.Millisecond))
+}
+
 // ---------------- 助手 ----------------
 
 // scaleN 是本次 scale 测量的节点数:默认 200(spec G1 的数),
