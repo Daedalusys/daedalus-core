@@ -11,6 +11,7 @@
 | 锚点约定 | 代码锚前缀 `daedalus-core/…` / `daedalus-sdk/…` / `daedalus-plugins/…` / `daedalus-agent/…` 指四仓平级布局下的各仓根;四仓**统一 MIT License**(2026-10-19 拍板, 暂定; 全 MIT 模式) |
 
 > **changelog**:
+> - 2026-11-16 (**P0.5 范围拍板**): 下方 2026-10-18 那条里的「§5.3 P0.5 加 Mobile Control UI 与 Plan Event 字段」**没有落地,也不纳入 P0.5** —— spec 全文无此段(全仓 grep「Mobile Control UI」只命中本文件那一行)。用户 2026-11-16 拍板:Mobile Control UI 不算 MVP,先归档,不在 P0.5 交付范围内。P0.5 的验收仍以 spec 的 G1(200 台 scale)+ G4(半成功整批停住)为准。Plan Event 字段同理:等真有消费方(UI / 外部观察者)再加,不预先造。
 > - 2026-10-19: spec v3.1 同步。2026-10-18 拍板 agent 落独立仓 `Daedalusys/daedalus-agent` (MIT), 不再落 `daedalus-core/cmd/daedalus-agent/`。VISION 同步:§4「三仓平级」改「四仓平级」+ §9 移除 `cmd/daedalus-agent/` 引用 + §10/§11 落点同步到新仓。spec 同步:§3 三仓拓扑改四仓拓扑;§5.2 issue `core#38` 落点改新仓。
 > - 2026-10-19 (license 拍板): **四仓统一 MIT License**(2026-10-19 拍板, 暂定;取代原 "agent 仓 MIT / 核心三仓 Apache-2.0" 双 License 模式)。LICENSE 文件已落四仓;plugin manifest `license` 字段从 `Apache-2.0` 切到 `MIT`(25 个 manifest 文件);测试夹具 `License: "Apache-2.0"` 改 `License: "MIT"`。商业化路径 = SaaS 控制面 + 企业支持。
 > - 2026-10-18: 用户画像修订 + 竞品区隔。依据 n=65 问卷(73% 非专业、75% solo、75% ≤5 台、49% 隐私 #1、46% 想要「AI 自动 + 可撤销按钮」)。具体:§1 加目标用户 + 竞品对照表;§2 措辞改「1-30 台 solo + 业余/独立」;§1 顶部显式 MIT(后被 2026-10-19 license 拍板统一)。spec 同步:§1 加目标用户 + 竞品对照 + License;§2 G1 改「典型 5-30 台、P0.5 scale 验证 200 台」;§4.4 Register 响应加 snapshot_capability 字段;§5.3 P0.5 加 Mobile Control UI 与 Plan Event 字段。
