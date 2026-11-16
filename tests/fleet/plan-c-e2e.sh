@@ -9,8 +9,9 @@
 #       (tests/integration/fleet_e2e_test.go:loopback TCP + 双向证书 + 真
 #       Scheduler + 真夹具)。CI 与开发机都能跑。
 #   tests/fleet/plan-c-e2e.sh --hosts ubuntu24=10.0.0.11 debian12=10.0.0.12 rhel9=10.0.0.13
-#       真机矩阵:逐台登记 → 口径 C(声明版本不符)→ 低危 Plan → 高危 Plan
-#       (含一台无回滚点)→ 人审恢复 → 混合 Plan(agent 落地 + atomic 停手)。
+#       真机矩阵:逐台登记 → 口径 C(声明版本不符)→ 低危 Plan → 落点体检
+#       (控制面判 low、agent 按包落点拒)→ 高危 Plan(含一台无回滚点)→ 人审恢复
+#       → 混合 Plan(agent 落地 + atomic 停手)。
 #       需要:各台机已按 daedalus-agent 的 install.sh 装好并 active;控制面本机
 #       有 mTLS 客户端凭证(DAEDALUS_FLEET_CLIENT_CERT / _KEY / DAEDALUS_FLEET_CA)。
 #
@@ -60,7 +61,8 @@ assert_jq() {
 run_selftest() {
     step "夹具结构(每份 Plan 必须能被 objectmodel.Plan 解进并通过校验)"
     for f in plan-low-nginx.json plan-high-kernel.json plan-high-container.json \
-             plan-version-mismatch.json plan-mixed-atomic-agent.json; do
+             plan-version-mismatch.json plan-mixed-atomic-agent.json \
+             plan-landing-critical.json; do
         if [ -f "$FIXTURES/$f" ]; then
             ok "夹具存在:$f"
         else
@@ -89,6 +91,12 @@ run_selftest() {
     assert_jq "container 高危夹具:既无内建回滚点也无执行器凭据,是 RF1 的落点" \
         '.intents[0].kind == "container" and .blast_radius.max_risk == "high" and .blast_radius.kind_breakdown.container == 1' \
         "$(cat "$FIXTURES/plan-high-container.json")"
+    # 落点体检腿要的是"控制面判 low、agent 拒绝"这个组合:夹具自身必须声明 low,
+    # 且不带版本诉求(带版本会把失败原因混成口径 C);desired_state=latest 保证
+    # 已装的包也会走到 upgrade(否则 present+已装是 no-op,agent 根本不会体检)。
+    assert_jq "落点体检夹具:单台、低危、desired_state=latest(已装也会走到 upgrade)" \
+        '(.machines | length) == 1 and .intents[0].kind == "package" and .intents[0].spec.desired_state == "latest" and (.intents[0].spec | has("version") | not) and .intents[0].risk_class == "low" and .blast_radius.count == 1 and .blast_radius.max_risk == "low"' \
+        "$(cat "$FIXTURES/plan-landing-critical.json")"
 
     step "端到端判据(真 mTLS + 真 Scheduler + 真夹具;loopback,不需要真机)"
     export GOMODCACHE="${GOMODCACHE:-/tmp/opencode/go-modcache}"
@@ -572,6 +580,155 @@ run_mixed_leg() {
     fi
 }
 
+# ------------------------------------------------------- 落点体检腿(真机) ----
+#
+# 这一腿验的是:控制面按**包名**把一条 package intent 判成 low 之后,agent 在装
+# 之前按**落点**再兜一层 —— 包会落到 /boot(内核/引导器/固件/init)就拒绝。
+#
+# 为什么必须真机:落点清单来自目标机自己的包管理器(rpm -ql / dpkg-query -L),
+# 假宿主只能证明解析逻辑,证明不了"这台机上这个包的清单里真的有 /boot"。
+#
+# 为什么目标包要现查、不能写死:BIOS 与 UEFI 装的引导器包不同
+# (grub-pc / grub-efi-amd64 / grub2-efi-x64),写死必然有一半环境拿不到
+# "已装"的包 —— 那样会退化到下载路径,联网与"工具缺失即跳过体检"都会让这一腿
+# 失去意义(甚至可能真的把引导器装上去)。
+
+# pick_landing_target:在已登记的目标机里挑一台,返回 "机器名<TAB>包名"。
+#
+# 挑选条件:已装 + 落点清单含 /boot + 包名不在控制面高危前缀表里。
+# 命中高危前缀表的包会被控制面判 high,走的是"有回滚点才放行"的通道,不做落点
+# 体检 —— 这一腿要的是"控制面判 low、agent 拒绝"这个组合,必须排除。
+pick_landing_target() {
+    local machine out pkg probe_cmd
+    probe_cmd="$(cat <<'REMOTE'
+if command -v rpm >/dev/null 2>&1; then
+    rpm -qa --filesbypkg 2>/dev/null | grep '/boot/' | sed -E 's/[[:space:]]+\/boot\/.*//' | sort -u
+else
+    dpkg -S /boot/ 2>/dev/null | cut -d: -f1 | tr ',' '\n' | tr -d ' ' | sort -u
+fi
+REMOTE
+)"
+    for machine in rhel9-a ubuntu24-a debian12-a; do
+        [ -n "${NODE_IDS[$machine]:-}" ] || continue
+        out="$(guest_exec "$machine" "$probe_cmd" 2>/dev/null)" || out=""
+        while IFS= read -r pkg; do
+            [ -n "$pkg" ] || continue
+            case "$pkg" in
+                kernel*|linux-image*|linux-headers*|linux-modules*|linux-firmware*|linux-generic*|linux-signed*|systemd*|dbus*|NetworkManager*|selinux*|polkit*|policykit*|openssh*) continue ;;
+            esac
+            # dpkg -S 认的包未必仍在 installed 状态(removed-but-not-purged 也留在
+            # 文件库里),所以再核一次"已装" —— agent 的体检走的是"已装 → 本地清单"。
+            if guest_exec "$machine" "rpm -q '$pkg' >/dev/null 2>&1 || dpkg-query -W -f='\${Status}' '$pkg' 2>/dev/null | grep -q 'install ok installed'" >/dev/null 2>&1; then
+                printf '%s\t%s\n' "$machine" "$pkg"
+                return 0
+            fi
+        done <<<"$out"
+    done
+    return 1
+}
+
+# run_landing_check_leg <临时目录>:控制面判 low、agent 按落点拒。
+#
+# 判据分两半:
+#   控制面侧 —— status=dirty、outcome=persistent、文案点名 critical path
+#               且**不是**「无回滚点」(那是控制面准入拒的,不是落点体检);
+#   目标机侧 —— 包版本与 /boot 下文件的 mtime 都没变(RPC 到了,执行器没动它),
+#               agent 审计链**增长了**(与 atomic 那台的零增长相反)且留着原文。
+run_landing_check_leg() {
+    local tmp="$1" picked machine target node json pid
+    local before_ver before_mtime after_ver after_mtime b_lines a_lines line probe
+    step "落点体检腿:控制面按包名判 low,agent 按落点兜底拒(高危在装之前被挡住)"
+    if ! picked="$(pick_landing_target)"; then
+        bad "落点体检腿:没有目标机存在「已装 + 落点含 /boot + 不在高危包名表」的包"
+        return 0
+    fi
+    machine="${picked%%	*}"
+    target="${picked#*	}"
+    node="${NODE_IDS[$machine]:-}"
+    if [ -z "$node" ]; then
+        bad "落点体检腿:目标机 $machine 未登记"
+        return 0
+    fi
+    ok "落点体检腿:目标 = $target @ $machine(已装、落点含 /boot、不在控制面高危包名表)"
+
+    # 前置快照:版本 + /boot 下第一个文件的 mtime。这一腿的硬要求是"包没被动过",
+    # 快照拍在提交之前,改没改由提交后重拍对照。
+    before_ver="$(guest_exec "$machine" "rpm -q --qf '%{VERSION}-%{RELEASE}' $target 2>/dev/null || dpkg-query -W -f='\${Version}' $target 2>/dev/null" 2>/dev/null || true)"
+    probe="$(guest_exec "$machine" "rpm -ql $target 2>/dev/null | grep '^/boot/' | head -n 1 || dpkg-query -L $target 2>/dev/null | grep '^/boot/' | head -n 1" 2>/dev/null || true)"
+    if [ -z "$probe" ]; then
+        bad "落点体检腿:取不到 $target 的 /boot 落点(前置条件不成立)"
+        return 0
+    fi
+    before_mtime="$(guest_exec "$machine" "stat -c %Y '$probe'" 2>/dev/null || true)"
+    ok "前置快照:$target = ${before_ver:-?};$probe mtime = ${before_mtime:-?}"
+
+    b_lines="$(guest_audit_count "$machine" 2>/dev/null || true)"
+    if [ -z "$b_lines" ]; then
+        bad "落点体检腿:读不到 $machine 的 agent 审计链行数(核实通道不通)"
+        return 0
+    fi
+    ok "落点体检腿前置:$machine 的 agent 审计链 = $b_lines 行"
+
+    if ! jq --arg t "$target" --arg m "$machine" \
+        '.intents[0].target = $t
+         | .intents[0].expected_diff = ("拒绝下发:" + $t + " 会落到 /boot(agent 侧兜底拒绝)\n")
+         | .machines[0].machine_id = $m' \
+        "$FIXTURES/plan-landing-critical.json" > "$tmp/landing-src.json"; then
+        bad "渲染落点体检夹具失败(jq)"
+        return 0
+    fi
+    if ! render_plan "$tmp/landing-src.json" "$tmp/landing.json"; then
+        bad "渲染落点体检夹具失败(机器名 → node_id 映射)"
+        return 0
+    fi
+    if ! json="$("$HOST_BIN" plan submit "$tmp/landing.json")"; then
+        bad "plan-landing-critical.json → plan submit 失败(控制面报错)"
+        return 0
+    fi
+    LAST_PLAN_JSON="$json"
+    echo "  plan submit plan-landing-critical.json: $json"
+    pid="$(jq -r '.plan_id' <<<"$json")"
+
+    assert_jq "落点体检腿 → 控制面按包名判 low(max_risk=low;判 high 就走别的通道了)" \
+        '.max_risk == "low"' "$json"
+    assert_jq "落点体检腿 → status=dirty" '.status == "dirty"' "$json"
+    assert_jq "落点体检腿 → 单台持久失败(outcome=persistent / result=persistent_failure)" \
+        '(.results | length) == 1 and .results[0].outcome == "persistent" and .results[0].result == "persistent_failure"' \
+        "$json"
+    assert_jq "落点体检腿 → 文案点名 critical path(是 agent 按落点拒的)" \
+        '(.results[0].message | contains("critical path"))' "$json"
+    assert_jq "落点体检腿 → 文案不是「无回滚点」(那是控制面准入拒的,不是落点体检)" \
+        '(.results[0].message | contains("无回滚点")) | not' "$json"
+
+    # 独立核实①:目标机上包没被动过(版本与 /boot 下文件的 mtime 都未变)。
+    after_ver="$(guest_exec "$machine" "rpm -q --qf '%{VERSION}-%{RELEASE}' $target 2>/dev/null || dpkg-query -W -f='\${Version}' $target 2>/dev/null" 2>/dev/null || true)"
+    after_mtime="$(guest_exec "$machine" "stat -c %Y '$probe'" 2>/dev/null || true)"
+    if [ -n "$before_ver" ] && [ "$before_ver" = "$after_ver" ]; then
+        ok "目标机实况:$target 版本未变($after_ver)"
+    else
+        bad "目标机实况:$target 版本变了(${before_ver:-?} → ${after_ver:-?}):落点体检没挡住"
+    fi
+    if [ -n "$before_mtime" ] && [ "$before_mtime" = "$after_mtime" ]; then
+        ok "目标机实况:$probe mtime 未变($after_mtime)"
+    else
+        bad "目标机实况:$probe mtime 变了(${before_mtime:-?} → ${after_mtime:-?})"
+    fi
+
+    # 独立核实②:审计链**增长**了(这条 intent 确实到过那台机),且留痕里点名落点。
+    # 与 atomic 那台"零增长"正好相反 —— 那条是"没发出去",这条是"到了但被挡住"。
+    a_lines="$(guest_audit_count "$machine" 2>/dev/null || true)"
+    if [ -n "$a_lines" ] && [ "$a_lines" -gt "$b_lines" ]; then
+        ok "agent 审计链 $b_lines → $a_lines 行:intent 确实到过那台机(与 atomic 那台的零增长相反)"
+    else
+        bad "agent 审计链没有增长($b_lines → ${a_lines:-?}):intent 没到过那台机"
+    fi
+    if line="$(guest_exec "$machine" "sudo grep -h \"$pid\" /var/lib/daedalus-agent/audit/chain.jsonl | grep -i 'critical path' | tail -n 1" 2>/dev/null)" && [ -n "$line" ]; then
+        ok "agent 审计链留痕(原文):$line"
+    else
+        bad "agent 审计链上没有本 Plan($pid)的落点拒绝记录(控制面文案不足以证明是 agent 判的)"
+    fi
+}
+
 run_matrix() {
     local hosts=("$@")
     register_hosts "${hosts[@]}"
@@ -594,6 +751,10 @@ run_matrix() {
     else
         bad "渲染低危夹具失败"
     fi
+
+    # 落点体检腿排在低危腿之后:它不装也不卸任何东西(拒绝发生在执行器之前),
+    # 与前后两条腿都不抢状态。
+    run_landing_check_leg "$TMPD"
 
     step "高危腿:container(high,该 kind 既无内建回滚点也无执行器凭据 → 下发前拒)"
     local nosnap="${NODE_IDS[legacy-no-snapshot]:-}"
