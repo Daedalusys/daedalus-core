@@ -598,30 +598,55 @@ run_mixed_leg() {
 # 挑选条件:已装 + 落点清单含 /boot + 包名不在控制面高危前缀表里。
 # 命中高危前缀表的包会被控制面判 high,走的是"有回滚点才放行"的通道,不做落点
 # 体检 —— 这一腿要的是"控制面判 low、agent 拒绝"这个组合,必须排除。
+# try_landing_pkg <机器名> <包名>:命中条件就打印 "机器名<TAB>包名" 并返回 0。
+try_landing_pkg() {
+    local machine="$1" pkg="$2"
+    # 控制面高危前缀表里的包会被判 high,走"有回滚点才放行"的通道,不体检。
+    case "$pkg" in
+        kernel*|linux-image*|linux-headers*|linux-modules*|linux-firmware*|linux-generic*|linux-signed*|systemd*|dbus*|NetworkManager*|selinux*|polkit*|policykit*|openssh*) return 1 ;;
+    esac
+    # 已装 + 落点归属两步都要核:
+    #   - dpkg -S 认的包未必仍在 installed 状态(removed-but-not-purged 留在文件库);
+    #   - dpkg -S 是子串匹配,会把 /usr/lib/bootloader 这类也带进来,所以"这个包
+    #     自己的清单里真有 /boot 或 /boot/..."必须单独确认。
+    if ! guest_exec "$machine" "rpm -q '$pkg' >/dev/null 2>&1 || dpkg-query -W -f='\${Status}' '$pkg' 2>/dev/null | grep -q 'install ok installed'" >/dev/null 2>&1; then
+        return 1
+    fi
+    if guest_exec "$machine" "if command -v rpm >/dev/null 2>&1; then rpm -ql '$pkg'; else dpkg-query -L '$pkg'; fi | grep -qE '^/boot(\$|/)'" >/dev/null 2>&1; then
+        printf '%s\t%s\n' "$machine" "$pkg"
+        return 0
+    fi
+    return 1
+}
+
 pick_landing_target() {
     local machine out pkg probe_cmd
     probe_cmd="$(cat <<'REMOTE'
 if command -v rpm >/dev/null 2>&1; then
-    rpm -qa --filesbypkg 2>/dev/null | grep '/boot/' | sed -E 's/[[:space:]]+\/boot\/.*//' | sort -u
+    rpm -qa --filesbypkg 2>/dev/null | grep -E '[[:space:]]/boot(/|$)' | sed -E 's/[[:space:]]+\/boot.*//' | sort -u
 else
-    dpkg -S /boot/ 2>/dev/null | cut -d: -f1 | tr ',' '\n' | tr -d ' ' | sort -u
+    dpkg -S /boot/ /boot 2>/dev/null | cut -d: -f1 | tr ',' '\n' | tr -d ' ' | sort -u
 fi
 REMOTE
 )"
-    for machine in rhel9-a ubuntu24-a debian12-a; do
+    # 目标机顺序可由 DAEDALUS_LANDING_MACHINE 覆盖(默认 rhel9-a → ubuntu24-a →
+    # debian12-a)。apt 分支与 rpm 分支的落点来源不同(本地清单 vs 下载后列),
+    # 要分别取证时用它指定一台机器。
+    local machines="${DAEDALUS_LANDING_MACHINE:-rhel9-a ubuntu24-a debian12-a}"
+    for machine in $machines; do
         [ -n "${NODE_IDS[$machine]:-}" ] || continue
         out="$(guest_exec "$machine" "$probe_cmd" 2>/dev/null)" || out=""
+        # 先按固定顺序试引导器主包:它们的 /boot 落点是**真文件**(grubx64.efi /
+        # shimx64.efi),证据比"只落一个目录"的配置包直观。
+        for pkg in shim-x64 shim grub2-efi-x64 grub-efi-amd64 grub2-pc grub-pc \
+                   grub2-common grub-common efi-filesystem; do
+            printf '%s\n' "$out" | grep -qx "$pkg" || continue
+            try_landing_pkg "$machine" "$pkg" && return 0
+        done
+        # 兜底:该机上任意"已装 + 落点含 /boot + 不在高危表"的包。
         while IFS= read -r pkg; do
             [ -n "$pkg" ] || continue
-            case "$pkg" in
-                kernel*|linux-image*|linux-headers*|linux-modules*|linux-firmware*|linux-generic*|linux-signed*|systemd*|dbus*|NetworkManager*|selinux*|polkit*|policykit*|openssh*) continue ;;
-            esac
-            # dpkg -S 认的包未必仍在 installed 状态(removed-but-not-purged 也留在
-            # 文件库里),所以再核一次"已装" —— agent 的体检走的是"已装 → 本地清单"。
-            if guest_exec "$machine" "rpm -q '$pkg' >/dev/null 2>&1 || dpkg-query -W -f='\${Status}' '$pkg' 2>/dev/null | grep -q 'install ok installed'" >/dev/null 2>&1; then
-                printf '%s\t%s\n' "$machine" "$pkg"
-                return 0
-            fi
+            try_landing_pkg "$machine" "$pkg" && return 0
         done <<<"$out"
     done
     return 1
@@ -653,13 +678,21 @@ run_landing_check_leg() {
 
     # 前置快照:版本 + /boot 下第一个文件的 mtime。这一腿的硬要求是"包没被动过",
     # 快照拍在提交之前,改没改由提交后重拍对照。
-    before_ver="$(guest_exec "$machine" "rpm -q --qf '%{VERSION}-%{RELEASE}' $target 2>/dev/null || dpkg-query -W -f='\${Version}' $target 2>/dev/null" 2>/dev/null || true)"
-    probe="$(guest_exec "$machine" "rpm -ql $target 2>/dev/null | grep '^/boot/' | head -n 1 || dpkg-query -L $target 2>/dev/null | grep '^/boot/' | head -n 1" 2>/dev/null || true)"
+    # 包管理器两套查询用 if/else,不用 "A || B":管道里 head 的退出码永远是 0,
+    # A 命令根本不存在时也会静默吞掉,B 一条都不会跑 —— 第一版就栽在这里
+    # (apt 机上 probe 恒为空,腿直接判"前置条件不成立")。
+    local q_ver q_list
+    q_ver="if command -v rpm >/dev/null 2>&1; then rpm -q --qf '%{VERSION}-%{RELEASE}' $target; else dpkg-query -W -f='\${Version}' $target; fi"
+    q_list="if command -v rpm >/dev/null 2>&1; then rpm -ql $target; else dpkg-query -L $target; fi"
+    before_ver="$(guest_exec "$machine" "$q_ver" 2>/dev/null || true)"
+    probe="$(guest_exec "$machine" "$q_list | grep -E '^/boot($|/)' | head -n 1" 2>/dev/null || true)"
     if [ -z "$probe" ]; then
         bad "落点体检腿:取不到 $target 的 /boot 落点(前置条件不成立)"
         return 0
     fi
-    before_mtime="$(guest_exec "$machine" "stat -c %Y '$probe'" 2>/dev/null || true)"
+    # /boot 与 /boot/efi 在 RHEL 上是 700 root:root,非 root 连 stat 都读不到 ——
+    # 读不到就会把"查不了"伪装成"没变",故必须 sudo,且读不到直接判 FAIL。
+    before_mtime="$(guest_exec "$machine" "sudo stat -c %Y '$probe'" 2>/dev/null || true)"
     ok "前置快照:$target = ${before_ver:-?};$probe mtime = ${before_mtime:-?}"
 
     b_lines="$(guest_audit_count "$machine" 2>/dev/null || true)"
@@ -697,12 +730,15 @@ run_landing_check_leg() {
         "$json"
     assert_jq "落点体检腿 → 文案点名 critical path(是 agent 按落点拒的)" \
         '(.results[0].message | contains("critical path"))' "$json"
-    assert_jq "落点体检腿 → 文案不是「无回滚点」(那是控制面准入拒的,不是落点体检)" \
+    assert_jq "落点体检腿 → 文案不含控制面准入的中文措辞「无回滚点」" \
         '(.results[0].message | contains("无回滚点")) | not' "$json"
+    # 判据是 critical path:agent 的失败外壳里**也会**带一句英文
+    # "no rollback point for kind=package"(所有 apply 失败都有),那不是
+    # 控制面准入拒的信号 —— 控制面准入拒的是中文「无回滚点」。
 
     # 独立核实①:目标机上包没被动过(版本与 /boot 下文件的 mtime 都未变)。
-    after_ver="$(guest_exec "$machine" "rpm -q --qf '%{VERSION}-%{RELEASE}' $target 2>/dev/null || dpkg-query -W -f='\${Version}' $target 2>/dev/null" 2>/dev/null || true)"
-    after_mtime="$(guest_exec "$machine" "stat -c %Y '$probe'" 2>/dev/null || true)"
+    after_ver="$(guest_exec "$machine" "$q_ver" 2>/dev/null || true)"
+    after_mtime="$(guest_exec "$machine" "sudo stat -c %Y '$probe'" 2>/dev/null || true)"
     if [ -n "$before_ver" ] && [ "$before_ver" = "$after_ver" ]; then
         ok "目标机实况:$target 版本未变($after_ver)"
     else
