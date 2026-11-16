@@ -76,14 +76,18 @@ func TestFleetScale_200Nodes_AllSucceed(t *testing.T) {
 		t.Fatalf("batches = %d, want %d", len(run.Batches), wantBatches)
 	}
 	// count 策略的"顺序"含义是**保持机器顺序**(与 importance 的分组重排不同):
-	// 第 0 批必须就是机器表的前 50 台,按原序。
+	// 第 0 批必须就是机器表的前 50 台(不足 50 台时就是全部),按原序。
+	wantFirst := 50
+	if n < wantFirst {
+		wantFirst = n
+	}
 	for i, id := range run.Batches[0].NodeIDs {
 		if want := machineID(i); id != want {
 			t.Fatalf("count 批序被打乱:批 0 第 %d 项 = %s, want %s", i, id, want)
 		}
 	}
-	if got := len(run.Batches[0].NodeIDs); got != 50 {
-		t.Fatalf("批 0 = %d 台, want 50", got)
+	if got := len(run.Batches[0].NodeIDs); got != wantFirst {
+		t.Fatalf("批 0 = %d 台, want %d", got, wantFirst)
 	}
 	for i, ag := range agents {
 		if got := ag.calls.Load(); got != 1 {
