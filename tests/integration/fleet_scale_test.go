@@ -48,12 +48,7 @@ func TestFleetScale_200Nodes_AllSucceed(t *testing.T) {
 		t.Fatalf("OpenRegistry: %v", err)
 	}
 
-	agents := make([]*scaleAgent, n)
-	addrs := make([]string, n)
-	for i := 0; i < n; i++ {
-		agents[i] = &scaleAgent{}
-		addrs[i] = startScaleAgent(t, pki, agents[i])
-	}
+	agents, addrs := startScaleAgents(t, pki, n)
 	registerScaleNodes(t, reg, addrs)
 
 	plan := scalePlan(t, n, objectmodel.BatchingCount, 50, objectmodel.KindPackage, objectmodel.RiskClassLow)
@@ -79,6 +74,16 @@ func TestFleetScale_200Nodes_AllSucceed(t *testing.T) {
 	if len(run.Batches) != wantBatches {
 		t.Fatalf("batches = %d, want %d", len(run.Batches), wantBatches)
 	}
+	// count 策略的"顺序"含义是**保持机器顺序**(与 importance 的分组重排不同):
+	// 第 0 批必须就是机器表的前 50 台,按原序。
+	for i, id := range run.Batches[0].NodeIDs {
+		if want := machineID(i); id != want {
+			t.Fatalf("count 批序被打乱:批 0 第 %d 项 = %s, want %s", i, id, want)
+		}
+	}
+	if got := len(run.Batches[0].NodeIDs); got != 50 {
+		t.Fatalf("批 0 = %d 台, want 50", got)
+	}
 	for i, ag := range agents {
 		if got := ag.calls.Load(); got != 1 {
 			t.Fatalf("第 %d 台收到 %d 次 ApplyIntent, want 1", i, got)
@@ -90,6 +95,75 @@ func TestFleetScale_200Nodes_AllSucceed(t *testing.T) {
 	}
 	t.Logf("SCALE %d 节点:耗时 %s,返回 JSON %d 字节,批次 %d,结果 %d 条",
 		n, elapsed.Round(time.Millisecond), len(js), len(run.Batches), len(run.Results))
+}
+
+// TestFleetScale_ImportanceOrdering 钉批序:importance 策略下 supported 的机器
+// 必须排在 experimental 前面 —— 控制面把"有把握的先做",失败面小的那批先落地。
+//
+// 机器表故意把 experimental 放在**前半段**,这样"batch[0] 全 supported"不能靠
+// 源顺序侥幸成立:只有真按 support_level 分组重排才会通过。
+func TestFleetScale_ImportanceOrdering(t *testing.T) {
+	n := scaleN(t)
+	if n < 4 {
+		t.Skipf("importance 用例需要至少 4 台机器,当前 DAEDALUS_SCALE_N=%d", n)
+	}
+	pki := newScalePKI(t)
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	agents, addrs := startScaleAgents(t, pki, n)
+	registerScaleNodes(t, reg, addrs)
+
+	plan := scalePlan(t, n, objectmodel.BatchingImportance, 0, objectmodel.KindPackage, objectmodel.RiskClassLow)
+	half := n / 2
+	for i := range plan.Machines {
+		if i < half {
+			plan.Machines[i].SupportLevel = objectmodel.SupportLevelExperimental
+		}
+	}
+	if err := plan.Validate(); err != nil {
+		t.Fatalf("改完 support_level 后 Plan 未通过校验: %v", err)
+	}
+
+	run, err := fleet.NewScheduler(reg, policy.Default()).Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Status != objectmodel.PlanStatusComplete {
+		t.Fatalf("status = %v, want complete", run.Status)
+	}
+	if len(run.Batches) != 2 {
+		t.Fatalf("batches = %d, want 2(supported 一批 + experimental 一批)", len(run.Batches))
+	}
+
+	// 按 Plan 的机器表算每台的 support_level,再逐批核对成员。
+	levels := make(map[string]objectmodel.SupportLevel, n)
+	for _, m := range plan.Machines {
+		levels[m.MachineID] = m.SupportLevel
+	}
+	for _, id := range run.Batches[0].NodeIDs {
+		if levels[id] != objectmodel.SupportLevelSupported {
+			t.Fatalf("第 0 批出现了 %s(support_level=%s):supported 必须先跑", id, levels[id])
+		}
+	}
+	for _, id := range run.Batches[1].NodeIDs {
+		if levels[id] != objectmodel.SupportLevelExperimental {
+			t.Fatalf("第 1 批出现了 %s(support_level=%s):experimental 只能在后", id, levels[id])
+		}
+	}
+	if got := len(run.Batches[0].NodeIDs) + len(run.Batches[1].NodeIDs); got != n {
+		t.Fatalf("两批合计 %d 台, want %d(每台必须恰好出现一次)", got, n)
+	}
+
+	// 两批都真的下发过:批序不是"只跑了一档"的假象。
+	for i, ag := range agents {
+		if got := ag.calls.Load(); got != 1 {
+			t.Fatalf("第 %d 台收到 %d 次 ApplyIntent, want 1", i, got)
+		}
+	}
+	t.Logf("IMPORTANCE %d 节点:批 0(supported)=%d 台,批 1(experimental)=%d 台",
+		n, len(run.Batches[0].NodeIDs), len(run.Batches[1].NodeIDs))
 }
 
 // ---------------- 助手 ----------------
@@ -179,6 +253,18 @@ func (a *scaleAgent) ApplyIntent(_ context.Context, req *agentv1.ApplyIntentRequ
 		Result: agentv1.ApplyIntentResult_APPLY_INTENT_RESULT_SUCCESS,
 		TxId:   "tx-" + req.GetTarget(),
 	}, nil
+}
+
+// startScaleAgents 起 n 个 loopback agent 桩,返回桩句柄与监听地址(下标对齐)。
+func startScaleAgents(t *testing.T, pki *scalePKI, n int) ([]*scaleAgent, []string) {
+	t.Helper()
+	agents := make([]*scaleAgent, n)
+	addrs := make([]string, n)
+	for i := 0; i < n; i++ {
+		agents[i] = &scaleAgent{}
+		addrs[i] = startScaleAgent(t, pki, agents[i])
+	}
+	return agents, addrs
 }
 
 // startScaleAgent 在 loopback 上起一个双向 TLS 的 agent 桩,返回监听地址。
