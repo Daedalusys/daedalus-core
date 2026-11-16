@@ -14,6 +14,9 @@
 #        跨 run 串味,且旧目录没人收口)
 #   规则9 四仓 Go 源码必须是 gofmt-clean(`gofmt -l` 为空);与规则6/7 同型 ——
 #        仓目录不存在、gofmt 不在 PATH 一律判红(扫了 0 个文件的"绿"不算绿)
+#   规则10 上传证据的 path 不得指向 run 工作目录根(>8MiB 的磁盘载荷会被当证据传);
+#         必须指向 stage-evidence.sh 生成的 …/evidence 子目录
+#   规则11 每个 actions/upload-artifact 必须显式 retention-days(默认 90 天是隐形陷阱)
 #
 # 判定必须是 **mapping 解析**,不是全文 grep:注释/文档里出现的 `actions/checkout`
 # 字样不是步骤。`--selftest` 用合成样本把这条负例钉住。
@@ -174,6 +177,22 @@ function flush_step() {
     if (cur_uses ~ /^actions\/upload-artifact@/ && cur_path ~ /github\.workspace/ \
         && cur_path !~ /github\.run_id/)
         report_at(path_line, "规则8 上传路径指向共享工作区却未按 run 隔离: " cur_path)
+    if (cur_uses ~ /^actions\/upload-artifact@/) {
+        # 规则10:上传路径不得指向 run 工作目录**根** —— 那个目录里躺着磁盘
+        # (switch-target.tar 1.3GB / target-disk.qcow2 2.3GB),整目录上传就是
+        # 把磁盘当证据传(2026-11-16 实测:GitHub 上积了 206.71 GB)。
+        # 合法形态:落到 stage-evidence.sh 生成的 …/evidence 子目录。
+        v = cur_path
+        sub(/[ \t]+$/, "", v)
+        sub(/[ \t]*\}\}[ \t]*$/, "", v)   # 去掉 ${{ … }} 的收尾
+        sub(/\/+$/, "", v)
+        if (v ~ /github\.run_id$/)
+            report_at(path_line, "规则10 上传路径指向 run 工作目录根(会把磁盘镜像当证据上传): " cur_path)
+        # 规则11:每个上传必须显式声明 retention-days —— 默认 90 天是隐形陷阱,
+        # 而 qcow2 这类「只在本次 run 内被下游腿消费」的产物不该留 90 天。
+        if (!has_ret)
+            report_at(uses_line, "规则11 upload-artifact 未显式声明 retention-days: " cur_uses)
+    }
     in_step = 0
 }
 
@@ -183,6 +202,7 @@ BEGIN {
     cur_uses = ""; uses_line = 0; cur_line = 0
     has_pc = 0; cur_pc = ""; pc_line = 0
     has_cache = 0; cur_cache = ""; cache_line = 0
+    has_ret = 0; cur_ret = ""
     cur_path = ""; path_line = 0
     step_indent = -1
 }
@@ -239,6 +259,7 @@ BEGIN {
         cur_uses = ""
         has_pc = 0; cur_pc = ""; pc_line = 0
         has_cache = 0; cur_cache = ""; cache_line = 0
+        has_ret = 0; cur_ret = ""
         cur_path = ""; path_line = 0
         in_with = 0; with_indent = -1
         inline = code
@@ -272,6 +293,7 @@ BEGIN {
         if (k == "persist-credentials") { cur_pc = val(code); has_pc = 1; pc_line = NR }
         else if (k == "cache")         { cur_cache = val(code); has_cache = 1; cache_line = NR }
         else if (k == "path")          { cur_path = strip_quotes(val(code)); path_line = NR }
+        else if (k == "retention-days") { cur_ret = val(code); has_ret = 1 }
         next
     }
 
@@ -523,6 +545,41 @@ jobs:
           path: \${{ github.workspace }}/qcow2")"
     st 1 "$(printf '%s' "$out" | grep -c '规则8')" "规则8:上传路径指向产物目录之外 → 违规"
 
+    # 22a) 规则10:上传路径指向 run 工作目录根 → 违规(把整块磁盘当证据传)
+    out="$(probe rule10-bare-rundir "$HDR
+      - uses: actions/upload-artifact@$SHA
+        with:
+          name: e
+          path: \${{ github.workspace }}/switch-verify-\${{ github.run_id }}
+          retention-days: 30")"
+    st 1 "$(printf '%s' "$out" | grep -c '规则10')" "规则10:上传路径是 run 工作目录根 → 违规"
+
+    # 22b) 规则10:上传路径落到 evidence/ 子目录 → 不违规
+    out="$(probe rule10-evidence "$HDR
+      - uses: actions/upload-artifact@$SHA
+        with:
+          name: e
+          path: \${{ github.workspace }}/switch-verify-\${{ github.run_id }}/evidence
+          retention-days: 30")"
+    st 0 "$(printf '%s' "$out" | grep -c '规则10')" "规则10:evidence/ 子目录 → 不违规"
+
+    # 22c) 规则11:upload-artifact 没写 retention-days → 违规(默认 90 天是隐形陷阱)
+    out="$(probe rule11-no-retention "$HDR
+      - uses: actions/upload-artifact@$SHA
+        with:
+          name: e
+          path: \${{ github.workspace }}/switch-verify-\${{ github.run_id }}/evidence")"
+    st 1 "$(printf '%s' "$out" | grep -c '规则11')" "规则11:缺 retention-days → 违规"
+
+    # 22d) 规则11:写了 retention-days → 不违规
+    out="$(probe rule11-retention "$HDR
+      - uses: actions/upload-artifact@$SHA
+        with:
+          name: e
+          path: \${{ github.workspace }}/switch-verify-\${{ github.run_id }}/evidence
+          retention-days: 3")"
+    st 0 "$(printf '%s' "$out" | grep -c '规则11')" "规则11:显式 retention-days → 不违规"
+
     # 23) 覆盖度下限:四仓目录都在、但一个站点都没有 → 不得报 OK
     #     (否则「workflow 被删/改名」会静默变绿 —— 与 `|| true` 同一种假绿)。
     rm -f "$wf"/*.yml
@@ -574,7 +631,7 @@ scan_root "$ROOT" "$COUNTS" || ok=0
 cov="$(check_coverage "$ROOT" "$COUNTS")" || ok=0
 gofmt_out="$(check_gofmt "$ROOT")" || ok=0
 if [ "$ok" -eq 1 ]; then
-    echo "OK: 四仓 workflow 的 persist-credentials / cache / 钉 SHA / VERIFY_WORK 按 run 隔离全部显式(仓 4 个 / $cov);四仓 gofmt 干净（$gofmt_out 个 .go 文件）"
+    echo "OK: 四仓 workflow 的 persist-credentials / cache / 钉 SHA / VERIFY_WORK 按 run 隔离 / 证据路径 / retention-days 全部显式(仓 4 个 / $cov);四仓 gofmt 干净（$gofmt_out 个 .go 文件）"
 else
     echo "ERROR: workflow 凭据/缓存不变式或四仓 Go 格式守门失败,或守门覆盖不全(见上方逐条定位)" >&2
     exit 1
