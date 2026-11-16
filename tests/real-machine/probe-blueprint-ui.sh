@@ -232,10 +232,21 @@ A13_5_MISS=""
 printf '%s' "$SHOW" | grep -q '^DynamicUser=yes' || A13_5_MISS="${A13_5_MISS} DynamicUser≠yes"
 printf '%s' "$SHOW" | grep -q '^ProtectSystem=strict' || A13_5_MISS="${A13_5_MISS} ProtectSystem≠strict"
 printf '%s' "$SHOW" | grep -q '^NoNewPrivileges=yes' || A13_5_MISS="${A13_5_MISS} NoNewPrivileges≠yes"
-printf '%s' "$SHOW" | grep '^SystemCallFilter=' | grep -q '@system-service' \
-    || A13_5_MISS="${A13_5_MISS} SystemCallFilter 不含 @system-service"
+# systemd 会把 @system-service **展开成 syscall 清单**,`systemctl show` 里根本没有
+# 字面量 "@system-service" —— 按字面量断言必然判红(真机第一次跑就栽在这里,而沙箱
+# 其实好好的)。改成两段查:策略里声明了 + 运行时确实生效。
+CAT_UNIT="$(gcmd "systemctl cat daedalus-blueprint-ui 2>&1")"
+FILTER="$(printf '%s' "$SHOW" | sed -n 's/^SystemCallFilter=//p')"
+printf '%s' "$CAT_UNIT" | grep -q '@system-service' \
+    || A13_5_MISS="${A13_5_MISS} 单元策略里没有 @system-service(检查 drop-in 是否落地)"
+[ -n "$FILTER" ] \
+    || A13_5_MISS="${A13_5_MISS} SystemCallFilter 为空(策略没落到单元上)"
+case "$FILTER" in
+    *write*|*read*) ;;
+    *) A13_5_MISS="${A13_5_MISS} SystemCallFilter 展开后不含 write/read(白名单没生效)" ;;
+esac
 if [ -z "$A13_5_MISS" ]; then
-    driver_verdict PASS "A13-5 沙箱落在单元上:DynamicUser=yes / ProtectSystem=strict / NoNewPrivileges=yes / SystemCallFilter 含 @system-service"
+    driver_verdict PASS "A13-5 沙箱落在单元上:DynamicUser=yes / ProtectSystem=strict / NoNewPrivileges=yes / SystemCallFilter 声明 @system-service 且已展开生效"
 else
     driver_verdict FAIL "A13-5 沙箱项缺失:${A13_5_MISS}(原始输出见上)"
 fi

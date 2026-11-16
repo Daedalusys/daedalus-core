@@ -31,7 +31,12 @@ CPUQuota=50%
 MemoryMax=256M
 # 与 daedalus-blueprint.service 同一组落盘目录:界面点"应用"走的是同一个 applyOnce,
 # 写的是同一批蓝图输出路径。ProtectSystem=strict 下 /etc 只读,必须显式放行。
-ReadWritePaths=/etc/nginx/conf.d /etc/haproxy /etc/postgresql /etc/redis
+# 前缀 "-" 是 systemd 的"该路径不存在就跳过":这四个目录只有装了对应服务
+# (nginx / haproxy / postgresql / redis) 才有。不带 "-" 时,在裸机上 systemd 会
+# 在 mount namespace 里硬失败(226/NAMESPACE,报 "Failed to set up mount
+# namespacing: /etc/haproxy: No such file or directory")——整套服务起不来,
+# 与"这台机器没装 nginx"这件事完全不成比例。
+ReadWritePaths=-/etc/nginx/conf.d -/etc/haproxy -/etc/postgresql -/etc/redis
 Restart=on-failure
 
 [Install]
