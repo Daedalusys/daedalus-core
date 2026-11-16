@@ -305,6 +305,10 @@ jobs:
           bash tests/ci/credential-surface-check.sh --selftest
           bash tests/ci/release-asset-name-test.sh
           bash tests/ci/release-promote-test.sh
+          # Release 保留脚本会真删东西:它的四条安全边界(读不出列表不删、
+          # 非 sha/draft/prerelease 永不删、最新 N 个永不删、超上限拒跑)只有
+          # 行为自检能钉住 —— 静态读脚本看不出退化。
+          bash tests/ci/prune-releases-test.sh
           bash tests/ci/plugin-install-mode.sh --selftest
           bash tests/ci/plugin-install-mode.sh
           # 端口冲突要与「产物引导失败」区分开:那条判定退化(把冲突当成引导失败)
@@ -1214,3 +1218,28 @@ jobs:
           bash tests/real-machine/lib/cleanup-verify-work.sh --keep 2 \
             "${{ github.workspace }}" "guest-probes-"
 
+
+  # Release 保留策略:core 每推一次 main 产出约 2.7GB 资产(qcow2 1.27GB + ISO 1.46GB)。
+  # 2026-11-16 手工清过一次(31 → 2),当天又长回 6(11.7GB)—— 手工保留策略等于没有。
+  prune-releases:
+    name: Prune old releases (keep 3)
+    needs: [build-qcow2, deploy-verify-iso]
+    # 只对出货档跑;与两条发布腿同源判断。!cancelled() 是有意的:发布腿挂掉
+    # 也该清理历史(脚本只删**旧**的 sha tag,不碰本次的、不碰 draft/语义版本号)。
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: daedalus-core
+
+      - name: Prune old releases
+        shell: bash
+        working-directory: daedalus-core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/prune-releases.sh --keep 3 --repo "$GITHUB_REPOSITORY"
