@@ -305,6 +305,10 @@ jobs:
           bash tests/ci/credential-surface-check.sh --selftest
           bash tests/ci/release-asset-name-test.sh
           bash tests/ci/release-promote-test.sh
+          # Release 保留脚本会真删东西:它的四条安全边界(读不出列表不删、
+          # 非 sha/draft/prerelease 永不删、最新 N 个永不删、超上限拒跑)只有
+          # 行为自检能钉住 —— 静态读脚本看不出退化。
+          bash tests/ci/prune-releases-test.sh
           bash tests/ci/plugin-install-mode.sh --selftest
           bash tests/ci/plugin-install-mode.sh
           # 端口冲突要与「产物引导失败」区分开:那条判定退化(把冲突当成引导失败)
@@ -315,6 +319,9 @@ jobs:
           bash tests/real-machine/lib/artifact-fingerprint.selftest.sh
           bash tests/real-machine/lib/guest-driver.selftest.sh
           bash tests/real-machine/lib/cleanup-verify-work.selftest.sh
+          # 证据挑选是「证据包不再上传磁盘镜像」的唯一执行点:它 fail-open 会让
+          # 200 GB 级 artifact 长回来,它 fail-closed 会把失败现场一起丢掉。
+          bash tests/real-machine/lib/stage-evidence.selftest.sh
           # ISO 无人值守装机的静态门禁:装机脚本的底线(只按内核参数选盘、目标是整盘、
           # 无明文凭据、单元只在 live 触发、加速源只当传输通道且按 digest 钉死、target
           # 不指向加速源)。它此前没有任何 workflow 跑它 —— 静态门禁不接线就等于不存在。
@@ -711,9 +718,12 @@ jobs:
           name: daedalus-os-qcow2-headless
           # 限额说明:qcow2 实测约 1.3GB,artifact 上限 10GB;挂 Release 时的硬限
           # 是单文件 2GiB —— 那条闸在 scripts/release-asset-name.sh 里(超限退出码 2,
-          # 明确失败而非静默跳过)。artifact 默认保留 90 天,Release 资产长期可引用。
+          # 明确失败而非静默跳过)。Release 资产长期可引用。
           path: output/qcow2/
           if-no-files-found: error
+          # 只在本次 run 内被 deploy-verify-kvm 消费;3 天足够覆盖「重跑失败腿」
+          # (GitHub 重跑失败 job 复用原 run 的 artifact)。默认 90 天是隐形陷阱。
+          retention-days: 3
           compression-level: 0
 
       - name: Promote qcow2 to GitHub Release
@@ -831,6 +841,20 @@ jobs:
           # sudo 会清环境变量,VERIFY_WORK 必须显式透传
           sudo VERIFY_WORK="$VERIFY_WORK" bash tests/real-machine/bootc-verify.sh --qcow2 "$qcow2"
 
+      - name: Stage KVM evidence (logs only; disk images excluded)
+        # 证据包过去传的是整个 run 工作目录(qcow2 也会一并上传),
+        # 30 天保留 → 2026-11-16 实测 GitHub 上积了 371 GB / 187 个 artifact。磁盘不可重造的
+        # 部分在 Release 里已有;不可重造的是日志。这里只把 ≤8 MiB 的小文件挑进
+        # evidence/ 子目录。staging 失败不能让一条绿的部署腿变红,但必须留 warning。
+        if: always()
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/stage-evidence.sh \
+            "${{ github.workspace }}/verify-out-${{ github.run_id }}" \
+            "${{ github.workspace }}/verify-out-${{ github.run_id }}/evidence" \
+            || echo "::warning::证据挑选失败(见上方输出);磁盘镜像不会进入 artifact"
+
       - name: Upload boot evidence
         # 引导失败时证据照样回传:串口日志是排查 panic 的唯一线索。
         # 前置就失败时目录可能压根没建出来,所以用 warn 而不是 error——
@@ -839,8 +863,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-kvm-evidence
-          # 与 build step 的 VERIFY_WORK 同步:指向固定路径会收集不到本次 run 的证据。
-          path: ${{ github.workspace }}/verify-out-${{ github.run_id }}
+          # 与 staging 步骤同步:只传 evidence/ 子目录(整目录会带上磁盘镜像)。
+          path: ${{ github.workspace }}/verify-out-${{ github.run_id }}/evidence
           if-no-files-found: warn
           retention-days: 30
 
@@ -901,14 +925,28 @@ jobs:
             VERIFY_IMAGE_DIGEST="$VERIFY_IMAGE_DIGEST" \
             bash tests/real-machine/bootc-switch-verify.sh
 
+      - name: Stage switch evidence (logs only; disk images excluded)
+        # 证据包过去传的是整个 run 工作目录(switch-target.tar 1.3GB 一并上传),
+        # 30 天保留 → 2026-11-16 实测 GitHub 上积了 371 GB / 187 个 artifact。磁盘不可重造的
+        # 部分在 Release 里已有;不可重造的是日志。这里只把 ≤8 MiB 的小文件挑进
+        # evidence/ 子目录。staging 失败不能让一条绿的部署腿变红,但必须留 warning。
+        if: always()
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/stage-evidence.sh \
+            "${{ github.workspace }}/switch-verify-${{ github.run_id }}" \
+            "${{ github.workspace }}/switch-verify-${{ github.run_id }}/evidence" \
+            || echo "::warning::证据挑选失败(见上方输出);磁盘镜像不会进入 artifact"
+
       - name: Upload switch/rollback evidence
         # 失败时证据照样回传:三次引导的串口日志 + 完整日志是唯一线索。
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-bootc-switch-evidence
-          # 与 build step 的 VERIFY_WORK 同步:指向固定路径会收集不到本次 run 的证据。
-          path: ${{ github.workspace }}/switch-verify-${{ github.run_id }}
+          # 与 staging 步骤同步:只传 evidence/ 子目录(整目录会带上 switch-target.tar)。
+          path: ${{ github.workspace }}/switch-verify-${{ github.run_id }}/evidence
           if-no-files-found: warn
           retention-days: 30
 
@@ -996,13 +1034,28 @@ jobs:
             ISO_INSTALL_PROXY="$PROXY" \
             bash tests/real-machine/iso-verify.sh
 
+      - name: Stage ISO evidence (logs only; disk images excluded)
+        # 证据包过去传的是整个 run 工作目录(target-disk.qcow2 2.3GB 一并上传),
+        # 30 天保留 → 2026-11-16 实测 GitHub 上积了 371 GB / 187 个 artifact。被验证的 ISO 在
+        # Release 晋级链里有自己的一份;要留的是判「引导到哪一步」的日志。
+        # 这里只把 ≤8 MiB 的小文件挑进 evidence/ 子目录。
+        if: always()
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/stage-evidence.sh \
+            "${{ github.workspace }}/iso-verify-${{ github.run_id }}" \
+            "${{ github.workspace }}/iso-verify-${{ github.run_id }}/evidence" \
+            || echo "::warning::证据挑选失败(见上方输出);磁盘镜像不会进入 artifact"
+
       - name: Upload ISO verify evidence
         # 失败时证据照样回传:串口日志是判断「引导到哪一步」的唯一线索。
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-iso-evidence
-          path: ${{ github.workspace }}/iso-verify-${{ github.run_id }}
+          # 与 staging 步骤同步:只传 evidence/ 子目录(整目录会带上 target-disk.qcow2)。
+          path: ${{ github.workspace }}/iso-verify-${{ github.run_id }}/evidence
           if-no-files-found: warn
           retention-days: 30
 
@@ -1131,14 +1184,27 @@ jobs:
           done
           exit "$fail"
 
+      - name: Stage guest-probe evidence (logs only; disk images excluded)
+        # 证据包过去传的是整个 run 工作目录(a2-source.tar 1.3GB 与 a2-vdb.qcow2
+        # 一并上传),30 天保留 → 2026-11-16 实测 GitHub 上积了 371 GB / 187 个 artifact。
+        # 探针的判据全在日志里(probe-*.log 1.5K–39K),磁盘没有诊断价值。
+        if: always()
+        shell: bash
+        working-directory: daedalus-core
+        run: |
+          bash tests/real-machine/lib/stage-evidence.sh \
+            "${{ github.workspace }}/guest-probes-${{ github.run_id }}" \
+            "${{ github.workspace }}/guest-probes-${{ github.run_id }}/evidence" \
+            || echo "::warning::证据挑选失败(见上方输出);磁盘镜像不会进入 artifact"
+
       - name: Upload guest probe evidence
         # 失败时证据照样回传:每条探针的驱动日志与 guest 内原始输出是唯一线索。
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deploy-verify-guest-probes-evidence
-          # 与探针步骤的 VERIFY_WORK 同步:指向固定路径会收集不到本次 run 的证据。
-          path: ${{ github.workspace }}/guest-probes-${{ github.run_id }}
+          # 与 staging 步骤同步:只传 evidence/ 子目录(整目录会带上 a2-source.tar)。
+          path: ${{ github.workspace }}/guest-probes-${{ github.run_id }}/evidence
           if-no-files-found: warn
           retention-days: 30
 
@@ -1152,3 +1218,28 @@ jobs:
           bash tests/real-machine/lib/cleanup-verify-work.sh --keep 2 \
             "${{ github.workspace }}" "guest-probes-"
 
+
+  # Release 保留策略:core 每推一次 main 产出约 2.7GB 资产(qcow2 1.27GB + ISO 1.46GB)。
+  # 2026-11-16 手工清过一次(31 → 2),当天又长回 6(11.7GB)—— 手工保留策略等于没有。
+  prune-releases:
+    name: Prune old releases (keep 3)
+    needs: [build-qcow2, deploy-verify-iso]
+    # 只对出货档跑;与两条发布腿同源判断。!cancelled() 是有意的:发布腿挂掉
+    # 也该清理历史(脚本只删**旧**的 sha tag,不碰本次的、不碰 draft/语义版本号)。
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.PUSH) || github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: daedalus-core
+
+      - name: Prune old releases
+        shell: bash
+        working-directory: daedalus-core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/prune-releases.sh --keep 3 --repo "$GITHUB_REPOSITORY"
