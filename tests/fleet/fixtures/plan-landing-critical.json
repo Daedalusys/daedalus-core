@@ -1,0 +1,22 @@
+{
+  "id": "f00dfeed1a2b3c4d",
+  "intents": [
+    {
+      "kind": "package",
+      "target": "grub2-efi-x64",
+      "spec": { "desired_state": "latest" },
+      "expected_diff": "拒绝下发:该包会落到 /boot(控制面按包名判 low,agent 按落点兜底拒绝)\n",
+      "risk_class": "low"
+    }
+  ],
+  "machines": [
+    { "machine_id": "rhel9-a", "kind": "agent", "support_level": "supported" }
+  ],
+  "batching": { "strategy": "count", "size": 1 },
+  "blast_radius": {
+    "count": 1,
+    "kind_breakdown": { "package": 1 },
+    "max_downtime_ns": 30000000000,
+    "max_risk": "low"
+  }
+}
