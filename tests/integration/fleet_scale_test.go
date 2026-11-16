@@ -166,6 +166,75 @@ func TestFleetScale_ImportanceOrdering(t *testing.T) {
 		n, len(run.Batches[0].NodeIDs), len(run.Batches[1].NodeIDs))
 }
 
+// TestFleetScale_UnreachableNodeDirtiesAndStops 钉"停手":第 60 台不可达
+// (count size=50 → 它在第 2 批)。
+//
+//   - 前两批照跑(它之前每台各 1 次);
+//   - 那一批整批 dirty,状态 dirty,StoppedAt 指向下一批;
+//   - **它之后的机器一台都没跑**:同一批的后续机器与后续批的调用计数全为 0
+//     —— 这才是"停手"的判据,只断言 StoppedAt 非空证明不了任何事。
+func TestFleetScale_UnreachableNodeDirtiesAndStops(t *testing.T) {
+	n := scaleN(t)
+	pki := newScalePKI(t)
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	agents, addrs := startScaleAgents(t, pki, n)
+	deadIdx := scaleIndex(n, 60)
+	if deadIdx+1 >= n {
+		t.Skipf("需要死节点之后还有机器,当前 DAEDALUS_SCALE_N=%d", n)
+	}
+	// 先起完所有 agent 再取死端口:端口的分配/释放在这之后没有新的监听了。
+	addrs[deadIdx] = deadAddr(t)
+	registerScaleNodes(t, reg, addrs)
+
+	plan := scalePlan(t, n, objectmodel.BatchingCount, 50, objectmodel.KindPackage, objectmodel.RiskClassLow)
+	start := time.Now()
+	run, err := fleet.NewScheduler(reg, policy.Default()).Run(context.Background(), plan)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if run.Status != objectmodel.PlanStatusDirty {
+		t.Fatalf("status = %v, want dirty", run.Status)
+	}
+	if run.StoppedAt == nil {
+		t.Fatal("StoppedAt 为空:整批 dirty 时必须指向没跑的那一批")
+	}
+
+	// 死节点之前:每台恰好 1 次(低危重试的是死节点自己,不许连坐)。
+	for i := 0; i < deadIdx; i++ {
+		if got := agents[i].calls.Load(); got != 1 {
+			t.Fatalf("第 %d 台收到 %d 次 ApplyIntent, want 1", i, got)
+		}
+	}
+	// 死节点之后(同批剩余 + 后续批):一次都没跑。
+	for i := deadIdx + 1; i < n; i++ {
+		if got := agents[i].calls.Load(); got != 0 {
+			t.Fatalf("第 %d 台在脏批之后仍收到 %d 次 ApplyIntent, want 0(停手不彻底)", i, got)
+		}
+	}
+	// 结果里只该有死节点及其之前的记录。
+	if got, want := len(run.Results), deadIdx+1; got != want {
+		t.Fatalf("results = %d, want %d(只跑到死节点为止)", got, want)
+	}
+	res, ok := resultFor(run, machineID(deadIdx))
+	if !ok {
+		t.Fatalf("结果里没有死节点 %s 的记录", machineID(deadIdx))
+	}
+	if res.Outcome.String() != "persistent" {
+		t.Fatalf("死节点 outcome = %s, want persistent", res.Outcome)
+	}
+	if res.Message == "" {
+		t.Fatal("死节点的结果没有失败原因")
+	}
+
+	t.Logf("UNREACHABLE %d 节点:第 %d 台不可达,耗时 %s,已跑 %d 台,停在第 %d 批",
+		n, deadIdx, elapsed.Round(time.Millisecond), len(run.Results), run.StoppedAt.Index)
+}
+
 // ---------------- 助手 ----------------
 
 // scaleN 是本次 scale 测量的节点数:默认 200(spec G1 的数),
@@ -322,6 +391,40 @@ func scalePlan(t *testing.T, n int, strategy objectmodel.BatchingStrategy, size 
 		t.Fatalf("构造的 Plan 未通过校验: %v", err)
 	}
 	return plan
+}
+
+// scaleIndex 把用例想要的机器下标夹进 [0, n-1]:默认 200 台时原样返回,
+// DAEDALUS_SCALE_N 调小后不至于越界。
+func scaleIndex(n, want int) int {
+	if want >= n {
+		return n - 1
+	}
+	return want
+}
+
+// deadAddr 取一个"确实连不上"的 loopback 地址:绑端口后立刻关掉。
+// (留一个不说话的监听会让 RPC 挂到 60s 超时,那是另一条路径。)
+func deadAddr(t *testing.T) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("绑定临时端口: %v", err)
+	}
+	addr := lis.Addr().String()
+	if err := lis.Close(); err != nil {
+		t.Fatalf("关闭临时端口: %v", err)
+	}
+	return addr
+}
+
+// resultFor 找某台机器的结果记录。
+func resultFor(run *fleet.PlanRun, nodeID string) (fleet.StepResult, bool) {
+	for _, r := range run.Results {
+		if r.NodeID == nodeID {
+			return r, true
+		}
+	}
+	return fleet.StepResult{}, false
 }
 
 // registerScaleNodes 把 n 台假被控机直接种进注册表(不经 RegisterNode ——
