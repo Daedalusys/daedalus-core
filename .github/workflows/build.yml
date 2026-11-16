@@ -329,6 +329,10 @@ jobs:
           bash tests/real-machine/lib/artifact-fingerprint.selftest.sh
           bash tests/real-machine/lib/guest-driver.selftest.sh
           bash tests/real-machine/lib/cleanup-verify-work.selftest.sh
+          # 网络调用的「有界 + 重试」是所有实机腿共用的执行点:退化成一刀切短超时
+          # 会把「慢但会成功」的 2.25 GB 拉取砍成假红,退化回无界又会让一次挂住的
+          # 请求吃掉整腿的 job 时限 —— 两种退化都只有自检能发现。
+          bash tests/real-machine/lib/net-retry.selftest.sh
           # 证据挑选是「证据包不再上传磁盘镜像」的唯一执行点:它 fail-open 会让
           # 200 GB 级 artifact 长回来,它 fail-closed 会把失败现场一起丢掉。
           bash tests/real-machine/lib/stage-evidence.selftest.sh

@@ -55,6 +55,10 @@ BOOT_TIMEOUT="${VERIFY_BOOT_TIMEOUT:-180}"
 # 否则只会退到 QEMU_EXITED,让查的人先怀疑 qcow2 坏了。
 # shellcheck source=/dev/null
 . "$(dirname -- "${BASH_SOURCE[0]}")/lib/ssh-port.sh"
+# 镜像拉取/导出经「有界 + 重试」:一次挂住的拉取会一路吃到整腿的 job 时限,
+# 而「慢但会成功」的大镜像拉取(实测 2.25 GB 跑了 42 分钟)不能被短超时砍掉。
+# shellcheck source=/dev/null
+. "$(dirname -- "${BASH_SOURCE[0]}")/lib/net-retry.sh"
 SSH_PORT="$(ssh_port_resolve 2222)" || exit 2
 QCOW2=""
 # --qcow2 显式传入的产物是调用方自己给的,不复用判据管辖:它的来源在脚本看来是
@@ -292,8 +296,11 @@ else
     if [ ! -f "$QCOW2" ]; then
         say "Phase 2.1 · 回退:本地用 bootc-image-builder 造 qcow2"
         info "会 podman pull $IMAGE(~7 GB)并 rootful 构建,耗时较长"
-        podman pull "$IMAGE" >>"$LOG" 2>&1 || { bad "podman pull 失败,详见 $LOG"; exit 2; }
-        podman save --format oci-archive -o "$WORK/daedalus-os.oci.tar" "$IMAGE" >>"$LOG" 2>&1 \
+        net_retry "$NET_PULL_TIMEOUT" "$NET_PULL_ATTEMPTS" \
+            podman pull --retry 3 --retry-delay 5s "$IMAGE" >>"$LOG" 2>&1 \
+            || { bad "podman pull 失败,详见 $LOG"; exit 2; }
+        net_retry "$NET_SAVE_TIMEOUT" "$NET_SAVE_ATTEMPTS" \
+            podman save --format oci-archive -o "$WORK/daedalus-os.oci.tar" "$IMAGE" >>"$LOG" 2>&1 \
             || { bad "podman save 失败,详见 $LOG"; exit 2; }
         podman load -i "$WORK/daedalus-os.oci.tar" >>"$LOG" 2>&1 \
             || { bad "podman load 失败,详见 $LOG"; exit 2; }

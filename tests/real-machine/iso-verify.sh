@@ -135,6 +135,11 @@ if [ -r "$SCRIPT_DIR/lib/artifact-fingerprint.sh" ]; then
     . "$SCRIPT_DIR/lib/artifact-fingerprint.sh"
 fi
 
+# 镜像拉取经「有界 + 重试」:一次挂住的拉取会一路吃到整腿的 job 时限,
+# 而「慢但会成功」的大镜像拉取(实测 2.25 GB 跑了 42 分钟)不能被短超时砍掉。
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/lib/net-retry.sh"
+
 QEMU_PID=""
 cleanup() {
     [ -n "${QEMU_PID:-}" ] && { kill "$QEMU_PID" 2>/dev/null; sleep 1; kill -9 "$QEMU_PID" 2>/dev/null; }
@@ -243,7 +248,9 @@ else
     # 判定函数缺失(脚本被单独拷到别处跑):不能退回「本地有就跳过」——
     # 那正是用旧镜像产出假绿的那条路径,宁可多拉一次。
     warn "找不到 artifact-fingerprint.sh → 无条件重拉 $IMAGE(不做新鲜度比对)"
-    podman pull "$IMAGE" >>"$LOG" 2>&1 || die "拉取 $IMAGE 失败"
+    net_retry "$NET_PULL_TIMEOUT" "$NET_PULL_ATTEMPTS" \
+        podman pull --retry 3 --retry-delay 5s "$IMAGE" >>"$LOG" 2>&1 \
+        || die "拉取 $IMAGE 失败"
 fi
 podman build --security-opt label=disable --http-proxy=false -t localhost/daedalus-iso-payload -f "$VM/Containerfile" "$VM" >>"$LOG" 2>&1 \
     || { bad "派生 payload 镜像失败,见 $LOG"; exit 1; }

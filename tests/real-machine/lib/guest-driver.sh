@@ -41,6 +41,9 @@ _fp_lib="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/artifact-fingerprin
 }
 # shellcheck source=artifact-fingerprint.sh
 . "$_fp_lib"
+# 导出 OCI 归档经「有界 + 重试」:一次卡住的导出(磁盘慢/IO 争抢)不能无限期挂着。
+# shellcheck source=/dev/null
+. "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/net-retry.sh"
 
 # 组/用户/口令:与 78-dev-user.sh 的要点一致(见下方 driver_derive 注释)。
 DRIVER_USER="verify"
@@ -184,7 +187,8 @@ driver_init() {
 # driver_oci_archive <tag> <out-path> —— 把镜像打成 OCI 归档(scp 进 guest 用)。
 driver_oci_archive() {
     local tag="$1" path="$2"
-    podman save --format oci-archive -o "$path" "$tag" >>"$DRIVER_LOG" 2>&1 \
+    net_retry "$NET_SAVE_TIMEOUT" "$NET_SAVE_ATTEMPTS" \
+        podman save --format oci-archive -o "$path" "$tag" >>"$DRIVER_LOG" 2>&1 \
         || { bad "podman save $tag 失败"; exit 1; }
     ok "OCI 归档: $path($(du -h "$path" | cut -f1))"
 }
