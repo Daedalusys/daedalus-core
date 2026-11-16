@@ -220,6 +220,22 @@ else
     ok "runner 已注册: $RUNNER_NAME(标签 $RUNNER_LABELS)"
 fi
 
+# ------------------------------------------------------- 网络停滞检测 ---
+say "Phase 3.5 · git 网络停滞检测"
+# 自托管 runner 拉 github.com 会偶发挂住:一次 checkout 里的 git fetch 卡到
+# 136 秒才报 unexpected eof,直接把 deploy-verify-kvm 腿判红(2026-11-16 实测)。
+# git 默认只在 TCP 层兜底,传输停滞时它可以挂很久。低速即断:低于 1KB/s 持续
+# 60 秒就放弃 —— 快速失败 + 重跑,远好过无声挂着。
+# 当前用户(runner 用户)与 root 都要设:workflow 里既有以 runner 身份跑的
+# checkout,也有 sudo 起来的步骤。
+# 这条配置也可以只在宿主上手工设,但那样重装 runner 就丢了 —— 故必须落在本脚本里。
+git config --global http.lowSpeedLimit 1000
+git config --global http.lowSpeedTime 60
+sudo git config --global http.lowSpeedLimit 1000 \
+    || warn "root 的 git 停滞检测没设成(不影响 checkout —— 它在 runner 用户下跑)"
+sudo git config --global http.lowSpeedTime 60 || true
+ok "git 停滞检测: $(git config --global --get http.lowSpeedLimit) B/s × $(git config --global --get http.lowSpeedTime) s"
+
 say "Phase 4 · 装成 systemd 服务"
 if ! sudo ./svc.sh install "$(id -un)"; then
     # 再兜一层:svc.sh 对已存在的 unit 文件是硬失败,清掉再来一次

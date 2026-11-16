@@ -8,6 +8,14 @@
 # daedalus-plugins 的 release zip 在镜像构建 job 内联下载;policy.toml drift
 # 守门放本 workflow(只有这里同时具备 SDK 兄弟仓与生产 policy.toml)。
 name: Build Daedalus Core
+
+# apt 的硬超时预算。一次 hung 的镜像站连接曾让一条 30 秒的 apt 步骤挂满 51 分钟
+# (2026-11-17 实测 run 43908965143 attempt 1),而 job 只显示 in_progress ——
+# 没人知道它停了。宁可几分钟内失败重跑,也不要无声挂在网络重试里。
+env:
+  APT_OPTS: "-o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=2"
+  APT_TIMEOUT: "300"
+
 on:
   pull_request:
     # 不加 paths-ignore:required status check 一旦被路径过滤掉,纯文档 PR 就没有
@@ -145,9 +153,11 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         run: |
-          sudo apt-get update -y || true
-          sudo apt-get install -y just
-          just --version
+          # 无超时预算时这条步骤曾挂 51 分钟(job 一直 in_progress);预算见文件顶部 env:。
+          sudo timeout "$APT_TIMEOUT" apt-get $APT_OPTS update -y \
+            || echo "::warning::apt-get update 超时/失败;继续尝试 install"
+          sudo timeout "$APT_TIMEOUT" apt-get $APT_OPTS install -y just
+          timeout 60 just --version
 
       - name: Prepare justfile.local (gitignored stub for import)
         # 主 justfile 加了 `import "justfile.local"`。本机私有 recipe 永不进库
@@ -319,6 +329,10 @@ jobs:
           bash tests/real-machine/lib/artifact-fingerprint.selftest.sh
           bash tests/real-machine/lib/guest-driver.selftest.sh
           bash tests/real-machine/lib/cleanup-verify-work.selftest.sh
+          # 网络调用的「有界 + 重试」是所有实机腿共用的执行点:退化成一刀切短超时
+          # 会把「慢但会成功」的 2.25 GB 拉取砍成假红,退化回无界又会让一次挂住的
+          # 请求吃掉整腿的 job 时限 —— 两种退化都只有自检能发现。
+          bash tests/real-machine/lib/net-retry.selftest.sh
           # 证据挑选是「证据包不再上传磁盘镜像」的唯一执行点:它 fail-open 会让
           # 200 GB 级 artifact 长回来,它 fail-closed 会把失败现场一起丢掉。
           bash tests/real-machine/lib/stage-evidence.selftest.sh
@@ -403,14 +417,15 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         run: |
-          sudo apt-get update -y || true
+          sudo timeout "$APT_TIMEOUT" apt-get $APT_OPTS update -y \
+            || echo "::warning::apt-get update 超时/失败;继续尝试 install"
           # qemu-user-static 在 Ubuntu 26.04 (resolute) 后更名为
           # qemu-user-binfmt-hwe 或 qemu-user-binfmt;原包名是 virtual package
           # 已无 installation candidate。amd64-only build 不需要 qemu,先按
           # 暂存在的 fallback 装以避免虚拟包报错中断。
-          sudo apt-get install -y podman just
-          sudo apt-get install -y qemu-user-binfmt-hwe || \
-            sudo apt-get install -y qemu-user-binfmt || \
+          sudo timeout "$APT_TIMEOUT" apt-get $APT_OPTS install -y podman just
+          sudo timeout "$APT_TIMEOUT" apt-get $APT_OPTS install -y qemu-user-binfmt-hwe || \
+            sudo timeout "$APT_TIMEOUT" apt-get $APT_OPTS install -y qemu-user-binfmt || \
             echo "WARN: no qemu-user-binfmt available; \
               cross-arch build unsupported"
 
@@ -667,8 +682,9 @@ jobs:
       - name: Set up Podman
         shell: bash
         run: |
-          sudo apt-get update -y || true
-          sudo apt-get install -y podman
+          sudo timeout "$APT_TIMEOUT" apt-get $APT_OPTS update -y \
+            || echo "::warning::apt-get update 超时/失败;继续尝试 install"
+          sudo timeout "$APT_TIMEOUT" apt-get $APT_OPTS install -y podman
 
       - name: Log in to ghcr.io
         uses: redhat-actions/podman-login@50c2d9a331bb67c8fdab99b86455fad05e2e3252 # v2.0

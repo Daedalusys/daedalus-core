@@ -5,6 +5,11 @@
 # 复用判据若只看"文件在不在",就会在被测镜像已经换掉之后继续用旧产物 ——
 # 于是"修复无效"的假结论会一直出现。指纹的键必须是镜像 digest,tag 会变。
 
+# 远端 digest 查询与拉取都必须有界:一次挂住的请求会让整条实机腿停在「既没进展
+# 也没结论」的状态,而慢但会成功的拉取又不能被短超时砍掉(见 net-retry.sh)。
+# shellcheck source=/dev/null
+. "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/net-retry.sh"
+
 # 该 ref 是否指向 registry。本地自建 tag(localhost/... 或裸名)不参与远端比对:
 # 对它们 podman pull 必然失败,而它们的内容就在本地。
 artifact_fp_is_remote() {
@@ -25,7 +30,8 @@ artifact_fp_remote_digest() {
         echo "ERROR: 缺 skopeo,无法查询 $ref 的远端 digest(装 skopeo,或设 VERIFY_OFFLINE=1 明确跳过校验)" >&2
         return 1
     }
-    d="$(skopeo inspect --format '{{.Digest}}' "docker://$ref" 2>/dev/null)" || return 1
+    d="$(net_retry "$NET_INSPECT_TIMEOUT" "$NET_INSPECT_ATTEMPTS" \
+            skopeo inspect --format '{{.Digest}}' "docker://$ref")" || return 1
     [ -n "$d" ] || return 1
     printf '%s\n' "$d"
 }
@@ -56,6 +62,11 @@ artifact_fp_has_digest() {
 # CI 用 :${github.sha} 也会在 workflow_dispatch 重跑时被重推成不同内容。
 artifact_fp_refresh() {
     local ref="$1" remote local_digest
+    # 拉取只做一次外层尝试,用「单次预算 × 次数」作为这一次尝试的总上限:本文件的
+    # 既有自检把 podman pull 的调用次数钉死为恰好 1 次(远端≠本地那个用例),
+    # 外层重试会改变那个计数;瞬时重试改由 podman 自己的 --retry 承担。
+    # 总时间上限与其它调用点的「单次预算 × 次数」一致。
+    local pull_budget="$NET_PULL_TOTAL_TIMEOUT"
     if ! artifact_fp_is_remote "$ref"; then
         return 0
     fi
@@ -68,7 +79,7 @@ artifact_fp_refresh() {
     if [ -n "${VERIFY_IMAGE_DIGEST:-}" ]; then
         if ! artifact_fp_has_digest "$ref" "$VERIFY_IMAGE_DIGEST"; then
             echo "本地镜像 digest 与本次构建产出的不一致 → 拉新。ref=$ref 期望=$VERIFY_IMAGE_DIGEST 本地=$(artifact_fp_local_digest "$ref" | sed 's/^$/ <无>/')" >&2
-            podman pull "$ref" >/dev/null 2>&1 || {
+            net_retry "$pull_budget" 1 podman pull --retry 3 --retry-delay 5s "$ref" >/dev/null || {
                 echo "ERROR: 拉取 $ref 失败" >&2
                 return 1
             }
@@ -88,7 +99,7 @@ artifact_fp_refresh() {
     local_digest="$(artifact_fp_local_digest "$ref")"
     if ! artifact_fp_has_digest "$ref" "$remote"; then
         echo "镜像内容已变 → 拉新。ref=$ref 远端=$remote 本地=${local_digest:-<无>}" >&2
-        podman pull "$ref" >/dev/null 2>&1 || {
+        net_retry "$pull_budget" 1 podman pull --retry 3 --retry-delay 5s "$ref" >/dev/null || {
             echo "ERROR: 拉取 $ref 失败" >&2
             return 1
         }

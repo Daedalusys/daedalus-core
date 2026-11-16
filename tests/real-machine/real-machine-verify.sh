@@ -72,6 +72,10 @@ BOOT_TIMEOUT="${DAEDALUS_VERIFY_BOOT_TIMEOUT:-180}"
 # 而 Phase 3 只能报出「没抓到 login」—— 那是环境问题,不是产物问题。
 # shellcheck source=/dev/null
 . "$(dirname -- "${BASH_SOURCE[0]}")/lib/ssh-port.sh"
+# 镜像拉取/导出经「有界 + 重试」:一次挂住的拉取会一路吃到整腿的 job 时限,
+# 而「慢但会成功」的大镜像拉取(实测 2.25 GB 跑了 42 分钟)不能被短超时砍掉。
+# shellcheck source=/dev/null
+. "$(dirname -- "${BASH_SOURCE[0]}")/lib/net-retry.sh"
 SSH_PORT="$(ssh_port_resolve 2222)" || exit 2
 
 mkdir -p "$WORK"
@@ -86,6 +90,8 @@ die()  { printf '\033[1;31m   XX %s\033[0m\n' "$*" >&2; printf '   XX %s\n' "$*"
 # pull_image:优先走加速前缀拉镜像,拉完改回原名并删除代理侧的 tag。
 # 这样脚本后面所有地方都只认 IMAGE / BUILDER 的规范名,不必关心来源。
 # 本地已有该镜像时直接跳过,不做网络请求。
+# 拉取本身经 net_retry:单次预算宽(默认 2400s)、尝试次数少(默认 2 次),
+# podman 自己的 --retry 再兜一层瞬时失败。加速前缀 → 直连的顺序不变。
 pull_image() {
   local ref="$1"
   if podman image exists "$ref" 2>/dev/null; then
@@ -94,19 +100,22 @@ pull_image() {
   fi
   if [[ -z "$MIRROR" ]]; then
     say "拉取 $ref(直连)"
-    podman pull "$ref" || die "拉取 $ref 失败"
+    net_retry "$NET_PULL_TIMEOUT" "$NET_PULL_ATTEMPTS" \
+      podman pull --retry 3 --retry-delay 5s "$ref" || die "拉取 $ref 失败"
     return 0
   fi
   local proxied="${MIRROR}${ref}"
   say "拉取 $ref"
   info "加速前缀: ${MIRROR}"
-  if podman pull "$proxied"; then
+  if net_retry "$NET_PULL_TIMEOUT" "$NET_PULL_ATTEMPTS" \
+       podman pull --retry 3 --retry-delay 5s "$proxied"; then
     podman tag "$proxied" "$ref" || die "改名失败: $proxied → $ref"
     podman rmi "$proxied" >/dev/null 2>&1 || true
     ok "$ref 就绪(已从加速源拉取并改回原名)"
   else
     warn "加速源拉取失败,回退直连 $ref"
-    podman pull "$ref" || die "直连 $ref 也失败"
+    net_retry "$NET_PULL_TIMEOUT" "$NET_PULL_ATTEMPTS" \
+      podman pull --retry 3 --retry-delay 5s "$ref" || die "直连 $ref 也失败"
   fi
 }
 
@@ -214,7 +223,8 @@ phase_qcow2() {
   local archive="$WORK/daedalus-os.oci.tar"
   if [ -s "$archive" ]; then ok "archive 已存在,复用"
   else
-    podman save --format oci-archive -o "$archive" "$IMAGE" \
+    net_retry "$NET_SAVE_TIMEOUT" "$NET_SAVE_ATTEMPTS" \
+      podman save --format oci-archive -o "$archive" "$IMAGE" \
       || die "podman save 失败"
     ok "archive: $(du -h "$archive" | cut -f1) → $archive"
   fi
