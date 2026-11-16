@@ -1093,8 +1093,8 @@ jobs:
           persist-credentials: false
           path: daedalus-core
 
-      - name: "Guest probes: systemd sandbox / audit inode / destructive / fs guard / readonly / inventory / copilot / bootc install+upgrade"
-        # 八个探针串行跑:共享一个 VERIFY_WORK 目录 —— 首个探针派生一次性 verify
+      - name: "Guest probes: systemd sandbox / audit inode / destructive / fs guard / readonly / inventory / copilot / bootc install+upgrade / blueprint-ui / host bootc"
+        # 十个探针串行跑:共享一个 VERIFY_WORK 目录 —— 首个探针派生一次性 verify
         # 镜像与 qcow2,其余复用(driver_init 幂等),否则每条都要重出 ~7GB 镜像。
         # 任一探针非 0 即 job 红(含 fs 写守卫:它已是判据任务)。
         shell: bash
@@ -1103,7 +1103,7 @@ jobs:
           # 按 run 隔离:自托管 runner 的工作目录跨 run 持久化,固定路径会让上一次
           # run 的 qcow2 冒充本次镜像的产物(2026-11-07 实测的假红就是这么来的)。
           VERIFY_WORK: ${{ github.workspace }}/guest-probes-${{ github.run_id }}
-          # 本次构建推出的 manifest digest:八个探针共用同一个 VERIFY_WORK,
+          # 本次构建推出的 manifest digest:十个探针共用同一个 VERIFY_WORK,
           # 首个探针据此把本地镜像对齐到本次产物,后续探针命中同一指纹直接复用。
           VERIFY_IMAGE_DIGEST: ${{ needs.build-image.outputs.image_digest }}
         run: |
@@ -1120,6 +1120,8 @@ jobs:
             probe-plugin-inventory \
             probe-copilot \
             probe-bootc-install-upgrade \
+            probe-blueprint-ui \
+            probe-host-bootc \
           ; do
             echo "########## $p ##########"
             # sudo 会清环境变量,VERIFY_* 全都要显式透传
