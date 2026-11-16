@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -295,6 +296,81 @@ func TestFleetScale_TransientRetryOnlyFailedMachine(t *testing.T) {
 
 	t.Logf("RETRY %d 节点:第 %d 台 %d 次 ApplyIntent,其余各 1 次,耗时 %s",
 		n, retryIdx, agents[retryIdx].calls.Load(), elapsed.Round(time.Millisecond))
+}
+
+// TestFleetScale_HighRiskZeroRPC 钉 review focus #2:高危 intent 落在**没有回滚点**
+// 的 atomic 节点上,控制面在发 RPC **之前**就拒。
+//
+// 判据必须数到 ApplyIntent 次数为 0 —— 文案点名"无回滚点"只证明控制面写了句话,
+// 证明不了它没把 RPC 发出去;而 agent 侧自己拒也是另一种可能(两条不同的路)。
+func TestFleetScale_HighRiskZeroRPC(t *testing.T) {
+	n := scaleN(t)
+	pki := newScalePKI(t)
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	agents, addrs := startScaleAgents(t, pki, n)
+	atomicIdx := scaleIndex(n, 60)
+	if atomicIdx+1 >= n {
+		t.Skipf("需要无回滚点节点之后还有机器,当前 DAEDALUS_SCALE_N=%d", n)
+	}
+	registerScaleNodesWith(t, reg, addrs, func(i int, node *fleet.Node) {
+		if i != atomicIdx {
+			return
+		}
+		node.Kind = objectmodel.MachineKindAtomic
+		node.SnapshotCap = "SNAPSHOT_CAPABILITY_NONE"
+		node.SupportLevel = objectmodel.SupportLevelSupported
+	})
+
+	plan := scalePlan(t, n, objectmodel.BatchingCount, 50, objectmodel.KindPackage, objectmodel.RiskClassHigh)
+	plan.Machines[atomicIdx].Kind = objectmodel.MachineKindAtomic
+	if err := plan.Validate(); err != nil {
+		t.Fatalf("把第 %d 台改成 atomic 后 Plan 未通过校验: %v", atomicIdx, err)
+	}
+
+	start := time.Now()
+	run, err := fleet.NewScheduler(reg, policy.Default()).Run(context.Background(), plan)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// 核心断言:零 RPC。
+	if got := agents[atomicIdx].calls.Load(); got != 0 {
+		t.Fatalf("无回滚点的 atomic 节点收到 %d 次 ApplyIntent, want 0(高危必须在下发前拒)", got)
+	}
+	if run.Status != objectmodel.PlanStatusDirty {
+		t.Fatalf("status = %v, want dirty", run.Status)
+	}
+	if run.StoppedAt == nil {
+		t.Fatal("StoppedAt 为空:整批 dirty 时必须指向没跑的那一批")
+	}
+	res, ok := resultFor(run, machineID(atomicIdx))
+	if !ok {
+		t.Fatalf("结果里没有第 %d 台的拒绝记录", atomicIdx)
+	}
+	if !strings.Contains(res.Message, "无回滚点") {
+		t.Fatalf("拒绝文案应点名「无回滚点」, got %q", res.Message)
+	}
+	if res.Outcome.String() != "persistent" {
+		t.Fatalf("拒绝记录 outcome = %s, want persistent", res.Outcome)
+	}
+
+	for i := 0; i < atomicIdx; i++ {
+		if got := agents[i].calls.Load(); got != 1 {
+			t.Fatalf("第 %d 台收到 %d 次 ApplyIntent, want 1", i, got)
+		}
+	}
+	for i := atomicIdx + 1; i < n; i++ {
+		if got := agents[i].calls.Load(); got != 0 {
+			t.Fatalf("第 %d 台在脏批之后仍收到 %d 次 ApplyIntent, want 0", i, got)
+		}
+	}
+
+	t.Logf("HIGHRISK %d 节点:第 %d 台无回滚点,ApplyIntent 0 次,耗时 %s,文案=%q",
+		n, atomicIdx, elapsed.Round(time.Millisecond), res.Message)
 }
 
 // ---------------- 助手 ----------------
