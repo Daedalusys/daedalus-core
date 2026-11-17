@@ -174,6 +174,16 @@ type Scheduler struct {
 	// "无 re-register 通道",轮换直接判持久失败。
 	Register func(ctx context.Context, t DispatchTarget) (Node, error)
 
+	// HeartbeatTimeout 是**活性预检**的时限,取自 policy.toml 的
+	// [fleet].heartbeat_timeout_seconds。它只作用于一次 Heartbeat 往返,
+	// 绝不套到工作 RPC 上:装一个内核包合法地能跑几分钟,拿心跳口径判
+	// ApplyIntent 会把真实装包全判死(工作 RPC 的兜底仍是 CallTimeout)。
+	HeartbeatTimeout time.Duration
+	// Probe 是下发前的一次活性预检(生产为 dialHeartbeat)。nil 表示
+	// "无预检通道,跳过预检" —— 直接构造 &Scheduler{...} 的调用方(既有
+	// 测试)据此保持旧行为,不必改一行断言。
+	Probe func(ctx context.Context, t DispatchTarget) error
+
 	// Policy 是风险判定表的来源(判定结果与 intent 声明取更严的一侧)。
 	Policy *policy.Policy
 	// dial 是生产下发的凭证配置基座;Addr 每次按目标节点覆盖。
@@ -184,16 +194,28 @@ type Scheduler struct {
 // (DAEDALUS_FLEET_CLIENT_CERT / _KEY / DAEDALUS_FLEET_CA)。
 func NewScheduler(r *Registry, pol *policy.Policy) *Scheduler {
 	s := &Scheduler{
-		Registry:    r,
-		RetryMax:    RetryMax(pol),
-		CallTimeout: defaultCallTimeout,
-		Now:         time.Now,
-		Policy:      pol,
-		dial:        DialConfigFromEnv(),
+		Registry:         r,
+		RetryMax:         RetryMax(pol),
+		CallTimeout:      defaultCallTimeout,
+		HeartbeatTimeout: heartbeatTimeoutFromPolicy(pol),
+		Now:              time.Now,
+		Policy:           pol,
+		dial:             DialConfigFromEnv(),
 	}
 	s.Dispatch = s.dialDispatch
 	s.Register = s.dialRegister
+	s.Probe = s.dialHeartbeat
 	return s
+}
+
+// heartbeatTimeoutFromPolicy 取 [fleet].heartbeat_timeout_seconds 作为活性预检
+// 的时限。策略校验已强制该键为正;回落 defaultCallTimeout 只防直接构造
+// &Scheduler{...} 时的空值 / nil 策略,不改变生产口径。
+func heartbeatTimeoutFromPolicy(pol *policy.Policy) time.Duration {
+	if pol == nil || pol.Fleet.HeartbeatTimeoutSeconds <= 0 {
+		return defaultCallTimeout
+	}
+	return time.Duration(pol.Fleet.HeartbeatTimeoutSeconds) * time.Second
 }
 
 // DialConfigFromEnv 从环境变量装配基础 DialConfig(Addr 由调用方按节点覆盖)。

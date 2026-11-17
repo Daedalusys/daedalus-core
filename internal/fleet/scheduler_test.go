@@ -710,3 +710,19 @@ func TestScheduler_HighRiskFileIntentRefusedOnAtomicWithoutSnapshot(t *testing.T
 		t.Errorf("Status = %q, want %q", run.Status, objectmodel.PlanStatusDirty)
 	}
 }
+
+// TestScheduler_HeartbeatTimeoutComesFromPolicy 钉住心跳时限的**唯一来源**:
+// policy.toml 的 [fleet].heartbeat_timeout_seconds。它此前只在 SDK 里被解析、
+// core 里零命中(issue #166);固定 60s 的 defaultCallTimeout 是工作 RPC 的兜底,
+// 不该拿来当活性判据。
+func TestScheduler_HeartbeatTimeoutComesFromPolicy(t *testing.T) {
+	pol := policy.Default()
+	pol.Fleet.HeartbeatTimeoutSeconds = 7
+	s := NewScheduler(newRegistryWithNodes(t), pol)
+	if s.HeartbeatTimeout != 7*time.Second {
+		t.Fatalf("HeartbeatTimeout = %v, want 7s(策略里的 heartbeat_timeout_seconds 必须被读)", s.HeartbeatTimeout)
+	}
+	if s.Probe == nil {
+		t.Fatal("NewScheduler 必须装配生产预检通道(dialHeartbeat)")
+	}
+}
