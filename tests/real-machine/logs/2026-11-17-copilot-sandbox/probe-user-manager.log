@@ -1,0 +1,84 @@
+
+== 环境三元组(结论绑定版本,否则不可复现) ==
+      euid=1000 root=0 work=/tmp/probe-copilot-sandbox.Dtveeb
+      deno 真二进制: /home/udefine-dev/.asdf/installs/deno/2.9.5/bin/deno
+      环境三元组: systemd=259 | deno=deno 2.9.5 (stable, release, x86_64-unknown-linux-gnu) | kernel=7.3.3-200.fc44.x86_64
+      DynamicUser 用副本: /tmp/probe-copilot-sandbox.Dtveeb/exec/deno
+      manager: user manager(uid 1000)
+      unit 内 deno: deno 2.9.5 (stable, release, x86_64-unknown-linux-gnu)
+
+== S1 · V8 JIT 与 MemoryDenyWriteExecute / seccomp 的兼容性(最可能否掉提议的一条) ==
+      S1-plan 计划原文(系统 manager + DynamicUser + seccomp + W^X)关键行:
+      Failed to start transient service unit: Access denied as the requested operation requires interactive authentication. However, interactive authentication has not been enabled by the calling program.
+      S1-plan 去掉 seccomp(只剩 DynamicUser+ProtectSystem+W^X): 
+NOTE BLOCKED S1-plan 计划原文形态需 root(实测: Failed to start transient service unit: Access denied as the requested operation requires interactive authentication. However, interactive authentication has not been enabled by the calling program.)—— 下面的 user manager 等效形态才是本机真证据
+      S1-W^X(只 MemoryDenyWriteExecute=yes)关键行:
+      Deno has panicked. This is a bug in Deno. Please report this
+      Version: 2.9.5
+      Args: ["/tmp/probe-copilot-sandbox.Dtveeb/exec/deno", "eval", "const f = new Function(\"a\",\"b\",\"return a+b\"); let s=0; for (let i=0;i<2e5;i++) s=f(s,i); console.log(\"JIT_OK\", s>0)"]
+      thread 'main' (381378) panicked at cli/lib.rs:698:5:
+      Fatal error in :0: Check failed: success || errno == ENOMEM.
+FAIL S1 MemoryDenyWriteExecute=yes 直接杀死 V8:Fatal error in :0: Check failed: success || errno == ENOMEM.
+      S1-seccomp(只 SystemCallFilter=@system-service,不 --quiet 以取退出态):
+                Finished with result: core-dump
+      Main processes terminated with: code=dumped, status=31/SYS
+      unprivileged 形参提示:改 SystemCallErrorNumber=EPERM 后同一 filter → JIT_OK true
+      W^X + seccomp + SystemCallErrorNumber=EPERM(把 seccomp 致死因素摘掉后只剩 W^X):
+      Args: ["/tmp/probe-copilot-sandbox.Dtveeb/exec/deno", "eval", "const f = new Function(\"a\",\"b\",\"return a+b\"); let s=0; for (let i=0;i<2e5;i++) s=f(s,i); console.log(\"JIT_OK\", s>0)"]
+      Fatal error in :0: Check failed: 12 == (*__errno_location ()).
+FAIL S1 纯 seccomp(@system-service)也会杀 deno:单元退出态 Main processes terminated with: code=dumped, status=31/SYS;换 SystemCallErrorNumber=EPERM 即恢复 → 死因是 syscall 白名单差集,不是 W^X 单独一条
+      S1-逃生门(W^X + seccomp + --v8-flags=--jitless): JIT_OK true
+PASS S1 逃生门成立:--v8-flags=--jitless 下 W^X + seccomp 全开仍存活(代价 = 放弃 V8 优化 JIT)
+
+== S2 · systemd-run --scope 是否真能施加 Protect*/SystemCallFilter(看证据不看返回码) ==
+      scope -p ProtectSystem=strict                   → Unknown assignment: ProtectSystem=strict
+      scope -p SystemCallFilter=@system-service       → Unknown assignment: SystemCallFilter=@system-service
+      scope -p MemoryDenyWriteExecute=yes             → Unknown assignment: MemoryDenyWriteExecute=yes
+      scope -p NoNewPrivileges=yes                    → Unknown assignment: NoNewPrivileges=yes
+      scope -p RestrictAddressFamilies=AF_UNIX        → Unknown assignment: RestrictAddressFamilies=AF_UNIX
+      scope -p RestrictNetworkInterfaces=lo           → Unknown assignment: RestrictNetworkInterfaces=lo
+FAIL S2 --scope 拒收沙箱属性:6/6 条被 systemd-run 直接判「Unknown assignment」→ scope 形态不可用,只能走 service 形态
+      S2-service(ProtectSystem=strict + seccomp)逐字:
+      Seccomp:	2
+      ro,relatime,seclabel,compress=zstd:1,ssd,discard=async,space_cache=v2,subvolid=256,subvol=/root
+PASS S2 service 形态 seccomp 真生效(Seccomp: 2)
+PASS S2 service 形态 ProtectSystem=strict 真生效(/ 为 ro)
+
+== S3 · TTY(isTerminal)与 Ctrl-C 在候选形态下是否保住 ==
+      pty 装置: python3 pty.fork
+      无 pty(自检)  ISATTY false false false
+PASS S3 测法自检:无 pty 时 isTerminal=false(读数可信)
+PASS S3 候选形态(unit --pipe)在调用方为 TTY 时 stdin/stdout isTerminal=true
+      pipe     前端退出=signal:2 单元内进程存活=yes SIGINT 送达单元=0 单元内 pid=381673
+FAIL S3 Ctrl-C 停不住沙箱内进程:--pipe 形态 前端被 SIGINT 杀死,但单元内进程仍存活且从未收到 SIGINT(送达=0)→ 前端与单元脱钩,退出会留孤儿
+      scope    前端退出=code:130 单元内进程存活=no SIGINT 送达单元=1 单元内 pid=381703
+NOTE BLOCKED S3 --scope 形态的 Ctrl-C 传播不单独判定(rc=code:130 存活=no 送达=1):该形态本身带不了沙箱属性(S2 已证),候选形态只剩 service 形态
+
+== S4 · IPAddressAllow/Deny 网络白名单是否真拦得住 ==
+      无沙箱(名字解析钉到确定 IP): example.com(172.66.147.243)=200  github.com(20.6.7.17)=200
+      (对照: github.com 无沙箱可通 → 若白名单下它不通才可能算拒绝证据)
+      IPAddressDeny=any 下访问裸域名 example.com(含 DNS 环节)→ code=200
+      IPAddressDeny=any 下访问钉住的 example.com(172.66.147.243)→ deny_any=200
+      IPAddressDeny=any + IPAddressAllow=172.66.147.243(正:example.com / 反:github.com)→ allow=200 deny=200
+      unprivileged_bpf_disabled=2(copilot 以普通用户跑时,BPF 过滤器装载不了)
+      manifest 现状(--allow-net 无白名单):
+      13:    "--allow-net",
+FAIL S4 user manager 下 IPAddressDeny=any 未生效:同一个可达 IP 仍 200(deny_any=200),unprivileged_bpf_disabled=2 → copilot 以用户身份跑时部署不了 BPF 网络白名单
+NOTE BLOCKED S4 系统 manager 形态(BPF 由 pid1 装载,需 root)本机无法取证 —— 只有把 copilot 改成系统单元才有这条路
+
+== S5 · Deno 拒绝写入时抛的 e.name(deno run vs deno eval,旧探针 D3 判据可信度) ==
+      (a) deno eval --allow-write=/tmp 写 /etc: [0m[1m[31merror[0m: unexpected argument '--allow-write' found    tip: a similar argument exists: '--allow-scripts'  Usage: deno eval --allow-scripts[=<PACKAGE>...] [CODE_ARG]...
+      (a) deno eval --deny-write 写 /tmp: [0m[1m[31merror[0m: unexpected argument '--deny-write' found    tip: a similar argument exists: '--env-file'  Usage: deno eval --env-file[=<FILE>] [CODE_ARG]...
+      (a) deno eval --allow-write=/tmp 问 /usr 的写权限: [0m[1m[31merror[0m: unexpected argument '--allow-write' found    tip: a similar argument exists: '--allow-scripts'  Usage: deno eval --allow-scripts[=<PACKAGE>...] [CODE_ARG]...
+      (b) deno run --allow-write=/tmp 写 /var/tmp/probe-copilot-sandbox-outside(当前用户可写): DENIED /var/tmp/probe-copilot-sandbox-outside/x → NotCapable query /var/tmp/probe-copilot-sandbox-outside/x = denied
+      (b) deno run --allow-write=/ 写同一路径: WROTE /var/tmp/probe-copilot-sandbox-outside/y query /var/tmp/probe-copilot-sandbox-outside/y = granted
+      (c) deno run --allow-write='/tmp,$HOME/.local/share/daedalus'(字面量)写 $HOME 下: DENIED /home/udefine-dev/.local/share/daedalus/.probe117 → NotCapable query /home/udefine-dev/.local/share/daedalus/.probe117 = denied
+      (c) 同一条但路径写死展开: WROTE /home/udefine-dev/.local/share/daedalus/.probe117 query /home/udefine-dev/.local/share/daedalus/.probe117 = granted
+FAIL S5 旧 D3 判据不可用:本机 deno eval 不接受权限旗标(逐字:unexpected argument '--allow-write' found),旧 D3 那条命令从未真正跑起来
+PASS S5 生产形态(deno run)实测 e.name=NotCapable:用户可写路径被拒、--allow-write=/ 即成功 → 正确的判据是 run + NotCapable
+PASS S5 旧探针 D3b 的 '$HOME' 字面量在 deno run 下不展开(NotCapable),写死绝对路径才有效 → 旧写法是假绿
+
+== 汇总 ==
+---------------- 7 PASS / 6 FAIL / 3 BLOCKED ----------------
+提示:本探针的 FAIL = 被检验的提议不成立(不是探针故障);探针自身不可信会表现为 BLOCKED 或缺失输出。
+RESULT: SELFTEST FAIL (6)
