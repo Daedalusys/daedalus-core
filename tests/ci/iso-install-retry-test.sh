@@ -62,6 +62,10 @@ lib_eval() {
         set +u
         : "${LIB_TTY:=$WORK/tty-default}"
         TTY="$LIB_TTY"
+        # say 在生产里写串口(每行独立写);测试里若落进同一个普通文件,后面的写会把前面的
+        # 覆盖掉,「哪一次尝试拿了多少时限/预算」这类过程事实就看不见了。所以把 say 改写成
+        # 追加到独立文件;die() 往 $TTY 倒日志的行为保持原样。
+        say() { printf 'daedalus-iso-autoinstall: %s\n' "$*" >>"${LIB_SAY_LOG:-$WORK/say-default}"; }
         # 测试不碰块设备;但调用**次数**要留痕 —— "每次尝试前清理"只查静态 grep 不够。
         umount_target_disk() { printf 'umount\n' >>"${LIB_UMOUNT_LOG:-$WORK/umount-default}"; }
         sleep() { :; }
@@ -75,9 +79,9 @@ lib_eval() {
 run_install() {
     local tag="$1" retries="$2" budget="$3" two="${4:-0}"
     local plan="$WORK/plan.$tag" sum="$WORK/summary.$tag" ulog="$WORK/umount.$tag"
-    local log="$WORK/install.$tag" tty="$WORK/tty.$tag"
-    : >"$sum"; : >"$ulog"
-    BOOTC_PLAN="$plan" LIB_TTY="$tty" LIB_UMOUNT_LOG="$ulog" \
+    local log="$WORK/install.$tag" tty="$WORK/tty.$tag" saylog="$WORK/say.$tag"
+    : >"$sum"; : >"$ulog"; : >"$saylog"
+    BOOTC_PLAN="$plan" LIB_TTY="$tty" LIB_SAY_LOG="$saylog" LIB_UMOUNT_LOG="$ulog" \
     lib_eval "
         DEV=/dev/vda
         IMGREF='ghcr.io/daedalusys/daedalus-os:test'
@@ -143,7 +147,7 @@ out="$(run_install tmo 1 2100 0)"; rc=$?
 contains "$out" 'installed=0 attempts=1'; st $? "循环 rc=124 同源不重试(期望 attempts=1;实得 $(printf '%s' "$out" | tr '\n' ' '))"
 [ "$rc" -ne 0 ]; st $? "循环 全部失败时 die(rc=$rc)"
 summary_ok tmo 1
-if has '预算耗尽' "$WORK/tty.tmo"; then
+if has '预算耗尽' "$WORK/say.tmo"; then
     st 1 "循环 普通失败的 die 消息不得是「预算耗尽」(否则两种结局无法区分)"
 else
     st 0 "循环 普通失败的 die 消息与「预算耗尽」可区分"
@@ -175,13 +179,35 @@ contains "$out" 'installed=0 attempts=1'; st $? "循环 fatal 不重试同源(�
 printf '%s\n' '0|-' >"$WORK/plan.budget"
 out="$(run_install budget 1 0 0)"; rc=$?
 contains "$out" 'installed=0 attempts=0'; st $? "预算 预算耗尽前不发起尝试(期望 attempts=0;实得 $(printf '%s' "$out" | tr '\n' ' '))"
-if has '预算耗尽' "$WORK/tty.budget"; then
+if has '预算耗尽' "$WORK/say.budget"; then
     st 0 "预算 结局报「预算耗尽」(不是笼统的失败)"
 else
-    st 1 "预算 结局必须报「预算耗尽」(串口末尾:$(tail -1 "$WORK/tty.budget" 2>/dev/null))"
+    st 1 "预算 结局必须报「预算耗尽」(串口末尾:$(tail -1 "$WORK/say.budget" 2>/dev/null))"
 fi
 [ "$rc" -ne 124 ]; st $? "预算 预算耗尽的退出码不是 124(外层的 TIMEOUT 才有权用 124)"
 [ "$(nlines "$WORK/summary.budget")" = 0 ]; st $? "预算 没发起尝试就不写摘要行"
+
+# ------------------------------------------------ 预算:单次时限按「有无后备源」分形状 --
+# CI 只剩一个源(加速镜像已退役,core#138):没有后备可换时,SRC_TIMEOUT 的截断只会白扔预算,
+# 最后一个源必须拿剩余预算的全部。两源时截断仍要保留:装不完就换下一个源。
+printf '%s\n' '124|-' >"$WORK/plan.lastsrc"
+out="$(run_install lastsrc 1 2100 0)"; rc=$?
+pl="$(grep -o '单次时限 [0-9]*s' "$WORK/say.lastsrc" | head -1)"
+[ "$pl" = '单次时限 2100s' ]; st $? "时限 单源(最后一个源)拿剩余预算全部(期望 [单次时限 2100s] 实得 [$pl])"
+contains "$out" 'installed=0 attempts=1'; st $? "时限 单源仍是 rc=124 即 die、同源不重试(期望 attempts=1;实得 $(printf '%s' "$out" | tr '\n' ' '))"
+
+printf '%s\n' '124|-' '0|-' >"$WORK/plan.firstsrc"
+out="$(run_install firstsrc 1 2100 1)"; rc=$?
+pls="$(grep -o '单次时限 [0-9]*s' "$WORK/say.firstsrc" | tr '\n' ' ')"
+contains "$pls" '单次时限 900s'; st $? "时限 还有后备源时仍按 SRC_TIMEOUT 截断(期望含 [单次时限 900s] 实得 [$pls])"
+contains "$pls" '单次时限 2100s'; st $? "时限 换到最后一个源后拿剩余预算全部(期望含 [单次时限 2100s] 实得 [$pls])"
+contains "$out" 'installed=1 attempts=2'; st $? "时限 多源换源后成功(期望 installed=1 attempts=2;实得 $(printf '%s' "$out" | tr '\n' ' '))"
+
+# 剩余预算比 SRC_TIMEOUT 还小时,(0, 剩余预算] 的夹取仍然生效 —— 不许越过总预算。
+printf '%s\n' '124|-' >"$WORK/plan.smallbudget"
+out="$(run_install smallbudget 1 600 0)"; rc=$?
+pl="$(grep -o '单次时限 [0-9]*s' "$WORK/say.smallbudget" | head -1)"
+[ "$pl" = '单次时限 600s' ]; st $? "时限 剩余预算小于 SRC_TIMEOUT 时取剩余预算(期望 [单次时限 600s] 实得 [$pl])"
 
 # ------------------------------------------------------------ 预算与外层时限关系 --
 # 总预算必须**严格小于** iso-verify.sh 等 guest 重启的上限,否则外层把"预算耗尽"
