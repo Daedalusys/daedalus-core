@@ -1,0 +1,221 @@
+WARN: VERIFY_OFFLINE=1 —— 未校验 ghcr.io/daedalusys/daedalus-os:latest 的新鲜度,可能在旧镜像上判定
+   OK 复用已构建产物(qcow2 与被测镜像指纹一致: e47420fd40c1fb0b6734f688c0b5f6df6feb73b4989d5c53cabdf16ac1059bc1)
+   qemu pid=413263,串口 → /home/udefine-dev/a2-recal-work/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+
+== A2-0 · guest 内盘位 / bootc 版本 / podman 与存储 ==
+      NAME    SIZE TYPE
+      sr0    1024M rom
+      vda      10G disk
+      ├─vda1    1M part
+      ├─vda2  501M part
+      ├─vda3    1G part
+      └─vda4  8.5G part
+      vdb      20G disk
+      --- bootc ---
+      bootc 1.16.13
+      --- status ---
+      apiVersion: org.containers.bootc/v1
+      kind: BootcHost
+      metadata:
+        name: host
+      spec:
+        image:
+          image: localhost/daedalus-verify:base
+          transport: registry
+        bootOrder: default
+      status:
+        staged: null
+        booted:
+      --- podman ---
+      podman version 6.1.0
+      storage_driver=overlay graph_root=/var/lib/containers/storage
+      --- disk ---
+      Filesystem      Size  Used Avail Use% Mounted on
+      composefs       6.8M  6.8M     0 100% /
+      /dev/vda4       8.4G  2.1G  6.4G  25% /var
+      /dev/vda4       8.4G  2.1G  6.4G  25% /sysroot
+      --- ostree prepare-root ---
+      -rw-r--r--. 1 root root 52 Jan  1  1970 /usr/lib/ostree/prepare-root.conf
+      --- ostree deploy ---
+      * default a4cc39d044bd050acc8258334cf04cc72d796cd8209718d224e0bd9af4136ffa.0
+          origin: <unknown origin type>
+      --- repo commit 数 ---
+      18
+
+== A2-1 · bootc install to-disk /dev/vdb ==
+      Install to the target block device.
+      
+      This command must be invoked inside of the container, which will be installed. The container must be
+      run in `--privileged` mode, and hence will be able to see all block devices on the system.
+      
+      The default storage layout uses the root filesystem type configured in the container image,
+      alongside any required system partitions such as the EFI system partition. Use `install
+      to-filesystem` for anything more complex such as RAID, LVM, LUKS etc.
+      
+      Usage: bootc install to-disk [OPTIONS] <DEVICE>
+      
+      Arguments:
+        <DEVICE>
+                Target block device for installation.  The entire device will be wiped
+      
+      Options:
+            --wipe
+                Automatically wipe all existing data on device
+      
+            --block-setup <BLOCK_SETUP>
+                Target root block device setup.
+                
+                direct: Filesystem written directly to block device tpm2-luks: Bind unlock of filesystem
+                to presence of the default tpm2 device.
+   OK OCI 归档: /home/udefine-dev/a2-recal-work/a2-source.tar(1.3G)
+   源镜像归档: /home/udefine-dev/a2-recal-work/a2-source.tar → guest:/home/verify/a2-source.tar
+
+== A2-1 · 源镜像 load 进 guest 的 root podman storage ==
+      Copying config sha256:195fa83421e21ef08a4b2dff3bbe78ab9ffe1a128afd5be712cae6d7b8ebd91d
+      Writing manifest to image destination
+      Loaded image: localhost/daedalus-verify:base
+      ---refs---
+      localhost/daedalus-verify:base
+
+== A2-1 · bootc install to-disk /dev/vdb(逐候选,成功即停) ==
+   候选=container(localhost/daedalus-verify:base) → rc=0
+        RC=0
+        > mkfs.fat /dev/vdb2 -n EFI-SYSTEM
+        Initializing ostree layout
+        layers already present: 0; layers needed: 17 (1.3 GB)
+        Deploying container image...done (7 seconds)
+        Bootloader: grub
+        Installing bootloader via bootupd
+        Added 01_users.cfg
+        Added 10_blscfg.cfg
+        Added 14_menu_show_once.cfg
+        Added 30_uefi-firmware.cfg
+        Added 41_custom.cfg
+        Installed: grub.cfg
+        Installed: bootuuid.cfg
+        Trimming root
+        .: 19.5 GiB (20934819840 bytes) trimmed
+        Finalizing filesystem root
+        Unmounting filesystems
+        Installation complete!
+   install rc=0 (source=container(localhost/daedalus-verify:base))
+
+== A2-2 前置 · guest 内本地 registry ==
+   OK 本地 registry 已就绪(127.0.0.1:5000,http,镜像 public.ecr.aws/docker/library/registry:2)
+      [[registry]]
+      location = "127.0.0.1:5000"
+      insecure = true
+   目标盘分区: vdb   vdb1  vdb2 vfat vdb3 xfs
+      [候选根分区 vdb3] /mnt/a2probe/ostree/deploy
+        default 364dd2f76fc9d9246382f7d68dd298ffeb07888932018b7534e51a8cf16b9cac.0
+          origin: <unknown origin type>
+      ---origin---
+      [origin]
+      container-image-reference=ostree-unverified-registry:localhost/daedalus-verify:base
+   目标盘部署来源: container-image-reference=ostree-unverified-registry:localhost/daedalus-verify:base
+PASS  A2-1 install to-disk 成功且目标 /dev/vdb 根分区(vdb3)上有 ostree 部署(source=container(localhost/daedalus-verify:base))
+
+== A2-2 · bootc upgrade(同一 ref、两个 digest) ==
+      Target a new container image reference to boot.
+      
+      This is almost exactly the same operation as `upgrade`, but additionally changes the container image
+      reference instead.
+      
+      ## Usage
+      
+      A common pattern is to have a management agent control operating system updates via container image
+      tags; for example, `quay.io/exampleos/someuser:v1.0` and `quay.io/exampleos/someuser:v1.1` where
+      some machines are tracking `:v1.0`, and as a rollout progresses, machines can be switched to
+      `v:1.1`.
+      
+      Usage: bootc switch [OPTIONS] [TARGET]
+      
+      --- upgrade help ---
+      Download and queue an updated container image to apply.
+      
+      This does not affect the running system; updates operate in an "A/B" style by default.
+      
+      A queued update is visible as `staged` in `bootc status`.
+      
+      Currently by default, the update will be applied at shutdown time via
+      `ostree-finalize-staged.service`. There is also an explicit `bootc upgrade --apply` verb which will
+      automatically take action (rebooting) if the system has changed.
+      
+      However, in the future this is likely to change such that reboots outside of a `bootc upgrade
+      --apply` do *not* automatically apply the update in addition.
+      
+      Usage: bootc upgrade [OPTIONS]
+   upgrade 前 booted 部署: ref=localhost/daedalus-verify:base digest=sha256:8b513e039eaea171f5127bc18d4016d357ce0c3da626f59f7d36f5da8e504082
+      Copying blob sha256:8a5c1b72b9c5c02670ccb9a6be8ed077e6a75351962ae370332bc1c9fb58b56b
+      Copying config sha256:195fa83421e21ef08a4b2dff3bbe78ab9ffe1a128afd5be712cae6d7b8ebd91d
+      Writing manifest to image destination
+      PUSH_DIGEST=sha256:fb2ad285941bd96d80a2ec7d7ad6cde9fded0660f4008345466ba899598c4bbe
+PASS  A2-2a registry 可用且 A 已推上 127.0.0.1:5000/daedalus-verify:latest(digest=sha256:fb2ad285941bd96d80a2ec7d7ad6cde9fded0660f4008345466ba899598c4bbe)
+      Successfully tagged localhost/daedalus-verify:bump-a
+      f713ec15252f6c9a2a91ecd2cd72790878e13cfc9b11842357722cc52e030bf4
+      Copying blob sha256:d58a033a48ce71d88726b3a3aaf1aa9f6bc42a9914a91614a3398a1fc57c3ac0
+      Copying config sha256:f713ec15252f6c9a2a91ecd2cd72790878e13cfc9b11842357722cc52e030bf4
+      Writing manifest to image destination
+      PUSH_DIGEST=sha256:a456a1d49d1d199cfe28fd44ffc111aeef2b3d706d54d3042987317ceae4f4f6
+PASS  A2-2b 同一 tag 上有两个 digest(A=sha256:fb2ad285941bd96d80a2ec7d7ad6cde9fded0660f4008345466ba899598c4bbe B=sha256:a456a1d49d1d199cfe28fd44ffc111aeef2b3d706d54d3042987317ceae4f4f6)
+      layers already present: 17; layers needed: 1 (160 bytes)
+      Deploying...done (2 seconds)
+      Queued for next boot: 127.0.0.1:5000/daedalus-verify:latest
+        Digest: sha256:a456a1d49d1d199cfe28fd44ffc111aeef2b3d706d54d3042987317ceae4f4f6
+      RC=0
+   switch rc=0
+   重启后 boot_id: 33da071b-93e8-449d-8b8b-bef409cf3abc
+   OK registry 重启后恢复(数据在命名卷 a2-registry-data)
+      [origin] [origin]
+      [origin] container-image-reference=ostree-unverified-registry:127.0.0.1:5000/daedalus-verify:latest
+      [origin] [origin]
+      [origin] container-image-reference=ostree-unverified-registry:localhost/daedalus-verify:base
+   switch 后 booted: ref=localhost/daedalus-verify:base digest=sha256:a456a1d49d1d199cfe28fd44ffc111aeef2b3d706d54d3042987317ceae4f4f6
+PASS  A2-2c booted 部署的 origin 已指向 registry ref(status.image=localhost/daedalus-verify:base)
+      Successfully tagged localhost/daedalus-verify:bump-b
+      f1d1581bf90fa0b4aaedea6799d9648937db839ce83d8caba4386006d2e1fd41
+      Copying blob sha256:399e105c57995f2c1b320649d6e21cf18061785e3377ba7101f0cdfe34c80a95
+      Copying config sha256:f1d1581bf90fa0b4aaedea6799d9648937db839ce83d8caba4386006d2e1fd41
+      Writing manifest to image destination
+      PUSH_DIGEST=sha256:7ab7f890bffd853b117018dbd50b51050fcba16145b04615d3d9f9f6929a63d5
+   C digest: sha256:7ab7f890bffd853b117018dbd50b51050fcba16145b04615d3d9f9f6929a63d5
+      Update available for: docker://127.0.0.1:5000/daedalus-verify:latest
+        Digest: sha256:7ab7f890bffd853b117018dbd50b51050fcba16145b04615d3d9f9f6929a63d5
+      Total new layers: 18    Size: 1.3 GB
+      Removed layers:   1     Size: 160 bytes
+      Added layers:     1     Size: 160 bytes
+      RC=0
+PASS  A2-2d bootc upgrade --check 报有更新(rc=0;booted=sha256:a456a1d49d1d199cfe28fd44ffc111aeef2b3d706d54d3042987317ceae4f4f6 registry=sha256:7ab7f890bffd853b117018dbd50b51050fcba16145b04615d3d9f9f6929a63d5)
+      layers already present: 17; layers needed: 1 (160 bytes)
+      Deploying...done (1 second)
+      Queued for next boot: 127.0.0.1:5000/daedalus-verify:latest
+        Digest: sha256:7ab7f890bffd853b117018dbd50b51050fcba16145b04615d3d9f9f6929a63d5
+      Total new layers: 18    Size: 1.3 GB
+      Removed layers:   1     Size: 160 bytes
+      Added layers:     1     Size: 160 bytes
+      RC=0
+   upgrade 后 staged digest=sha256:7ab7f890bffd853b117018dbd50b51050fcba16145b04615d3d9f9f6929a63d5
+PASS  A2-2e bootc upgrade rc=0 且 staged 部署 digest=sha256:7ab7f890bffd853b117018dbd50b51050fcba16145b04615d3d9f9f6929a63d5
+   重启后 booted: ref=127.0.0.1:5000/daedalus-verify:latest digest=sha256:7ab7f890bffd853b117018dbd50b51050fcba16145b04615d3d9f9f6929a63d5 新内容=bump=c1794911641
+PASS  A2-2f 重启后 booted 部署同 ref(127.0.0.1:5000/daedalus-verify:latest)且 digest 由 sha256:a456a1d49d1d199cfe28fd44ffc111aeef2b3d706d54d3042987317ceae4f4f6 变为 sha256:7ab7f890bffd853b117018dbd50b51050fcba16145b04615d3d9f9f6929a63d5(新内容: bump=c1794911641)
+
+== A2-3 · 宿主盘未被触碰 ==
+      --- 宿主块设备(前) ---
+      NAME          SIZE TYPE FSTYPE UUID
+      zram0           8G disk swap   79e1b149-9697-42a8-8cfb-1737a907aefe
+      nvme0n1     476.9G disk        
+      |-nvme0n1p1   600M part vfat   203A-1E06
+      |-nvme0n1p2     2G part ext4   0861c6ae-3a6a-41b9-8c75-53bcbb105c76
+      `-nvme0n1p3 474.4G part btrfs  0dae5910-7389-4560-8ef3-afad55beae15
+      --- 宿主块设备(后) ---
+      NAME          SIZE TYPE FSTYPE UUID
+      zram0           8G disk swap   79e1b149-9697-42a8-8cfb-1737a907aefe
+      nvme0n1     476.9G disk        
+      |-nvme0n1p1   600M part vfat   203A-1E06
+      |-nvme0n1p2     2G part ext4   0861c6ae-3a6a-41b9-8c75-53bcbb105c76
+      `-nvme0n1p3 474.4G part btrfs  0dae5910-7389-4560-8ef3-afad55beae15
+PASS  A2-3 宿主块设备结构与文件系统 UUID 前后逐字节一致(install 目标是宿主上的一个 qcow2 文件)
+
+判定: PASS
+EXIT=0
