@@ -480,9 +480,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/plugins-release
-          # --tag:版本钉在 cross-repo-pins.env。不带 tag 时 gh 取 latest,于是
-          # 「这个 sha 的镜像用哪个插件」只能靠猜 —— 历史镜像再也重建不出来。
-          gh release download --repo Daedalusys/daedalus-plugins --tag "v${{ steps.cross-repo-pins.outputs.plugins_version }}" --pattern '*.plugin.zip' --dir /tmp/plugins-release/
+          # tag 是位置参数(gh release download 没有 --tag)。版本钉在
+          # cross-repo-pins.env:不写 tag 时 gh 取 latest,「这个 sha 的镜像用
+          # 哪个插件」就只能靠猜,历史镜像再也重建不出来。
+          gh release download "v${{ steps.cross-repo-pins.outputs.plugins_version }}" --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --dir /tmp/plugins-release/
           ls -la /tmp/plugins-release/
 
       - name: Unpack plugin zips into image tree install state

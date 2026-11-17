@@ -110,7 +110,8 @@ if [ -z "${ZIP_DIR}" ]; then
     fi
     mkdir -p "${ZIP_DIR}"
     echo "== 从 daedalus-plugins 仓 release v${PLUGINS_VERSION} 拉取插件 zip → ${ZIP_DIR}"
-    gh release download --repo Daedalusys/daedalus-plugins --tag "v${PLUGINS_VERSION}" --pattern '*.plugin.zip' --dir "${ZIP_DIR}/"
+    # tag 是位置参数(gh release download 没有 --tag);不带它 gh 取 latest。
+    gh release download "v${PLUGINS_VERSION}" --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --dir "${ZIP_DIR}/"
 fi
 
 # 逐个解压 release 里的每个 *.plugin.zip(解压即校验:任一 checksum 不符拒绝安装,fail-closed)。

@@ -109,17 +109,20 @@ check_workflow() {
         ok "build.yml 的 SDK checkout 钉在 pins 输出的 tag 上"
     fi
 
-    # 插件下载:凡是从 daedalus-plugins 的 release 取 zip,必须带 --tag(否则是 latest)。
+    # 插件下载:凡是从 daedalus-plugins 的 release 取 zip,必须带上钉死的版本。
+    # gh release download 的 tag 是**位置参数**(没有 --tag 这个 flag —— 写过
+    # `--tag` 的版本在 CI 上直接 "unknown flag: --tag" 断掉),故判据是
+    # 「下载行里带版本表达式」。
     local dl
     dl="$(grep 'gh release download' <<<"$body" | grep 'Daedalusys/daedalus-plugins' || true)"
     if [ -z "$dl" ]; then
         fail "build.yml 里找不到从 daedalus-plugins release 取料的步骤"
-    elif ! grep -q -- '--tag' <<<"$dl"; then
-        fail "build.yml 的插件下载没有 --tag(取的是 latest,历史镜像无法重建)"
     elif ! grep -qF 'steps.cross-repo-pins.outputs.plugins_version' <<<"$dl"; then
-        fail "build.yml 的插件下载 tag 不是 pins 输出的表达式"
+        fail "build.yml 的插件下载没带钉死的版本(取的是 latest,历史镜像无法重建)"
+    elif grep -q -- '--tag' <<<"$dl"; then
+        fail "build.yml 的插件下载用了 --tag:gh release download 没有这个 flag(tag 是位置参数)"
     else
-        ok "build.yml 的插件下载钉在 pins 输出的 tag 上"
+        ok "build.yml 的插件下载钉在 pins 输出的版本上"
     fi
 }
 
@@ -131,10 +134,10 @@ check_fetch_script() {
     dl="$(grep 'gh release download' <<<"$body" || true)"
     if [ -z "$dl" ]; then
         fail "fetch-plugins.sh 里找不到 gh release download"
-    elif ! grep -q -- '--tag' <<<"$dl"; then
-        fail "fetch-plugins.sh 的下载没有 --tag(本机腿会取 latest)"
     elif ! grep -qF 'PLUGINS_VERSION' <<<"$dl"; then
-        fail "fetch-plugins.sh 的下载 tag 不取自 PLUGINS_VERSION"
+        fail "fetch-plugins.sh 的下载没带钉死的版本(本机腿会取 latest)"
+    elif grep -q -- '--tag' <<<"$dl"; then
+        fail "fetch-plugins.sh 的下载用了 --tag:gh release download 没有这个 flag(tag 是位置参数)"
     else
         ok "fetch-plugins.sh 的下载钉在 PLUGINS_VERSION 上"
     fi
@@ -187,11 +190,11 @@ jobs:
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
           ref: v${{ steps.cross-repo-pins.outputs.sdk_version }}
-      - run: gh release download --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --tag "v${{ steps.cross-repo-pins.outputs.plugins_version }}"
+      - run: gh release download "v${{ steps.cross-repo-pins.outputs.plugins_version }}" --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip'
 EOF
         cat >"$1/scripts/fetch-plugins.sh" <<'EOF'
 . "$(dirname "$0")/../files/scripts/cross-repo-pins.env"
-gh release download --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --tag "v${PLUGINS_VERSION}"
+gh release download "v${PLUGINS_VERSION}" --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip'
 EOF
     }
 
@@ -214,10 +217,10 @@ EOF
     fi
 
     bad="$tmp/bad2"; mk_good_tree "$bad"
-    sed -i 's| --tag "v${{ steps.cross-repo-pins.outputs.plugins_version }}"||' \
+    sed -i 's|gh release download "v${{ steps.cross-repo-pins.outputs.plugins_version }}" |gh release download |' \
         "$bad/.github/workflows/build.yml"
     if CROSS_REPO_PIN_ROOT="$bad" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
-        echo "FAIL selftest/latest-plugins(不带 --tag 没被拒)" >&2
+        echo "FAIL selftest/latest-plugins(不带 tag 没被拒)" >&2
         rc=1
     else
         echo "PASS selftest/latest-plugins"
@@ -232,7 +235,19 @@ EOF
         echo "PASS selftest/gowork-drift"
     fi
 
-    echo "RESULT: SELFTEST $([ "${rc:-0}" -eq 0 ] && echo PASS || echo FAIL)(4)"
+    # --tag 是真实踩过的坑:gh release download 没有这个 flag,CI 上直接
+    # "unknown flag: --tag"。门禁必须把这种写法判红,否则它又会溜进 workflow。
+    bad="$tmp/bad4"; mk_good_tree "$bad"
+    sed -i 's|gh release download "v${{ steps.cross-repo-pins.outputs.plugins_version }}" |gh release download --tag "v${{ steps.cross-repo-pins.outputs.plugins_version }}" |' \
+        "$bad/.github/workflows/build.yml"
+    if CROSS_REPO_PIN_ROOT="$bad" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
+        echo "FAIL selftest/gh-flag(不存在的 --tag 没被拒)" >&2
+        rc=1
+    else
+        echo "PASS selftest/gh-flag"
+    fi
+
+    echo "RESULT: SELFTEST $([ "${rc:-0}" -eq 0 ] && echo PASS || echo FAIL)(5)"
     return "${rc:-0}"
 }
 
