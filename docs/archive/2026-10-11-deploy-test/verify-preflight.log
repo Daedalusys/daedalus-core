@@ -1,0 +1,22 @@
+
+== Phase 0 · preflight ==
+   工作目录 : ~udefine-dev/daedalus-verify
+   目标镜像 : ghcr.io/daedalusys/daedalus-os:latest
+
+== Phase 0.1 · KVM 能力 ==
+   OK /dev/kvm 可写(硬加速可用)
+   cpu virt flags: 16 核支持
+
+== Phase 0.2 · 磁盘余量 ==
+   可用 19 GB
+   !! qcow2 构建建议 ≥25 GB,当前可能不够
+
+== Phase 0.3 · 工具链 ==
+   OK podman: /usr/bin/podman
+   qemu-system-x86_64: 缺失(Phase 1 会装)
+   OK qemu-img: /usr/bin/qemu-img
+   OK dnf: /usr/bin/dnf
+   OK jq: /usr/bin/jq
+
+== Phase 0.4 · 镜像可达性 ==
+   ghcr.io/daedalusys/daedalus-os:latest 本地没有,后续 phase 会拉(走加速源)

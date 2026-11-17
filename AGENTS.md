@@ -522,3 +522,16 @@ cmd/daedalus-host -dir "$plugdir" run-plugin daedalus.copilot -- "x"
 - 发行版二进制: 根本没有读 `daedalus-dev.toml` 的代码,攻击者无法通过 env、文件、CLI flag 让 prod 二进制走 dev 路径。
 - demo 二进制误进生产环境: 缺 `daedalus-dev.toml` 即 exit 2,不产出任何 argv;即便配置存在也只影响本机 dev 用户的 argv 构造,不影响镜像内任何东西。
 - 与运行时 flag 方案相比: build tag 让"dev 能力"在 prod 二进制里**字面上不存在**,不是"加了 flag 但默认关闭"。
+## 文档 / 计划 / 证据的归档约定
+
+- **实施计划**写在本仓 `docs/superpowers/plans/`（**本地协作产物，`.gitignore` 排除，不入库**）。
+  计划头部第一行写 `- status: …`；归档时改成
+  `- status: archived（证据：<commit / PR / CI run id>）`。
+- **复选框不要求逐条维护**：历史计划大量存在「计划写完即归档、复选框未勾」的状态，
+  以头部 status 行 + 证据为准。**不要**回头逐条勾历史计划，也不要把「未勾」当成「没做」。
+- **需要长期留存的文档进 `docs/archive/`**（受版本控制），文件名带日期：
+  `YYYY-MM-DD-<主题>.md`。搬进去时必须改掉指向已删除路径的相对引用（否则变成死链）。
+- **实机证据**进 `tests/real-machine/logs/` 与 `tests/fleet/EVIDENCE/`，
+  形如 `<日期>-<主题>/EVIDENCE.md`；判据是**命令原文 + 退出码**，不是结论转述。
+- **工作区根目录不放协作产物**：多仓工作区（`../Daedalus`）根目录曾有 `.plans/`、
+  `deploy-test/`、`~udefine-dev/` 三处游离物，全都不在任何 git 仓里 —— 2026-11-17 已全部迁入受版本控制的位置。
