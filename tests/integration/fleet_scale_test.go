@@ -448,6 +448,11 @@ func (a *scaleAgent) Register(_ context.Context, req *agentv1.RegisterRequest) (
 	}, nil
 }
 
+// Heartbeat 回 Ack=true:调度器下发前会做一次活性预检,健康节点必须答活。
+func (a *scaleAgent) Heartbeat(_ context.Context, _ *agentv1.HeartbeatRequest) (*agentv1.HeartbeatResponse, error) {
+	return &agentv1.HeartbeatResponse{Ack: true}, nil
+}
+
 // ApplyIntent 记一次调用;前 failFirstN 次回 Unavailable(瞬时失败),之后成功。
 func (a *scaleAgent) ApplyIntent(_ context.Context, req *agentv1.ApplyIntentRequest) (*agentv1.ApplyIntentResponse, error) {
 	a.calls.Add(1)
