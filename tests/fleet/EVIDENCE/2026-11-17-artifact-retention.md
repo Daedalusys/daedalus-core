@@ -172,3 +172,36 @@ PASS  A14-5 rollback 不带 --yes 被闸门挡住:rc=2、stderr 含 'would run'�
    prerelease 永不删;「保留最新 N」按创建时间算,不保证「最新的是 latest 标记的那个」。
 4. **证据筛选口径是大小上限 8 MiB**:如果哪天出现比 8 MiB 大的**文本**证据(例如超大串口日志),
    它会被跳过 —— `MANIFEST.txt` 里会记一条 `SKIPPED`,不会静默丢,但也不会上传。
+
+## 八、第二轮 run(#169 合并后,`f094896`)—— 可复现性
+
+```
+run 43983527031 · main f094896 · completed success
+  Test (go / deno / i18n / drift)                | success
+  Build & Publish Daedalus Image (headless)      | success
+  Build qcow2 disk image (bootc-image-builder)   | success
+  Deploy Verify (ISO boot + unattended install)  | success
+  Deploy Verify (guest probes …)                 | success
+  Deploy Verify (bootc switch + rollback)        | success
+  Deploy Verify (real KVM boot)                  | success
+  Prune old releases (keep 3)                    | success
+```
+
+证据包**第二轮的字节数**(与 §2 同量级,说明瘦身不是一次巧合):
+
+```
+deploy-verify-kvm-evidence                8052
+deploy-verify-iso-evidence              121007
+deploy-verify-guest-probes-evidence      33693
+deploy-verify-bootc-switch-evidence      25655
+                                    合计 188,407(184 KB)
+daedalus-os-qcow2-headless          1328350643(中间产物,保留 3 天)
+```
+
+Release 仍是 3 个(`f094896db49e` / `c0195cf0bb7c` / `6bf2485aa943`)—— 新腿又删掉了最旧的一个。
+
+**这一轮没证明的事(必须写清)**:`net_retry` 的**拉取路径这轮没被触发** —— 两条腿的镜像/产物
+都命中了宿主缓存(日志是 `OK 派生镜像就绪` / `OK 切换目标镜像就绪`,没有 `podman pull`)。
+所以这轮只能证明「加了网络预算之后没有回归」,不能证明「拉取失败时会重试」;
+后者由 `tests/real-machine/lib/net-retry.selftest.sh` 的 14 条断言钉住
+(含 `sleep 30` 配 1 秒预算 → **1 秒被砍、返回 124**,以及「先失败后成功 = 恰好 2 次调用」)。
