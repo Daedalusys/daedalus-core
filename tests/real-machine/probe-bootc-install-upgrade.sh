@@ -126,8 +126,21 @@ guest_registry_up() {
         for c in "${REG_IMAGE_CANDIDATES[@]}"; do
             regtar="$DRIVER_WORK/a2-registry-$(printf '%s' "$c" | tr '/:' '__').tar"
             if [ ! -s "$regtar" ]; then
+                # podman save 只读**本地** storage:宿主没拉过该镜像时它直接
+                # `image not known`(rc=125),而这里此前只 save 不 pull —— 隐含
+                # 「靶场宿主上早就有」。干净 runner 上必然失败(2026-11-17 run
+                # 44077372941 实测:A2-2 前置不成立,整条 guest-probes 腿红)。
+                # registry:2 约 10MB,用「导出」档预算(900s×2)已是 30 倍余量;
+                # 拉取档(2400s×2)会让 10 探针共用的这条腿最多挂 80 分钟。
+                podman image exists "$c" >/dev/null 2>&1 || \
+                    net_retry "$NET_SAVE_TIMEOUT" "$NET_SAVE_ATTEMPTS" \
+                        podman pull --retry 3 --retry-delay 5s "$c" >>"$DRIVER_LOG" 2>&1 || continue
+                # 先写临时名再改名:save 中途被杀会留下半截 tar,而下面的
+                # `[ -s ]` 只判非空 —— 半截归档会被当成「已导出」直接 scp。
+                rm -f "$regtar.part"
                 net_retry "$NET_SAVE_TIMEOUT" "$NET_SAVE_ATTEMPTS" \
-                    podman save --format oci-archive -o "$regtar" "$c" >>"$DRIVER_LOG" 2>&1 || continue
+                    podman save --format oci-archive -o "$regtar.part" "$c" >>"$DRIVER_LOG" 2>&1 || continue
+                mv -f "$regtar.part" "$regtar"
             fi
             gssh_scp "$regtar" /home/verify/a2-registry.tar >/dev/null 2>&1 || continue
             gssh "sudo podman load -i /home/verify/a2-registry.tar" >/dev/null 2>&1 || continue
