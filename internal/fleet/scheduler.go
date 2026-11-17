@@ -325,6 +325,22 @@ func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
 		})
 	}
 
+	// 活性预检:死节点 / 挂死节点在任何工作 RPC 之前就按心跳口径判持久失败,
+	// 不再靠工作 RPC 的兜底时限去等。位置必须在上面的拒绝判定**之后** ——
+	// 无回滚点的高危 intent 现在连 RPC 都不发,若预检排在前面,一台死节点会先
+	// 被探测一个心跳时限,再被判"无回滚点",错误原因被掩盖。
+	// Probe==nil 表示无预检通道(直接构造 &Scheduler{...} 的调用方),跳过。
+	if s.Probe != nil {
+		if err := s.Probe(ctx, t); err != nil {
+			return s.fill(t, StepResult{
+				Outcome: OutcomeN3,
+				Result:  agentv1.ApplyIntentResult_APPLY_INTENT_RESULT_PERSISTENT_FAILURE,
+				Message: fmt.Sprintf("fleet: 节点 %s 心跳预检失败(时限 %s):判持久失败,未下发工作 RPC: %v",
+					t.Node.NodeID, s.heartbeatTimeout(), err),
+			})
+		}
+	}
+
 	// 只有低危允许自动重试(高危任何失败立即暂停)。
 	retriesLeft := 0
 	if risk == objectmodel.RiskClassLow {

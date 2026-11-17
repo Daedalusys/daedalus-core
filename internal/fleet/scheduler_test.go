@@ -7,6 +7,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -724,5 +725,139 @@ func TestScheduler_HeartbeatTimeoutComesFromPolicy(t *testing.T) {
 	}
 	if s.Probe == nil {
 		t.Fatal("NewScheduler 必须装配生产预检通道(dialHeartbeat)")
+	}
+}
+
+// TestScheduler_HeartbeatFailureSkipsDispatch 钉住预检的**收益**:心跳预检失败的
+// 节点,一条工作 RPC 都不许发。判据是 Dispatch 调用次数为 0 —— 只看 Status=dirty
+// 证明不了控制面没有先把 RPC 发出去。
+func TestScheduler_HeartbeatFailureSkipsDispatch(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapBtrfs))
+	plan := planOf(t, []objectmodel.Intent{lowIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	probes := 0
+	s := &Scheduler{
+		Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(),
+		HeartbeatTimeout: 30 * time.Second,
+		Dispatch:         fake.dispatch,
+		Probe: func(context.Context, DispatchTarget) error {
+			probes++
+			return errors.New("deadline exceeded")
+		},
+	}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if probes != 1 {
+		t.Errorf("预检次数 = %d, want 1(每条 intent 一次)", probes)
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("预检失败后不得下发工作 RPC,Dispatch 被调 %d 次", len(fake.calls))
+	}
+	if len(run.Results) != 1 {
+		t.Fatalf("Results 数 = %d, want 1", len(run.Results))
+	}
+	res := run.Results[0]
+	if res.Outcome != OutcomeN3 {
+		t.Errorf("Outcome = %v, want %v(预检失败按持久失败)", res.Outcome, OutcomeN3)
+	}
+	if !strings.Contains(res.Message, "心跳预检") {
+		t.Errorf("失败原因应点名心跳预检, got %q", res.Message)
+	}
+	if !strings.Contains(res.Message, "n1") {
+		t.Errorf("失败原因应点名节点, got %q", res.Message)
+	}
+	if run.Status != objectmodel.PlanStatusDirty {
+		t.Errorf("Status = %q, want %q", run.Status, objectmodel.PlanStatusDirty)
+	}
+}
+
+// TestScheduler_HeartbeatOKDispatchesOnce 是预检通过的正向控制组:活节点照常
+// 下发一次,预检不许被当成重试预算的一部分。
+func TestScheduler_HeartbeatOKDispatchesOnce(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapBtrfs))
+	plan := planOf(t, []objectmodel.Intent{lowIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	probes := 0
+	s := &Scheduler{
+		Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(),
+		HeartbeatTimeout: 30 * time.Second,
+		Dispatch:         fake.dispatch,
+		Probe: func(context.Context, DispatchTarget) error {
+			probes++
+			return nil
+		},
+	}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if probes != 1 {
+		t.Errorf("预检次数 = %d, want 1", probes)
+	}
+	if len(fake.calls) != 1 {
+		t.Errorf("预检通过后应正常下发一次,Dispatch 次数 = %d", len(fake.calls))
+	}
+	if run.Status != objectmodel.PlanStatusComplete {
+		t.Errorf("Status = %q, want %q", run.Status, objectmodel.PlanStatusComplete)
+	}
+	if run.Results[0].Outcome != OutcomeN1 {
+		t.Errorf("Outcome = %v, want %v", run.Results[0].Outcome, OutcomeN1)
+	}
+}
+
+// TestScheduler_RefusalSkipsHeartbeatProbe 钉住 Review Focus:无回滚点的拒绝路径
+// 现在连 RPC 都不发,预检必须排在拒绝判定**之后**。否则一台死节点会先被探测一个
+// 心跳时限,再被判"无回滚点"—— 错误原因被掩盖,而且白等一个时限。
+func TestScheduler_RefusalSkipsHeartbeatProbe(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapNone))
+	plan := planOf(t, []objectmodel.Intent{highContainerIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	probes := 0
+	s := &Scheduler{
+		Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(),
+		HeartbeatTimeout: 30 * time.Second,
+		Dispatch:         fake.dispatch,
+		Probe: func(context.Context, DispatchTarget) error {
+			probes++
+			return errors.New("节点已死")
+		},
+	}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if probes != 0 {
+		t.Fatalf("无回滚点的拒绝路径不得做心跳预检,Probe 被调 %d 次", probes)
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("拒绝路径不得下发,Dispatch 被调 %d 次", len(fake.calls))
+	}
+	if len(run.Results) != 1 || !strings.Contains(run.Results[0].Message, "无回滚点") {
+		t.Errorf("拒绝原因必须仍是「无回滚点」, got %+v", run.Results)
+	}
+}
+
+// TestScheduler_NilProbeDispatchesNormally 钉住兼容缝:Probe==nil 表示"无预检
+// 通道,跳过"。既有测试大量直接构造 &Scheduler{...},这条保证它们的行为不变。
+func TestScheduler_NilProbeDispatchesNormally(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapBtrfs))
+	plan := planOf(t, []objectmodel.Intent{lowIntent()}, []objectmodel.Machine{agentMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fake.calls) != 1 {
+		t.Errorf("Probe==nil 时不得改变旧行为,Dispatch 次数 = %d, want 1", len(fake.calls))
+	}
+	if run.Status != objectmodel.PlanStatusComplete {
+		t.Errorf("Status = %q, want %q", run.Status, objectmodel.PlanStatusComplete)
 	}
 }
