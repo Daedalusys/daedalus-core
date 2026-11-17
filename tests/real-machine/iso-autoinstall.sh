@@ -21,6 +21,8 @@
 #     - 失败分三类(transient / timeout / fatal),fatal **不重试**:用重试掩盖真缺陷更贵;
 #     - 全程有总预算 DAEDALUS_INSTALL_BUDGET,且必须严格小于外层 iso-verify.sh 的
 #       INSTALL_TIMEOUT —— 否则外层会把"预算耗尽"笼统报成 TIMEOUT,那正是要消灭的假因。
+#     - 单次尝试的时限按「还有没有后备源」分两形状:还有下一个源就用 SRC_TIMEOUT 截断
+#       (装不完就换),最后一个源拿剩余预算的全部 —— 没有后备可换时截断只会白扔预算。
 #   CI 里现在只有**一个**源(规范 ref,经代理拉取);外部加速镜像已退役(core#138)。
 #
 # /etc/daedalus/iso-install.conf 的键
@@ -29,7 +31,8 @@
 #   DAEDALUS_INSTALL_SOURCE_IMGREF    可选:**CI 不再写这个键**(加速镜像已退役)。
 #                                    脚本仍支持"另一个源优先试、失败回落规范 ref",
 #                                    留给本地/诊断用;需要时按 manifest digest 钉死。
-#   DAEDALUS_INSTALL_SOURCE_TIMEOUT   可选:单个源的装机时限(默认 900 秒)
+#   DAEDALUS_INSTALL_SOURCE_TIMEOUT   可选:单个源的装机时限(默认 900 秒;只在**还有后备源**时
+#                                    生效,最后一个源拿剩余预算的全部)
 #   DAEDALUS_INSTALL_RETRIES          可选:同一个源瞬时失败的重试次数(默认 1;每源共 1+N 次)
 #   DAEDALUS_INSTALL_BUDGET           可选:全部尝试的总预算秒数(默认 2100,必须 < 外层 2400)
 #   DAEDALUS_INSTALL_BACKOFF          可选:首次退避秒数(默认 10,每次 ×2,封顶 60)
@@ -228,16 +231,24 @@ build_sources() {
 #   transient            → 退避后同源重试(backoff 每次 ×2,封顶 BACKOFF_MAX)
 #   timeout / fatal / 用尽 → 换下一个源
 # 每次尝试前清盘(残留挂载会让下一次以 "Device ... is mounted" 收场);
-# 单次时限取 min(SRC_TIMEOUT, 剩余预算),预算在**每次尝试前**算,绝不允许越过。
+# 预算在**每次尝试前**算,绝不允许越过。单次时限按「还有没有后备源」分两形状:
+#   还有下一个源 → min(SRC_TIMEOUT, 剩余预算):装不完就换,别把预算耗在一个源上;
+#   最后一个源   → 剩余预算全给:没有后备可换,SRC_TIMEOUT 的截断只会白扔预算
+#                  (慢但会成功的链路 ≈0.6–1.4 MB/s,正好落在 900s 容不下、
+#                  2100s 容得下的区间)。
+# 「最后一个源」按 SOURCES 里的位置判定,不引入第二个事实源。
 # 置全局 installed(0/1)与 attempts(总尝试次数);预算耗尽与全部失败都 die,消息各不相同。
 install_all_sources() {
     local src cls rc tries backoff per_limit remaining used starts fatal_seen=0 last_class=""
+    local idx=0 n_src
     build_sources
+    n_src="${#SOURCES[@]}"
     installed=0
     attempts=0
     attempt=0
     starts=$SECONDS
     for src in "${SOURCES[@]}"; do
+        idx=$(( idx + 1 ))
         SRC_IMGREF="$(with_transport "$src")"
         tries=0
         backoff="$BACKOFF"
@@ -255,7 +266,13 @@ install_all_sources() {
             ATT_LOG="$INSTALL_LOG.$attempt"
             # 每次尝试都从**干净盘**开始。
             umount_target_disk
-            per_limit="$SRC_TIMEOUT"
+            # 单次时限:最后一个源没有后备可换,拿剩余预算的全部;还有后备源时用
+            # SRC_TIMEOUT 截断,装不完就及时换下一个源。
+            if [ "$idx" -eq "$n_src" ]; then
+                per_limit="$remaining"
+            else
+                per_limit="$SRC_TIMEOUT"
+            fi
             # 单次时限落进 (0, 剩余预算]:配置写成 0 / 负增长等于关掉时限,那样一次尝试就能
             # 越过总预算,外层又会把"预算耗尽"报成 TIMEOUT —— 正好是本次要消灭的假因。
             if [ "$per_limit" -le 0 ] || [ "$per_limit" -gt "$remaining" ]; then
