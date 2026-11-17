@@ -74,35 +74,35 @@ jobs:
           # 检出到子目录是唯一不逃出 GITHUB_WORKSPACE 的合法布局。
           path: daedalus-core
 
-      - name: Extract SDK version from go.mod
-        # pinned-tag 策略:SDK 版本从 go.mod 的
-        # `require github.com/Daedalusys/daedalus-sdk vX.Y.Z` 提取,传给下方
-        # SDK checkout 的 ref: v$SDK_VERSION;不写死字面量占位符。
-        # 占位版本(v0.0.0,replace 本地开发形态)或缺失一律放行:输出空的
-        # sdk_version,SDK checkout 回退默认分支;不在 CI 启动期 fail-closed。
-        id: sdk-version
+      - name: Resolve cross-repo pins
+        # 版本唯一事实源 = files/scripts/cross-repo-pins.env,由 tests/ci/cross-repo-pin.sh
+        # 守门(go.mod / go.work.example / 本文件 / fetch-plugins.sh 四处理须与它一致)。
+        # 此前这里从 go.mod 提取版本并允许「占位版本 → 空 ref → SDK 默认分支」,
+        # 那条回退路径长期生效:构建实际吃的是 SDK main,同一个 commit 隔天重跑不同结果。
+        id: cross-repo-pins
         shell: bash
         working-directory: daedalus-core
         run: |
-          SDK_VERSION=$(sed -n 's/.*daedalus-sdk v\([0-9.]*\).*/\1/p' go.mod | head -1)
-          if [ -z "$SDK_VERSION" ] || [ "$SDK_VERSION" = "0.0.0" ]; then
-            echo "占位版本或版本缺失($SDK_VERSION);输出空 sdk_version,SDK checkout 走默认分支" >&2
-            SDK_VERSION=""
+          . files/scripts/cross-repo-pins.env
+          if [ -z "${SDK_VERSION:-}" ] || [ -z "${PLUGINS_VERSION:-}" ]; then
+            echo "::error::cross-repo-pins.env 缺 SDK_VERSION / PLUGINS_VERSION"
+            exit 1
           fi
           echo "sdk_version=$SDK_VERSION" >> "$GITHUB_OUTPUT"
-          echo "SDK_VERSION=$SDK_VERSION"
+          echo "plugins_version=$PLUGINS_VERSION" >> "$GITHUB_OUTPUT"
+          echo "SDK=v$SDK_VERSION plugins=v$PLUGINS_VERSION"
 
       - name: Checkout daedalus-sdk (sibling, pinned tag)
         # SDK 必须检出到 workspace 下的 daedalus-sdk 子目录,
         # 与主仓 daedalus-core 子目录平级,使 go.mod 的 `replace => ../daedalus-sdk`
         # 与 tests/deno 的 `../daedalus-sdk/...` 相对引用在 CI 中可解析。
-        # ref 为空(go.mod 为占位版本)时 checkout SDK 默认分支。
+        # ref 来自 cross-repo-pins.env(无「空 ref 回退默认分支」这条路径)。
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
-          ref: ${{ steps.sdk-version.outputs.sdk_version != '' && format('v{0}', steps.sdk-version.outputs.sdk_version) || '' }}
+          ref: v${{ steps.cross-repo-pins.outputs.sdk_version }}
 
       - name: Checkout daedalus-plugins (sibling)
         # SDK 的官方 manifest 跨仓校验读 `../../daedalus-plugins/<cap>/` 与
@@ -188,6 +188,14 @@ jobs:
         shell: bash
         working-directory: daedalus-core
         run: just verify-deno-pin
+
+      - name: cross-repo pin gate
+        # SDK / plugins 的版本只有一个事实源(files/scripts/cross-repo-pins.env),
+        # go.mod / go.work.example / build.yml / fetch-plugins.sh 四处都要与它一致,
+        # 且都不许回落到「默认分支 / latest」。此前这条边是浮动的,镜像不可复现。
+        shell: bash
+        working-directory: daedalus-core
+        run: just verify-pins
 
       - name: plugin inventory gate
         # 四份插件清单(76 CAPS / 插件单元 / 插件 manifest / plugins release 供料)必须相等。
@@ -313,6 +321,7 @@ jobs:
         run: |
           bash tests/build/image-lint.sh --selftest
           bash tests/ci/credential-surface-check.sh --selftest
+          bash tests/ci/cross-repo-pin.sh --selftest
           bash tests/ci/release-asset-name-test.sh
           bash tests/ci/release-promote-test.sh
           # Release 保留脚本会真删东西:它的四条安全边界(读不出列表不删、
@@ -389,29 +398,30 @@ jobs:
           # 同 test job:主仓检出到 daedalus-core 子目录,不逃出 GITHUB_WORKSPACE。
           path: daedalus-core
 
-      - name: Extract SDK version from go.mod
-        # 同 test job:pinned-tag 策略,SDK checkout 的 ref 从 go.mod 提取;
-        # 占位版本 v0.0.0 或缺失时输出空 sdk_version,SDK checkout 走默认分支。
-        id: sdk-version
+      - name: Resolve cross-repo pins
+        # 同 test job:版本唯一事实源 = files/scripts/cross-repo-pins.env。
+        id: cross-repo-pins
         shell: bash
         working-directory: daedalus-core
         run: |
-          SDK_VERSION=$(sed -n 's/.*daedalus-sdk v\([0-9.]*\).*/\1/p' go.mod | head -1)
-          if [ -z "$SDK_VERSION" ] || [ "$SDK_VERSION" = "0.0.0" ]; then
-            echo "占位版本或版本缺失($SDK_VERSION);输出空 sdk_version,SDK checkout 走默认分支" >&2
-            SDK_VERSION=""
+          . files/scripts/cross-repo-pins.env
+          if [ -z "${SDK_VERSION:-}" ] || [ -z "${PLUGINS_VERSION:-}" ]; then
+            echo "::error::cross-repo-pins.env 缺 SDK_VERSION / PLUGINS_VERSION"
+            exit 1
           fi
           echo "sdk_version=$SDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "plugins_version=$PLUGINS_VERSION" >> "$GITHUB_OUTPUT"
+          echo "SDK=v$SDK_VERSION plugins=v$PLUGINS_VERSION"
 
       - name: Checkout daedalus-sdk (sibling, pinned tag)
-        # 同 test job:SDK 检出到 workspace 下的 daedalus-sdk 子目录;ref 为空
-        # (go.mod 为占位版本)时 checkout 默认分支。
+        # 同 test job:SDK 检出到 workspace 下的 daedalus-sdk 子目录,ref 取自
+        # cross-repo-pins.env;不存在「空 ref 回退默认分支」。
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: Daedalusys/daedalus-sdk
           path: daedalus-sdk
-          ref: ${{ steps.sdk-version.outputs.sdk_version != '' && format('v{0}', steps.sdk-version.outputs.sdk_version) || '' }}
+          ref: v${{ steps.cross-repo-pins.outputs.sdk_version }}
 
       - name: Set up Podman / Buildah
         shell: bash
@@ -470,7 +480,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p /tmp/plugins-release
-          gh release download --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --dir /tmp/plugins-release/
+          # tag 是位置参数(gh release download 没有 --tag)。版本钉在
+          # cross-repo-pins.env:不写 tag 时 gh 取 latest,「这个 sha 的镜像用
+          # 哪个插件」就只能靠猜,历史镜像再也重建不出来。
+          gh release download "v${{ steps.cross-repo-pins.outputs.plugins_version }}" --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --dir /tmp/plugins-release/
           ls -la /tmp/plugins-release/
 
       - name: Unpack plugin zips into image tree install state
