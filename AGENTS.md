@@ -384,15 +384,17 @@ podman run --rm localhost/daedalus-os:latest cat /usr/lib/os-release
 # workflow 凭据与缓存不变式由 tests/ci/workflow-hygiene.sh 在 core test job 集中守门(四仓 workflow 文件)
 bash tests/ci/workflow-hygiene.sh          # 显式 persist-credentials / 显式 cache / uses 钉 40 位 SHA / 无 pull_request_target
 bash tests/ci/credential-surface-check.sh  # 凭据留存面取证(发布产物的 .git/ 与凭据载体、Actions cache 条目形状)
+bash tests/ci/cross-repo-pin.sh            # SDK / plugins 版本钉死:事实源、go.mod、go.work.example、build.yml、fetch-plugins.sh 五处一致
 bash tests/build/image-lint.sh             # 镜像最终态断言(bootc lint + VARIANT + 宿主 CLI + daedalus-smoke;需 podman + 已构建镜像)
 ```
 
 ## NOTES
 - 本仓(`daedalus-core`)、`../daedalus-sdk/`、`../daedalus-plugins/` 平级 clone 是 dev 桥的唯一拓扑;`go.work` 不入库,模板 `go.work.example` 入库 — clone 后 `cp go.work.example go.work`,跑 `just verify-dev-layout` 守门。
-- 模板除 `use` 全部 cap 外,还对 SDK 的 `v0.0.0` 与 `v0.0.0-00010101000000-000000000000` 各钉一行 `replace => ../daedalus-sdk`:workspace 级 replace 覆盖各 cap `go.mod` 里面向插件仓 CI 的 `../daedalus-sdk`,否则 `just go-test` 撞 "conflicting replacements"。本地跑插件测试走该 workspace(`go test github.com/Daedalusys/daedalus-plugins/<cap>/...`),不需要符号链接桥。
+- 模板除 `use` 全部 cap 外,还对 SDK 的 `v0.1.3`(当前钉的版本)与 `v0.0.0-00010101000000-000000000000`(旧 checkout 兼容)各钉一行 `replace => ../daedalus-sdk`:workspace 级 replace 覆盖各 cap `go.mod` 里面向插件仓 CI 的 `../daedalus-sdk`,否则 `just go-test` 撞 "conflicting replacements"。本地跑插件测试走该 workspace(`go test github.com/Daedalusys/daedalus-plugins/<cap>/...`),不需要符号链接桥。
 - `scripts/sync-daedalus.sh` copies safely: systemd leg uses targeted stale-delete (only `daedalus-*`, upstream assets untouched); plugin leg uses `--delete --delete-excluded` (vendor mirrors source exactly); `base_image/plugin/` sits outside the Containerfile COPY whitelist so it never reaches rootfs.
 - `base_image/` carries upstream dormant CI targeting upstream repos — do NOT mistake for Daedalus CI.
 - Deno 版本与校验和的事实源是 `files/scripts/deno-version.env`(镜像与 CI 同读);`65-ai-safety.sh` 直接下载 `dl.deno.land` 的 release 资产并按该 sha256 校验,不再走 `install.sh`。抬版本必须同时改版本与校验和,并重跑 `just verify-deno-pin` —— 仅由 copilot 插件使用。
+- **跨仓制品边的事实源是 `files/scripts/cross-repo-pins.env`**(`SDK_VERSION` / `PLUGINS_VERSION`)。消费点:go.mod 的 require、`go.work.example` 的 workspace replace、`build.yml` 的 SDK checkout ref 与插件 `gh release download --tag`、`scripts/fetch-plugins.sh`。五处任一漂移由 `just verify-pins` 拒。**不存在「回退默认分支 / 取 latest」的路径** —— 2026-11-17 之前两条边都是浮动的,同一个 commit 隔天重建会得到不同依赖。
 - **构建机限制 (todo 5/10/13 记录)**: `just build` 在本机不可执行 — `almalinux-bootc:10` 要求 x86-64-v3 而本机 CPU 不支持; 镜像内断言(`just verify-image`, in-image `daedalus-host list`, bootc lint, 76 脚本真实执行, copilot wrapper 全链路)在 v3 构建机/CI 上补跑(plan todo 18)。本机等价断言: `find files/system base_image/files/system \( -name "*.py" -o -name "*.test.ts" -o -name "__pycache__" -o -name "go.mod" \) | wc -l` == 0。
 - 镜像内 `/usr/local/bin/daedalus-{audit,shell}`(audit.ts/exec.ts 的生产默认路径)已由 `just plugin-pack` 构建期安装(task 21 修复断链缺口; 与 wrapper `--allow-run` 放行路径一致); `daedalus-host list` 等镜像内端到端断言由 CI 的镜像构建腿执行(`tests/build/plugin-inventory-image.sh` 与 `tests/build/image-lint.sh`)。copilot 内向上回溯 dev 路径的回退链仅作开发态兜底。
 - **mid-migration 残留说明**: `daedalus-plugins/blueprint/{cmd,bin,blueprints}/`(本仓下)是迁移期产物 — cmd 与 bin 仅供历史回溯,主源在 `../daedalus-plugins/blueprint/`; `daedalus-plugins/go.work` 是迁移桥,迁移完成后会清空。`plugin/{fs,shell,pkg,sysinfo,service}/` 5 个子目录是占位 README,主源在 `../daedalus-plugins/<cap>/`。

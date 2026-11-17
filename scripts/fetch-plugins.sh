@@ -38,6 +38,16 @@ else
     exit 1
 fi
 
+# 跨仓制品边钉版本:SDK / plugins 的唯一事实源(与 .github/workflows/build.yml 同源)。
+# 不 source 它就没有 PLUGINS_VERSION,下面的下载会退化成 latest —— 那正是本脚本
+# 2026-11-17 之前的行为,也是「同一个 sha 的镜像隔天重建不出来」的成因。
+if [ ! -f "${CORE_ROOT}/files/scripts/cross-repo-pins.env" ]; then
+    echo "错误: 找不到 ${CORE_ROOT}/files/scripts/cross-repo-pins.env(跨仓版本事实源),拒绝继续" >&2
+    exit 1
+fi
+# shellcheck disable=SC1090
+. "${CORE_ROOT}/files/scripts/cross-repo-pins.env"
+
 usage() {
     cat <<'EOF'
 用法: fetch-plugins.sh [--local-zip-dir <dir>] [--dest <dir>] [--help]
@@ -99,8 +109,8 @@ if [ -z "${ZIP_DIR}" ]; then
         exit 1
     fi
     mkdir -p "${ZIP_DIR}"
-    echo "== 从 daedalus-plugins 仓 GitHub release 拉取插件 zip → ${ZIP_DIR}"
-    gh release download --repo Daedalusys/daedalus-plugins --pattern '*.plugin.zip' --dir "${ZIP_DIR}/"
+    echo "== 从 daedalus-plugins 仓 release v${PLUGINS_VERSION} 拉取插件 zip → ${ZIP_DIR}"
+    gh release download --repo Daedalusys/daedalus-plugins --tag "v${PLUGINS_VERSION}" --pattern '*.plugin.zip' --dir "${ZIP_DIR}/"
 fi
 
 # 逐个解压 release 里的每个 *.plugin.zip(解压即校验:任一 checksum 不符拒绝安装,fail-closed)。

@@ -169,6 +169,14 @@ verify-deno-pin:
     ./tests/ci/deno-version-pin.sh --selftest
     ./tests/ci/deno-version-pin.sh
 
+# 跨仓制品边钉版本门禁:SDK / plugins 的版本只有 files/scripts/cross-repo-pins.env
+# 一个事实源,go.mod / go.work.example / build.yml / fetch-plugins.sh 四处必须与它
+# 一致,且都不许回落到「默认分支 / latest」。先跑 --selftest 自证门禁没变瞎,
+# 再比对真仓库。不需要镜像,CI test job 与本机都能跑。
+verify-pins:
+    ./tests/ci/cross-repo-pin.sh --selftest
+    ./tests/ci/cross-repo-pin.sh
+
 # 3 仓平级布局守门:检查 daedalus-sdk / daedalus-plugins 兄弟仓
 # 是否以平级目录形态就位(go.work 本地 dev 桥的前置);缺哪个报哪个,exit 1。
 verify-dev-layout:
