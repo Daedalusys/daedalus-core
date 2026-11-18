@@ -7,6 +7,9 @@
 go.work
 go.work.sum
 
+# Vendored 上游基座镜像树(scripts/sync-daedalus.sh 浅 clone 落位;自带 .git,不入库)
+base_image/
+
 # 构建产物(just go-build / just plugin-pack 落位的二进制与插件 zip,不入库)
 bin/
 
