@@ -55,6 +55,39 @@ func TestNodeList_RendersSupportLevel(t *testing.T) {
 	}
 }
 
+// TestNodeList_ShowsFoldedLastSeen 钉住渲染侧:node list 的 last_seen_unix 必须是
+// 观测侧车折叠后的最新值 —— 只读身份表会让刷新过的节点显示登记时的旧值。
+func TestNodeList_ShowsFoldedLastSeen(t *testing.T) {
+	setupFleetCLI(t)
+	seedNode(t, testNodeRow("n1", objectmodel.SupportLevelSupported))
+
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	if err := reg.MarkSeen("n1", 1700009999); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
+
+	code, out, errOut := runCapture(t, "node", "list")
+	if code != exitOK {
+		t.Fatalf("退出码 = %d, want 0(stderr=%s)", code, errOut)
+	}
+	var got struct {
+		Nodes []fleet.Node `json:"nodes"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &got); err != nil {
+		t.Fatalf("stdout 不是合法 JSON: %v(%s)", err, out)
+	}
+	if len(got.Nodes) != 1 {
+		t.Fatalf("节点数 = %d, want 1", len(got.Nodes))
+	}
+	if got.Nodes[0].LastSeenUnix != 1700009999 {
+		t.Errorf("last_seen_unix = %d, want 1700009999(必须是折叠后的最新值)",
+			got.Nodes[0].LastSeenUnix)
+	}
+}
+
 // TestNodeAdd_WritesRegistryAndSupportLevel 证明 node add 把登记结果落进
 // registry,并把支持分级一并算好(缺失发行版不得打 supported)。
 func TestNodeAdd_WritesRegistryAndSupportLevel(t *testing.T) {

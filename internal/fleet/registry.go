@@ -3,6 +3,11 @@
 // 一行一 Node 落 <fleet root>/nodes.jsonl;写入走「读全量 → 覆盖同 node_id →
 // 临时文件 + os.Rename 原子替换」,权限 0600(含 cert fingerprint,不给他用户读)。
 // node_id 是控制面权威的唯一查询键;agent_id 是 agent 自报,只作参考。
+//
+// 身份与观测分家:nodes.jsonl 只管身份(声明字段 + 注册时间),last_seen 的刷新
+// 走 append-only 的 seen.log(见 seen.go),markSeen 因此不再整表重写。读侧把侧车
+// 折叠到身份表之上,Get/List 给出的仍是折叠后的最新 last_seen。崩溃语义:身份表
+// 原子替换、不丢;不 fsync 的 last_seen 可能丢最近的增量。
 package fleet
 
 import (
@@ -74,6 +79,8 @@ func (r *Registry) path() string {
 }
 
 // Put 写入或覆盖一个节点:同 node_id 后者胜;整表原子替换,不做行级追加。
+// 写入前先把观测侧车折叠进身份表,写完清空侧车 —— 折叠过的 last_seen 已经是
+// 身份表的一部分,侧车再留着只会让下一次读重复折叠。
 func (r *Registry) Put(n Node) error {
 	if n.NodeID == "" {
 		return fmt.Errorf("fleet: Node.NodeID 为空:注册表以 node_id 为唯一键")
@@ -93,7 +100,10 @@ func (r *Registry) Put(n Node) error {
 	if !replaced {
 		existing = append(existing, n)
 	}
-	return r.store(existing)
+	if err := r.store(existing); err != nil {
+		return err
+	}
+	return r.resetSeen()
 }
 
 // Get 查一个节点;未注册返回 ok=false 且 err 为 nil(调用方靠 ok 区分,不靠 err)。
@@ -140,26 +150,44 @@ func (r *Registry) Delete(nodeID string) error {
 	if !found {
 		return fmt.Errorf("fleet: 节点 %s 不存在,无法删除", nodeID)
 	}
-	return r.store(out)
+	if err := r.store(out); err != nil {
+		return err
+	}
+	return r.resetSeen()
 }
 
-// MarkSeen 更新节点的 last_seen_unix;节点未注册时报错(不凭空造行)。
+// MarkSeen 追加一条 last_seen 观测;节点未注册时报错(不凭空造行)。
+//
+// 身份表一个字节都不动:观测走 append-only 的侧车(见 seen.go),markSeen 因此
+// 是 O(1) 追加而不是整表读改写。崩溃可能丢最近的观测(侧车不 fsync),但节点
+// 身份不受影响。
 func (r *Registry) MarkSeen(nodeID string, unix int64) error {
-	all, err := r.load()
+	// 读身份表只为"未注册校验"——观测本身不落在它里面。
+	all, err := r.loadBase()
 	if err != nil {
 		return err
 	}
-	for i := range all {
-		if all[i].NodeID == nodeID {
-			all[i].LastSeenUnix = unix
-			return r.store(all)
-		}
+	if !slices.ContainsFunc(all, func(n Node) bool { return n.NodeID == nodeID }) {
+		return fmt.Errorf("fleet: 节点 %s 未注册,无法更新 last_seen", nodeID)
 	}
-	return fmt.Errorf("fleet: 节点 %s 未注册,无法更新 last_seen", nodeID)
+	if err := r.appendSeen(nodeID, unix); err != nil {
+		return err
+	}
+	return r.compactSeen(all)
 }
 
-// load 读出注册表全部节点;文件不存在视为空注册表(合法初始态)。
+// load 读出注册表全部节点(身份表 + 折叠后的观测);文件不存在视为空注册表
+// (合法初始态)。
 func (r *Registry) load() ([]Node, error) {
+	all, err := r.loadBase()
+	if err != nil {
+		return nil, err
+	}
+	return r.foldSeen(all)
+}
+
+// loadBase 只读身份表(不折叠观测):写路径用它读出待改的行,读路径经 load 折叠。
+func (r *Registry) loadBase() ([]Node, error) {
 	f, err := os.Open(r.path())
 	if err != nil {
 		if os.IsNotExist(err) {
