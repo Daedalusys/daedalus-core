@@ -2,7 +2,7 @@
 
 **Generated:** 2026-09-21
 **Repo:** `github.com/Daedalusys/daedalus-core` (Go module root + image build)
-**Siblings:** `../daedalus-sdk/` (11 安全核心包)、`../daedalus-plugins/` (13 Go 能力插件 monorepo)
+**Siblings:** `../daedalus-sdk/` (安全核心包 + Provider/Slot 契约包)、`../daedalus-plugins/` (13 Go 能力插件 monorepo)
 
 ## OVERVIEW
 Immutable, atomic, AI-native fleet control-plane: hub-spoke
@@ -303,7 +303,7 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
   - **Shell scripts**: `files/scripts/{60-ai-middleware,65-ai-safety,70-daedalus-mcp-servers,75-daedalus-copilot,76-daedalus-plugin-gen}.sh`, `usr/local/bin/daedalus` wrapper, `scripts/sync-daedalus.sh`, `scripts/pack-copilot-plugin.sh`, `scripts/justfile.demo`, `scripts/copilot-prep.sh`
   - **systemd units**: `daedalus-audit.service`, `daedalus-env.service`, `daedalus-{fs,shell,pkg,sysinfo,service,blueprint,dupe,diskclean,organize,trace,proc,osstate,snapshot}.service`, and each capability's `.service.d/{landlock,credentials}.conf` drop-ins
   - **Policy / manifests**: `files/system/opt/daedalus/shared/policy.toml`, `plugin/copilot/daedalus.plugin.json`, `../daedalus-plugins/<cap>/daedalus.plugin.json`
-- **三仓平级布局(决策 23/24 + 25 + 迁移至 issue-migration-to-3-repos)**: 本仓 = 代码逻辑层 + copilot 插件源码 + 镜像构建落位 + 5 个 core runtime; `../daedalus-sdk/` = SDK 公开仓(11 安全核心包 + 5 Provider/Slot 占位 + state/dirs); `../daedalus-plugins/` = 插件仓(13 Go 能力插件 monorepo)。镜像内 `opt/daedalus/plugins/` 是**构建产物(安装态)**, `plugin/` 与 `../daedalus-plugins/<cap>/` 是**源码侧定义** — 两者绝不同步混用。**三仓须平级 clone**(仓名必须为 `daedalus-core` / `daedalus-sdk` / `daedalus-plugins`,与本仓 `go.work` 路径对应),由 `just verify-dev-layout` 守门。
+- **三仓平级布局(决策 23/24 + 25 + 迁移至 issue-migration-to-3-repos)**: 本仓 = 代码逻辑层 + copilot 插件源码 + 镜像构建落位 + 5 个 core runtime; `../daedalus-sdk/` = SDK 公开仓(安全核心包 + 3 个 Provider/Slot 占位(modelprovider/agentprovider/transportprovider)+ state/dirs); `../daedalus-plugins/` = 插件仓(13 Go 能力插件 monorepo)。镜像内 `opt/daedalus/plugins/` 是**构建产物(安装态)**, `plugin/` 与 `../daedalus-plugins/<cap>/` 是**源码侧定义** — 两者绝不同步混用。**三仓须平级 clone**(仓名必须为 `daedalus-core` / `daedalus-sdk` / `daedalus-plugins`,与本仓 `go.work` 路径对应),由 `just verify-dev-layout` 守门。
 - **插件命名语义(目录名 ≠ 系统组件,是"能力提供者")**: 插件目录名/id(`shell/`、`daedalus.shell` 等)是**稳定技术标识符** — 被 systemd 单元、CI、import 路径、copilot 硬编码引用锁定,永不改; manifest `name` 是**人类可读显示名**,按"XX 能力"语义命名,只影响展示层。`shell` = 受控命令执行能力(不是 shell 解释器); `service` = 只读服务状态查询能力(不是 systemd 服务,状态变更走 `daedalus-tx`); `pkg` = dnf/rpm 只读包查询能力; `fs` = 路径作用域文件读写能力。完整对照表见 `../daedalus-plugins/README.md`「命名语义」段。
 - **Vendor tree = `base_image/`**: Vendored upstream fork (gitignored). Updated from `files/` (及 `plugin/` → `base_image/plugin/`, 在 COPY 白名单外) via `scripts/sync-daedalus.sh` before container builds.
 - **Go 依赖策略**: 仅入库 `go.mod` + `go.sum`(版本与完整性锁); `vendor/` 不入库,构建期 `go build` 自动从 module proxy 下载到 `GOMODCACHE`,首次构建需联网; `go mod verify` 校验 go.sum 完整性。`go.work` 不入库,模板 `go.work.example` 入库 — clone 后 `cp go.work.example go.work`。
@@ -410,7 +410,7 @@ bash tests/build/image-lint.sh             # 镜像最终态断言(bootc lint + 
 
 `daedalus-host` 支持用 `-dir` 旗标指向任意插件目录(优先级: `-dir` 旗标 > `DAEDALUS_PLUGIN_DIR` 环境变量 > 镜像默认 `/opt/daedalus/plugins`),五个子命令 `list` / `inspect` / `verify` / `run-plugin` / `render-unit` 全部适用。两侧形态:
 
-- 镜像内(安装态): 宿主在 `/usr/local/bin/daedalus-host`,插件在 `/opt/daedalus/plugins`,直接 `daedalus-host list` 即可(期望 12 插件全 ok)。
+- 镜像内(安装态): 宿主在 `/usr/local/bin/daedalus-host`,插件在 `/opt/daedalus/plugins`,直接 `daedalus-host list` 即可(期望 14 插件全 ok = daedalus.copilot + 13 个能力插件)。
 - 仓库侧(源码树,0 安装): 源码侧 `../daedalus-plugins/<cap>/` 的目录名与 manifest id(`daedalus.<cap>` 等)一致,但源码 manifest 不含 checksums。因此直接 `-dir ../daedalus-plugins` 时 `list` 能运行但全部标 degraded,`inspect`/`verify`/`run-plugin`/`render-unit` 会被 id 一致性防线拒绝。完整可用的源码树形态是先打包再解包(打包会注入 checksums),从仓库根执行:
 
 ```bash
@@ -499,7 +499,7 @@ cmd/daedalus-host -dir "$plugdir" run-plugin daedalus.copilot -- "show os versio
 just dev-copilot --dry-run "show os version"
 #   等价于: rebuild demo 二进制 → 安装 daedalus-{audit,shell} 到镜像布局位
 #           files/system/usr/local/bin/(deno --allow-run 旗标放行的路径)
-#         → 解包 6 插件 → 拼 argv → export DAEDALUS_AUDIT_BIN/SHELL_BIN
+#         → 解包 5 个插件(fs/shell/pkg/sysinfo/copilot,见 scripts/copilot-prep.sh:33)→ 拼 argv
 #           与布局位同步 → eval 执行
 #   无 LLM key 也能跑(走 --dry-run);有 key 自动翻译自然语言指令
 #   镜像布局位已 .gitignore,不会污染版本控制
