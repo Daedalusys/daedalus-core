@@ -7,7 +7,7 @@
 #   ~/work/daedalusys/
 #   ├── daedalus-core/      # 本仓(go.work 在此)
 #   ├── daedalus-sdk/       # 兄弟仓(module github.com/Daedalusys/daedalus-sdk)
-#   └── daedalus-plugins/   # 兄弟仓(6 个 sub-module,各含独立 go.mod)
+#   └── daedalus-plugins/   # 兄弟仓(13 个 sub-module,各含独立 go.mod)
 set -u
 
 # 解析脚本真实路径(防 symlink 陷阱:本机 /home/lofibass/code → /var/lofibass_ssd/code)
@@ -50,7 +50,7 @@ check_module() {
 
 check_module "$CORE_ROOT" "github.com/Daedalusys/daedalus-core"
 check_module "$PARENT/daedalus-sdk" "github.com/Daedalusys/daedalus-sdk"
-for cap in fs shell pkg sysinfo service blueprint; do
+for cap in fs shell pkg sysinfo service blueprint dupe diskclean organize trace proc osstate snapshot; do
     check_module "$PARENT/daedalus-plugins/$cap" "github.com/Daedalusys/daedalus-plugins/$cap"
 done
 
