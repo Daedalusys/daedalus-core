@@ -8,6 +8,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -860,4 +861,88 @@ func TestScheduler_NilProbeDispatchesNormally(t *testing.T) {
 	if run.Status != objectmodel.PlanStatusComplete {
 		t.Errorf("Status = %q, want %q", run.Status, objectmodel.PlanStatusComplete)
 	}
+}
+
+// scaleMachineID 是规模用例里的稳定机器标识(补零便于排序核对)。
+func scaleMachineID(i int) string {
+	return fmt.Sprintf("m%03d", i)
+}
+
+// scaleNodes 造 n 台已注册节点(统一形态,便于规模用例只关心规模本身)。
+func scaleNodes(n int) []Node {
+	nodes := make([]Node, n)
+	for i := range nodes {
+		nodes[i] = nodeWithSnapshot(scaleMachineID(i), snapBtrfs)
+	}
+	return nodes
+}
+
+// scaleMachines 造 n 台目标机。
+func scaleMachines(n int) []objectmodel.Machine {
+	machines := make([]objectmodel.Machine, n)
+	for i := range machines {
+		machines[i] = agentMachine(scaleMachineID(i))
+	}
+	return machines
+}
+
+// TestScheduler_RunReadsRegistryOnce 钉住 Run 的取数路径:整批只读一次注册表
+// (一次 List),且**读路径不许写身份表** —— 下发前的节点快照是只读事实,
+// 写回去等于把观测混进身份。
+//
+// "读了几次"在外部不可观察(不引入为测试而生的钩子),所以这里钉可观察的那一半:
+// 缺节点的错误文案逐字不变,以及 Run 前后 nodes.jsonl 的内容与 mtime 都不变。
+func TestScheduler_RunReadsRegistryOnce(t *testing.T) {
+	t.Run("Run 不写身份表", func(t *testing.T) {
+		const n = 200
+		r := newRegistryWithNodes(t, scaleNodes(n)...)
+		plan := planOf(t, []objectmodel.Intent{lowIntent()}, scaleMachines(n), 50)
+		before := snapshotFile(t, r.path())
+
+		fake := &fakeDispatcher{}
+		s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+		start := time.Now()
+		run, err := s.Run(context.Background(), plan)
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if run.Status != objectmodel.PlanStatusComplete {
+			t.Fatalf("Status = %q, want %q", run.Status, objectmodel.PlanStatusComplete)
+		}
+		if len(fake.calls) != n {
+			t.Errorf("Dispatch 次数 = %d, want %d", len(fake.calls), n)
+		}
+		// 不发 RPC 的 Run 只剩注册表侧成本:这是残余 O(n²) 纯读的可复算口径。
+		t.Logf("%d 节点 1 条 intent:Run 耗时 %s(fake dispatch)", n, elapsed.Round(time.Millisecond))
+
+		after := snapshotFile(t, r.path())
+		if before.sum != after.sum {
+			t.Errorf("Run 改写了身份表内容:\n before %x\n after  %x", before.sum, after.sum)
+		}
+		if !before.mod.Equal(after.mod) {
+			t.Errorf("Run 重写了身份表(mtime 变了): %s → %s", before.mod, after.mod)
+		}
+	})
+
+	t.Run("缺节点文案逐字不变", func(t *testing.T) {
+		const n = 200
+		// 少注册最后一台:缺的那台是 m199。
+		r := newRegistryWithNodes(t, scaleNodes(n-1)...)
+		plan := planOf(t, []objectmodel.Intent{lowIntent()}, scaleMachines(n), 50)
+
+		fake := &fakeDispatcher{}
+		s := &Scheduler{Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(), Dispatch: fake.dispatch}
+		_, err := s.Run(context.Background(), plan)
+		if err == nil {
+			t.Fatal("缺一台未注册机器时必须整批拒绝")
+		}
+		want := "fleet: 节点 m199 未注册"
+		if err.Error() != want {
+			t.Errorf("错误文案 = %q, want %q(逐字不变)", err.Error(), want)
+		}
+		if len(fake.calls) != 0 {
+			t.Errorf("缺节点时不得发 RPC,Dispatch 次数 = %d", len(fake.calls))
+		}
+	})
 }

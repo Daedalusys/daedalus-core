@@ -69,7 +69,8 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 | Copilot 侧冻结副本 | `plugin/copilot/policy.ts` | 与 `../daedalus-sdk/shellpolicy` 同步义务;契约由 `tests/deno/shellpolicy_contract.test.ts` 钉 |
 | Audit hash chain | `../daedalus-sdk/audit/` + `cmd/daedalus-audit/` | genesis `0`*64, syscall.Flock, sha256 链, Python 金样字节级兼容 (`../daedalus-sdk/audit/testdata/golden.jsonl`) |
 | 事务通道(service/package/task/container) | `cmd/daedalus-tx/` + `internal/tx/` | begin→propose→apply→rollback;service/package/task/container 适配器;euid 守门;sidecar 落盘必捕获 |
-| 控制面 fleet 调度 / 心跳口径 | `internal/fleet/{scheduler,liveness,risk}.go` | 批→机→intent **串行**下发 + 风险×N1/N2/N3 分桶;下发前一次活性预检(`Scheduler.Probe`,时限 = `[fleet].heartbeat_timeout_seconds`)**只判心跳,不套 ApplyIntent**;工作 RPC 兜底仍是 `defaultCallTimeout`(60s);`Probe==nil` = 跳过预检 |
+| 控制面 fleet 调度 / 心跳口径 | `internal/fleet/{scheduler,liveness,risk}.go` | 批→机→intent **串行**下发 + 风险×N1/N2/N3 分桶;下发前一次活性预检(`Scheduler.Probe`,时限 = `[fleet].heartbeat_timeout_seconds`)**只判心跳,不套 ApplyIntent**;工作 RPC 兜底仍是 `defaultCallTimeout`(60s);`Probe==nil` = 跳过预检;`Run` 整批只读一次注册表(一次 `List`) |
+| 节点注册表(身份 / 观测分家) | `internal/fleet/registry.go` + `internal/fleet/seen.go` | **身份**在 `nodes.jsonl`(整表原子替换:临时文件 → fsync → rename,`node_id` 唯一键后者胜);**观测**在 `seen.log`(append-only、**不** fsync,崩溃只丢最近的 last_seen,节点身份不受影响);读时折叠(同节点**最后一条**胜),`node list` 的 `last_seen_unix` 是折叠后的值;`MarkSeen` 对未注册节点仍报错。残余 O(n) 纯读:`MarkSeen` 为未注册校验读一遍身份表,`List`/`Get` 仍整表读 —— 单批 ≈ 400 台起(2n 次整表读,本机口径已 4.8 s,二次曲线)或注册表落网络盘时再上内存索引 / write-behind(那要重新回答「崩溃丢什么」) |
 | 期望视图投影(sdk#4) | `internal/desiredview/` + `docs/desired-state-projection.md` | journal→Current Desired View 纯函数全量 replay;applied 唯一提交点;封闭映射 fail-closed;`[ownership]` 归 P4 落 policy |
 | Add systemd sandbox rule | `files/system/usr/lib/systemd/system/daedalus-*.service.d/*.conf` | landlock.conf = seccomp/network;credentials.conf = LoadCredential |
 | Reorder / add image build step | `files/scripts/NN-name.sh` | 60-ai-middleware, 65-ai-safety, 70-daedalus-mcp-servers, 75-daedalus-copilot, 76-daedalus-plugin-gen |
@@ -91,7 +92,7 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 | `controller` | Go pkg | `internal/controller/` | 决策 25 契约缝锁定包;host/tx 共享 |
 | `tx` | Go pkg | `internal/tx/` | 事务通道共享包;`tx.Step` 六键线上契约;D-1 裁决 ctx 侧路透传;`tx.List()` 回放序(created_at↑,id↑) |
 | `desiredview` | Go pkg | `internal/desiredview/` | 期望视图投影(纯函数 replay,零副作用);`Entry.source_tx` 为 P4 generation 前置 |
-| `fleet` | Go pkg | `internal/fleet/` | 控制面下发:`Scheduler.Run` 批→机→intent 串行,风险×N1/N2/N3 分桶;`Probe` 是下发前活性预检(时限取 `[fleet].heartbeat_timeout_seconds`),心跳口径**只**作用于 `Heartbeat`,工作 RPC 兜底恒为 `defaultCallTimeout` |
+| `fleet` | Go pkg | `internal/fleet/` | 控制面下发:`Scheduler.Run` 批→机→intent 串行,风险×N1/N2/N3 分桶;`Probe` 是下发前活性预检(时限取 `[fleet].heartbeat_timeout_seconds`),心跳口径**只**作用于 `Heartbeat`,工作 RPC 兜底恒为 `defaultCallTimeout`;节点注册表身份(`nodes.jsonl`)/观测(`seen.log`)分家,`MarkSeen` 只追加不 fsync |
 | `plugin` | Go pkg | `../daedalus-sdk/plugin/` | manifest schema 校验 + Pack/Extract/Verify/VerifyDir |
 | `policy` | Go pkg | `../daedalus-sdk/policy/` | policy.toml 严格加载 (ErrNotFound 哨兵 / LoadOrDefault / ALLOW_COMMANDS REPLACE) |
 | `shellpolicy` | Go pkg | `../daedalus-sdk/shellpolicy/` | 15 命令 / 4 bin 目录 / 路径规则权威实现 (CLEAN_ENV, 30s, rc 126/124) |

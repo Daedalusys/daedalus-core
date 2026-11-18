@@ -11,6 +11,7 @@ package integration_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -377,6 +378,68 @@ func TestFleetScale_HighRiskZeroRPC(t *testing.T) {
 		n, atomicIdx, elapsed.Round(time.Millisecond), res.Message)
 }
 
+// TestFleetScale_MarkSeenDoesNotRewriteRegistry 钉住本次改动的**结构性**判据:
+// 200 台一次 Plan 里 markSeen 被调 400 次(每台下发前后各一次),身份表
+// nodes.jsonl 的内容 sha256 与 mtime 都不许变 —— last_seen 走 append-only 的
+// seen.log,整表重写次数从 ~400 降到 0。
+//
+// 断言分三层:身份表不被触碰、观测侧车按次增长、以及"行为没变"(200 条成功结果)。
+func TestFleetScale_MarkSeenDoesNotRewriteRegistry(t *testing.T) {
+	n := scaleN(t)
+	pki := newScalePKI(t)
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	agents, addrs := startScaleAgents(t, pki, n)
+	registerScaleNodes(t, reg, addrs)
+
+	identity := filepath.Join(reg.Root(), "nodes.jsonl")
+	seenLog := filepath.Join(reg.Root(), "seen.log")
+	before := scaleFileSnapshot(t, identity)
+
+	plan := scalePlan(t, n, objectmodel.BatchingCount, 50, objectmodel.KindPackage, objectmodel.RiskClassLow)
+	run, err := fleet.NewScheduler(reg, policy.Default()).Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// a) 身份表一个字节都没动,也没有被重写过(mtime 是"重写"的判据)。
+	after := scaleFileSnapshot(t, identity)
+	if before.sum != after.sum {
+		t.Fatalf("nodes.jsonl 被重写:内容 sha256 %x → %x", before.sum, after.sum)
+	}
+	if !before.mod.Equal(after.mod) {
+		t.Fatalf("nodes.jsonl 被重写:mtime %s → %s", before.mod, after.mod)
+	}
+
+	// b) 观测侧车按次增长:每次 dispatch 前后各一条,至少 n 条。
+	if got := scaleLineCount(t, seenLog); got < n {
+		t.Fatalf("seen.log 行数 = %d, want >= %d(每台下发前后各记一次)", got, n)
+	}
+
+	// c) 行为没变:200 条 N1、状态 complete、每台各 1 次 ApplyIntent。
+	if run.Status != objectmodel.PlanStatusComplete {
+		t.Fatalf("status = %v, want complete", run.Status)
+	}
+	if got := len(run.Results); got != n {
+		t.Fatalf("results = %d, want %d", got, n)
+	}
+	for _, r := range run.Results {
+		if r.Outcome.String() != "success" {
+			t.Fatalf("结果分桶 = %s, want success: %+v", r.Outcome, r)
+		}
+	}
+	for i, ag := range agents {
+		if got := ag.calls.Load(); got != 1 {
+			t.Fatalf("第 %d 台收到 %d 次 ApplyIntent, want 1", i, got)
+		}
+	}
+
+	t.Logf("LASTSEEN %d 节点:nodes.jsonl sha256=%x(未变), mtime=%s(未变), seen.log %d 行",
+		n, before.sum, before.mod, scaleLineCount(t, seenLog))
+}
+
 // ---------------- 助手 ----------------
 
 // scaleN 是本次 scale 测量的节点数:默认 200(spec G1 的数),
@@ -606,4 +669,44 @@ func registerScaleNodesWith(t *testing.T, reg *fleet.Registry, addrs []string, m
 		nodes[i] = node
 	}
 	return nodes
+}
+
+// scaleFileSnapshot 是"内容 sha256 + mtime"快照:文件被重写(哪怕内容相同)
+// 也会让 mtime 变,所以两条都要比。
+type scaleFileState struct {
+	sum [sha256.Size]byte
+	mod time.Time
+}
+
+// scaleFileSnapshot 取一份文件快照。
+func scaleFileSnapshot(t *testing.T, path string) scaleFileState {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat %s: %v", path, err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读 %s: %v", path, err)
+	}
+	return scaleFileState{sum: sha256.Sum256(raw), mod: info.ModTime()}
+}
+
+// scaleLineCount 数文件里的非空行;文件不存在视为 0 行。
+func scaleLineCount(t *testing.T, path string) int {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("读 %s: %v", path, err)
+	}
+	n := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
 }
