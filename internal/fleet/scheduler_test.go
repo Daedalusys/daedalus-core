@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -859,5 +861,168 @@ func TestScheduler_NilProbeDispatchesNormally(t *testing.T) {
 	}
 	if run.Status != objectmodel.PlanStatusComplete {
 		t.Errorf("Status = %q, want %q", run.Status, objectmodel.PlanStatusComplete)
+	}
+}
+
+// TestScheduler_PrefetchIsConcurrentAcrossNodes 钉住预检在批内**节点之间**并发:
+// 两台节点各探一次(每次 300ms),串行是 600ms,并发是 300ms。
+//
+// 判据是墙时而不是"探针被调了几次":探针次数两种实现都一样(每台一次)。
+func TestScheduler_PrefetchIsConcurrentAcrossNodes(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapBtrfs), nodeWithSnapshot("n2", snapBtrfs))
+	plan := planOf(t, []objectmodel.Intent{lowIntent()},
+		[]objectmodel.Machine{agentMachine("n1"), agentMachine("n2")}, 2)
+	fake := &fakeDispatcher{}
+	s := &Scheduler{
+		Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(),
+		HeartbeatTimeout: 30 * time.Second,
+		Dispatch:         fake.dispatch,
+		Probe: func(context.Context, DispatchTarget) error {
+			time.Sleep(300 * time.Millisecond)
+			return nil
+		},
+	}
+
+	start := time.Now()
+	run, err := s.Run(context.Background(), plan)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if elapsed >= 550*time.Millisecond {
+		t.Errorf("Run 墙 = %s, want < 550ms(两台各探一次 300ms:串行 600ms,并发 300ms)", elapsed)
+	}
+	if len(fake.calls) != 2 {
+		t.Errorf("两台节点都应下发,Dispatch 次数 = %d, want 2", len(fake.calls))
+	}
+	if len(run.Results) != 2 {
+		t.Fatalf("Results 数 = %d, want 2", len(run.Results))
+	}
+	for i, res := range run.Results {
+		if res.Outcome != OutcomeN1 {
+			t.Errorf("第 %d 条 Outcome = %v, want %v", i, res.Outcome, OutcomeN1)
+		}
+	}
+}
+
+// TestScheduler_SecondIntentStillProbesLive 钉住预取只覆盖**首个** intent:
+// 一台节点两条 intent 时,第二条必须现调预检 —— 拿着批首那一刻的旧活性下发,
+// 会让"预检之后才死"的节点被漏检。
+func TestScheduler_SecondIntentStillProbesLive(t *testing.T) {
+	r := newRegistryWithNodes(t, nodeWithSnapshot("n1", snapBtrfs))
+	plan := planOf(t, []objectmodel.Intent{lowIntent(), lowIntentFor("curl")},
+		[]objectmodel.Machine{agentMachine("n1")}, 1)
+	fake := &fakeDispatcher{}
+	var probes atomic.Int64
+	var mu sync.Mutex
+	probed := map[int]int{}
+	s := &Scheduler{
+		Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(),
+		HeartbeatTimeout: 30 * time.Second,
+		Dispatch:         fake.dispatch,
+		Probe: func(_ context.Context, d DispatchTarget) error {
+			probes.Add(1)
+			mu.Lock()
+			probed[d.Index]++
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := probes.Load(); got != 2 {
+		t.Errorf("预检次数 = %d, want 2(首 intent 命中预取,第 2 条现调)", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if probed[0] != 1 || probed[1] != 1 {
+		t.Errorf("各 intent 的预检次数 = %v, want 0→1 次、1→1 次", probed)
+	}
+	if len(run.Results) != 2 {
+		t.Errorf("Results 数 = %d, want 2", len(run.Results))
+	}
+}
+
+// TestScheduler_PrefetchPreservesResultOrder 钉住结果顺序:预取打乱的是**探针**
+// 的返回次序,不是结果的次序 —— 结果仍按 plan.Machines 的机器序。
+func TestScheduler_PrefetchPreservesResultOrder(t *testing.T) {
+	r := newRegistryWithNodes(t,
+		nodeWithSnapshot("n1", snapBtrfs),
+		nodeWithSnapshot("n2", snapBtrfs),
+		nodeWithSnapshot("n3", snapBtrfs))
+	plan := planOf(t, []objectmodel.Intent{lowIntent()}, []objectmodel.Machine{
+		agentMachine("n1"), agentMachine("n2"), agentMachine("n3"),
+	}, 3)
+	fake := &fakeDispatcher{}
+	// 后面的节点先探完:探针完成序与机器序相反,结果序仍须是机器序。
+	delays := map[string]time.Duration{"n1": 150 * time.Millisecond, "n2": 90 * time.Millisecond, "n3": 10 * time.Millisecond}
+	s := &Scheduler{
+		Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(),
+		HeartbeatTimeout: 30 * time.Second,
+		Dispatch:         fake.dispatch,
+		Probe: func(_ context.Context, d DispatchTarget) error {
+			time.Sleep(delays[d.Node.NodeID])
+			return nil
+		},
+	}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(run.Results) != 3 {
+		t.Fatalf("Results 数 = %d, want 3", len(run.Results))
+	}
+	for i, want := range []string{"n1", "n2", "n3"} {
+		if got := run.Results[i].NodeID; got != want {
+			t.Errorf("第 %d 条结果 NodeID = %s, want %s(结果序 = 机器序)", i, got, want)
+		}
+	}
+}
+
+// TestScheduler_PrefetchDirtyStopsAtFirstN3 钉住停手语义在预取之后不变:
+// 第 2 台预检失败 → 整批 dirty,结果只有前 2 条,第 3 台一个工作 RPC 都不发。
+func TestScheduler_PrefetchDirtyStopsAtFirstN3(t *testing.T) {
+	r := newRegistryWithNodes(t,
+		nodeWithSnapshot("n1", snapBtrfs),
+		nodeWithSnapshot("n2", snapBtrfs),
+		nodeWithSnapshot("n3", snapBtrfs))
+	plan := planOf(t, []objectmodel.Intent{lowIntent()}, []objectmodel.Machine{
+		agentMachine("n1"), agentMachine("n2"), agentMachine("n3"),
+	}, 3)
+	fake := &fakeDispatcher{}
+	s := &Scheduler{
+		Registry: r, RetryMax: 3, Now: time.Now, Policy: policy.Default(),
+		HeartbeatTimeout: 30 * time.Second,
+		Dispatch:         fake.dispatch,
+		Probe: func(_ context.Context, d DispatchTarget) error {
+			if d.Node.NodeID == "n2" {
+				return errors.New("节点已死")
+			}
+			return nil
+		},
+	}
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(run.Results) != 2 {
+		t.Fatalf("Results 数 = %d, want 2(第 2 台 N3 即停手)", len(run.Results))
+	}
+	if run.Results[1].NodeID != "n2" || run.Results[1].Outcome != OutcomeN3 {
+		t.Errorf("第 2 条结果 = %+v, want n2 且 N3", run.Results[1])
+	}
+	if run.Status != objectmodel.PlanStatusDirty {
+		t.Errorf("Status = %q, want %q", run.Status, objectmodel.PlanStatusDirty)
+	}
+	for _, c := range fake.calls {
+		if c.Machine.MachineID == "n3" {
+			t.Errorf("脏节点之后的机器不得下发,却下发了 %s", c.Machine.MachineID)
+		}
 	}
 }

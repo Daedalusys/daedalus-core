@@ -267,6 +267,10 @@ func (s *Scheduler) Run(ctx context.Context, plan objectmodel.Plan) (*PlanRun, e
 	for bi := range batches {
 		batch := batches[bi]
 		dirty := false
+		// 批内并发预取:把每台节点**首个** intent 的预检结果提前取回。
+		// 下发本身仍按机器序串行 —— 预取打乱的是探针的返回次序,不是结果的
+		// 次序;结果顺序、dirty 归属与 StoppedAt 一概由下面的串行消费决定。
+		pre := s.prefetchFirstIntentProbes(ctx, plan, batch, machines, nodes)
 		for _, nodeID := range batch.NodeIDs {
 			for i, intent := range plan.Intents {
 				res := s.runOne(ctx, DispatchTarget{
@@ -275,7 +279,7 @@ func (s *Scheduler) Run(ctx context.Context, plan objectmodel.Plan) (*PlanRun, e
 					Node:    nodes[nodeID],
 					Intent:  intent,
 					Index:   i,
-				})
+				}, pre)
 				run.Results = append(run.Results, res)
 				if res.Outcome == OutcomeN3 {
 					dirty = true
@@ -313,11 +317,12 @@ func refusalMessage(n Node, kind objectmodel.Kind) string {
 }
 
 // runOne 下发一条 intent,并按分桶决定重试/暂停;总是返回一条 StepResult。
-func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
+// pre 是本批已预取到的预检结果(键 = 节点 + intent 下标),命中即不再现调探针。
+func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget, pre probeCache) StepResult {
 	risk := s.effectiveRisk(t.Intent)
 
 	// 高危 intent 打到没有(或未确证有)回滚点的节点:连 RPC 都不发。
-	if risk == objectmodel.RiskClassHigh && !intentHasRollbackPoint(t.Node, t.Intent.Kind) {
+	if s.refusesWithoutRollbackPoint(t) {
 		return s.fill(t, StepResult{
 			Outcome: OutcomeN3,
 			Result:  agentv1.ApplyIntentResult_APPLY_INTENT_RESULT_REFUSED_SNAPSHOT_CAPABILITY_NONE,
@@ -329,9 +334,14 @@ func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
 	// 不再靠工作 RPC 的兜底时限去等。位置必须在上面的拒绝判定**之后** ——
 	// 无回滚点的高危 intent 现在连 RPC 都不发,若预检排在前面,一台死节点会先
 	// 被探测一个心跳时限,再被判"无回滚点",错误原因被掩盖。
+	// 预取只覆盖首个 intent;第 2..K 条 intent 现场探,拿到的才是"此刻"的活性。
 	// Probe==nil 表示无预检通道(直接构造 &Scheduler{...} 的调用方),跳过。
 	if s.Probe != nil {
-		if err := s.Probe(ctx, t); err != nil {
+		err, cached := pre.lookup(t.Node.NodeID, t.Index)
+		if !cached {
+			err = s.Probe(ctx, t)
+		}
+		if err != nil {
 			return s.fill(t, StepResult{
 				Outcome: OutcomeN3,
 				Result:  agentv1.ApplyIntentResult_APPLY_INTENT_RESULT_PERSISTENT_FAILURE,
