@@ -161,6 +161,9 @@ func (r *Registry) Delete(nodeID string) error {
 // 身份表一个字节都不动:观测走 append-only 的侧车(见 seen.go),markSeen 因此
 // 是 O(1) 追加而不是整表读改写。崩溃可能丢最近的观测(侧车不 fsync),但节点
 // 身份不受影响。
+//
+// 这里读一遍身份表只为"未注册校验"(纯读、无 fsync):要再压这段 O(n) 成本就得
+// 上内存索引 / write-behind,那必须重新回答「崩溃时丢什么」,不在这条路径上顺手做。
 func (r *Registry) MarkSeen(nodeID string, unix int64) error {
 	// 读身份表只为"未注册校验"——观测本身不落在它里面。
 	all, err := r.loadBase()
