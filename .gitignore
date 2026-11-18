@@ -20,7 +20,7 @@ bin/
 !files/system/usr/local/bin/
 files/system/usr/local/bin/daedalus-*
 
-# 镜像安装态整目录不入库:12 个插件目录(daedalus.copilot + 11 个能力插件)都是构建产物,
+# 镜像安装态整目录不入库:14 个插件目录(daedalus.copilot + 13 个能力插件)都是构建产物,
 # 分别由 `just copilot-plugin`(pack-copilot-plugin.sh)与 `just plugin-pack` /
 # `scripts/fetch-plugins.sh`(解 release zip 到该目录)生成;CI 侧另有幂等/可重现验证。
 #
