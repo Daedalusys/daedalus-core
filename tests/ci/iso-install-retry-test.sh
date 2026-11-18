@@ -190,24 +190,37 @@ fi
 # ------------------------------------------------ 预算:单次时限按「有无后备源」分形状 --
 # CI 只剩一个源(加速镜像已退役,core#138):没有后备可换时,SRC_TIMEOUT 的截断只会白扔预算,
 # 最后一个源必须拿剩余预算的全部。两源时截断仍要保留:装不完就换下一个源。
+# 不要把时限断言成字面量:预算按 SECONDS 的整秒粒度算(used = SECONDS - starts),
+# 一次尝试只要跨过秒边界,剩余预算就会少 1~2s(CI 上实观测到 2099)。所以这里钉的是
+# **不变量**:单次时限 == 同一行的剩余预算,再检查它确实大于 / 小于 SRC_TIMEOUT。
+say_limits() { # say_limits <say 文件> <第几次>:打印 "<单次时限> <剩余预算>"
+    local line
+    line="$(grep -F "开始无人值守安装(第 $2 次" "$1" | tail -1)"
+    printf '%s %s\n' \
+        "$(printf '%s\n' "$line" | sed -n 's/.*单次时限 \([0-9][0-9]*\)s.*/\1/p')" \
+        "$(printf '%s\n' "$line" | sed -n 's/.*剩余预算 \([0-9][0-9]*\)s.*/\1/p')"
+}
+
 printf '%s\n' '124|-' >"$WORK/plan.lastsrc"
 out="$(run_install lastsrc 1 2100 0)"; rc=$?
-pl="$(grep -o '单次时限 [0-9]*s' "$WORK/say.lastsrc" | head -1)"
-[ "$pl" = '单次时限 2100s' ]; st $? "时限 单源(最后一个源)拿剩余预算全部(期望 [单次时限 2100s] 实得 [$pl])"
+read -r pl rb < <(say_limits "$WORK/say.lastsrc" 1)
+[ -n "$pl" ] && [ "$pl" = "$rb" ]; st $? "时限 单源(最后一个源)拿剩余预算全部(期望 单次时限 == 剩余预算;实得 [$pl] vs [$rb])"
+[ -n "$rb" ] && [ "$rb" -ge 2098 ] && [ "$rb" -le 2100 ]; st $? "时限 单源没被截断吃掉预算(期望剩余预算 2098..2100s;实得 [$rb])"
 contains "$out" 'installed=0 attempts=1'; st $? "时限 单源仍是 rc=124 即 die、同源不重试(期望 attempts=1;实得 $(printf '%s' "$out" | tr '\n' ' '))"
 
 printf '%s\n' '124|-' '0|-' >"$WORK/plan.firstsrc"
 out="$(run_install firstsrc 1 2100 1)"; rc=$?
-pls="$(grep -o '单次时限 [0-9]*s' "$WORK/say.firstsrc" | tr '\n' ' ')"
-contains "$pls" '单次时限 900s'; st $? "时限 还有后备源时仍按 SRC_TIMEOUT 截断(期望含 [单次时限 900s] 实得 [$pls])"
-contains "$pls" '单次时限 2100s'; st $? "时限 换到最后一个源后拿剩余预算全部(期望含 [单次时限 2100s] 实得 [$pls])"
+read -r pl1 rb1 < <(say_limits "$WORK/say.firstsrc" 1)
+read -r pl2 rb2 < <(say_limits "$WORK/say.firstsrc" 2)
+[ "$pl1" = '900' ]; st $? "时限 还有后备源时仍按 SRC_TIMEOUT 截断(期望 [900s] 实得 [$pl1])"
+[ -n "$pl2" ] && [ "$pl2" = "$rb2" ] && [ "$pl2" -gt 900 ]; st $? "时限 换到最后一个源后拿剩余预算全部(期望 单次时限 == 剩余预算 且 >900;实得 [$pl2] vs [$rb2])"
 contains "$out" 'installed=1 attempts=2'; st $? "时限 多源换源后成功(期望 installed=1 attempts=2;实得 $(printf '%s' "$out" | tr '\n' ' '))"
 
 # 剩余预算比 SRC_TIMEOUT 还小时,(0, 剩余预算] 的夹取仍然生效 —— 不许越过总预算。
 printf '%s\n' '124|-' >"$WORK/plan.smallbudget"
 out="$(run_install smallbudget 1 600 0)"; rc=$?
-pl="$(grep -o '单次时限 [0-9]*s' "$WORK/say.smallbudget" | head -1)"
-[ "$pl" = '单次时限 600s' ]; st $? "时限 剩余预算小于 SRC_TIMEOUT 时取剩余预算(期望 [单次时限 600s] 实得 [$pl])"
+read -r pl rb < <(say_limits "$WORK/say.smallbudget" 1)
+[ -n "$pl" ] && [ "$pl" = "$rb" ] && [ "$rb" -lt 900 ]; st $? "时限 剩余预算小于 SRC_TIMEOUT 时取剩余预算(期望 单次时限 == 剩余预算 <900;实得 [$pl] vs [$rb])"
 
 # ------------------------------------------------------------ 预算与外层时限关系 --
 # 总预算必须**严格小于** iso-verify.sh 等 guest 重启的上限,否则外层把"预算耗尽"
