@@ -377,6 +377,264 @@ func TestFleetScale_HighRiskZeroRPC(t *testing.T) {
 		n, atomicIdx, elapsed.Round(time.Millisecond), res.Message)
 }
 
+// heartbeatTestTimeout 是本层挂死用例用的心跳时限。生产口径是策略里的
+// heartbeat_timeout_seconds(秒粒度,30s),本层要把它压到 200ms 才量得到墙;
+// 直接落在调度器的 HeartbeatTimeout 字段上(生产从策略读,这里显式覆盖)。
+const heartbeatTestTimeout = 200 * time.Millisecond
+
+// TestFleetScale_HungNodesDoNotStackHeartbeatWall 是本层的主干:200 台里最后
+// 20 台演「收请求不回」(连得上但永远不答心跳),单批(量批内并发,不是批数)。
+//
+// 分两段,因为「墙时」在两段里是不同的东西:
+//
+//  1. 端到端:末 20 台挂死跑一遍,钉健康节点的结果不受牵连(180 条 N1、第一台
+//     挂死节点 N3、整批 dirty);
+//  2. 墙时:下发本身才是墙时大头(每台一次 mTLS 握手 + 注册表整表 fsync),它与
+//     挂死节点无关。所以另跑两轮**零下发**的对照:第一台立刻答错 vs 前 20 台
+//     挂死 —— 两轮都在第一台停手、都探满 200 台,墙时之差就只剩那几个挂死探针。
+//     并发是一个时限,串行是 19 个。
+//
+// 另有一条口径钉住「探针集合由输入决定」:整批每台都被探到(含脏点之后的 19 台),
+// 它们一个工作 RPC 都没收到 —— 预取不因某个探针失败而提前收缩。
+func TestFleetScale_HungNodesDoNotStackHeartbeatWall(t *testing.T) {
+	n := scaleN(t)
+	const hung = 20
+	if n <= hung {
+		t.Skipf("需要挂死节点之前还有健康节点,当前 DAEDALUS_SCALE_N=%d", n)
+	}
+	pki := newScalePKI(t)
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	agents, addrs := startScaleAgents(t, pki, n)
+	registerScaleNodes(t, reg, addrs)
+
+	// size=n:单批 —— 要量的是批内并发,不是批数。
+	plan := scalePlan(t, n, objectmodel.BatchingCount, n, objectmodel.KindPackage, objectmodel.RiskClassLow)
+
+	runOnce := func() (time.Duration, *fleet.PlanRun) {
+		t.Helper()
+		s := fleet.NewScheduler(reg, policy.Default())
+		s.HeartbeatTimeout = heartbeatTestTimeout
+		start := time.Now()
+		run, err := s.Run(context.Background(), plan)
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return elapsed, run
+	}
+
+	// —— 1. 端到端 ——
+	hungFrom := n - hung
+	for i := hungFrom; i < n; i++ {
+		agents[i].hangHeartbeat.Store(true)
+	}
+	runWall, run := runOnce()
+
+	// b) 挂死节点之前的健康节点,结果不受牵连:每台一条成功记录,机器序不变。
+	if got, want := len(run.Results), hungFrom+1; got != want {
+		t.Fatalf("results = %d, want %d(跑到第一台挂死节点为止)", got, want)
+	}
+	for i := 0; i < hungFrom; i++ {
+		res := run.Results[i]
+		if res.NodeID != machineID(i) {
+			t.Fatalf("第 %d 条结果 NodeID = %s, want %s(结果序 = 机器序)", i, res.NodeID, machineID(i))
+		}
+		if res.Outcome.String() != "success" {
+			t.Fatalf("第 %d 台结果 outcome = %s, want success(健康节点不受挂死节点牵连)", i, res.Outcome)
+		}
+	}
+	// c) 第一台挂死节点:心跳预检失败 → 持久失败。
+	res := run.Results[hungFrom]
+	if res.NodeID != machineID(hungFrom) {
+		t.Fatalf("第 %d 条结果 NodeID = %s, want %s", hungFrom, res.NodeID, machineID(hungFrom))
+	}
+	if res.Outcome.String() != "persistent" {
+		t.Errorf("挂死节点 outcome = %s, want persistent", res.Outcome)
+	}
+	if !strings.Contains(res.Message, "心跳预检") {
+		t.Errorf("失败原因应点名心跳预检, got %q", res.Message)
+	}
+	// d) 整批 dirty。
+	if run.Status != objectmodel.PlanStatusDirty {
+		t.Errorf("status = %v, want dirty", run.Status)
+	}
+	// 探针集合由输入决定:整批每台各被探一次(含脏点之后的那些)。
+	for i, ag := range agents {
+		if got := ag.heartbeats.Load(); got != 1 {
+			t.Errorf("第 %d 台被探 %d 次心跳, want 1(探针集合由输入决定,不随停手收缩)", i, got)
+		}
+	}
+	// 挂死节点与脏点之后的节点:一个工作 RPC 都不许发。
+	for i := hungFrom; i < n; i++ {
+		if got := agents[i].calls.Load(); got != 0 {
+			t.Errorf("第 %d 台收到 %d 次 ApplyIntent, want 0(预检失败不下发)", i, got)
+		}
+	}
+
+	// —— 2. 墙时(零下发的两轮对照) ——
+	// 控制组:第一台立刻答错,其余全健康 —— 同样在第一台停手。
+	for i := hungFrom; i < n; i++ {
+		agents[i].hangHeartbeat.Store(false)
+	}
+	agents[0].failHeartbeat.Store(true)
+	controlWall, controlRun := runOnce()
+	if controlRun.Status != objectmodel.PlanStatusDirty || len(controlRun.Results) != 1 {
+		t.Fatalf("控制组 status=%v results=%d, want dirty 且只有 1 条(第一台停手)",
+			controlRun.Status, len(controlRun.Results))
+	}
+	// 测试组:前 20 台挂死,其余(含前一轮挂死的那 19 台)全健康。
+	agents[0].failHeartbeat.Store(false)
+	for i := 0; i < hung; i++ {
+		agents[i].hangHeartbeat.Store(true)
+	}
+	probeWall, probeRun := runOnce()
+	if probeRun.Status != objectmodel.PlanStatusDirty || len(probeRun.Results) != 1 {
+		t.Fatalf("墙时轮 status=%v results=%d, want dirty 且只有 1 条(第一台停手)",
+			probeRun.Status, len(probeRun.Results))
+	}
+
+	// a) 多出的 19 台挂死只让墙时多出一个心跳时限,不是 19 个。
+	if delta := probeWall - controlWall; delta >= time.Second {
+		t.Errorf("多出的 %d 台挂死让墙时多出 %s(控制组 %s → 挂死 %s):串行预取会是 %d×%s",
+			hung-1, delta, controlWall.Round(time.Millisecond), probeWall.Round(time.Millisecond),
+			hung-1, heartbeatTestTimeout)
+	}
+
+	t.Logf("HUNG %d 节点:末 %d 台收请求不回,端到端墙 %s(已跑 %d 台,status=%v);零下发对照:控制组 %s → 挂死 %s(增量 %s,串行预取会是 %d×%s)",
+		n, hung, runWall.Round(time.Millisecond), len(run.Results), run.Status,
+		controlWall.Round(time.Millisecond), probeWall.Round(time.Millisecond),
+		(probeWall - controlWall).Round(time.Millisecond), hung-1, heartbeatTestTimeout)
+}
+
+// TestFleetScale_HungHeartbeatDoesNotDispatch 钉住挂死节点一个工作 RPC 都不发:
+// 预检失败必须在 ApplyIntent 之前就把该节点拦下(判据是计数,不是文案)。
+func TestFleetScale_HungHeartbeatDoesNotDispatch(t *testing.T) {
+	const n = 2
+	pki := newScalePKI(t)
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	agents, addrs := startScaleAgents(t, pki, n)
+	registerScaleNodes(t, reg, addrs)
+	agents[1].hangHeartbeat.Store(true)
+
+	plan := scalePlan(t, n, objectmodel.BatchingCount, n, objectmodel.KindPackage, objectmodel.RiskClassLow)
+	s := fleet.NewScheduler(reg, policy.Default())
+	s.HeartbeatTimeout = heartbeatTestTimeout
+
+	run, err := s.Run(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// 挂死那台:被探到了(预检确实发生),但一个工作 RPC 都没发。
+	if got := agents[1].heartbeats.Load(); got != 1 {
+		t.Errorf("挂死节点被探 %d 次心跳, want 1(预检确实发生了)", got)
+	}
+	if got := agents[1].calls.Load(); got != 0 {
+		t.Errorf("挂死节点收到 %d 次 ApplyIntent, want 0(预检失败不下发)", got)
+	}
+	// 健康那台:预检通过后照常下发一次。
+	if got := agents[0].calls.Load(); got != 1 {
+		t.Errorf("健康节点收到 %d 次 ApplyIntent, want 1", got)
+	}
+	if run.Status != objectmodel.PlanStatusDirty {
+		t.Errorf("status = %v, want dirty", run.Status)
+	}
+	if got := len(run.Results); got != 2 {
+		t.Fatalf("results = %d, want 2", got)
+	}
+	if !strings.Contains(run.Results[1].Message, "心跳预检") {
+		t.Errorf("失败原因应点名心跳预检, got %q", run.Results[1].Message)
+	}
+
+	t.Logf("HUNG-DISPATCH %d 台:第 2 台收请求不回,ApplyIntent %d 次,健康台 %d 次",
+		n, agents[1].calls.Load(), agents[0].calls.Load())
+}
+
+// probeConcurrencyForTest 必须与 internal/fleet 的 probePrefetchConcurrency 一致:
+// 本用例量的是"墙是波次形状"这件事,波数由那个上限决定。上限改了,这条的期望
+// 也要跟着改 —— 这正是它要钉的东西。
+const probeConcurrencyForTest = 64
+
+// TestFleetScale_AllHungPrefetchWallIsWaveShaped 钉住并发上限的形状:整批 200 台
+// **全部**「收请求不回」时,墙时是 ceil(200/64) 个心跳时限(受上限约束的波次),
+// 而不是 200 个。
+//
+// 挂死节点放在最前,所以第一台就判脏、一台工作 RPC 都不发 —— 墙时里只剩预取
+// 这一段,量得干净(总墙时另外那 4 秒是下发本身的注册表 fsync,与本条无关)。
+// 下界是结构性的:64 个槽、200 个各要一个时限的探针,再快也快不过 4 个波次。
+func TestFleetScale_AllHungPrefetchWallIsWaveShaped(t *testing.T) {
+	n := scaleN(t)
+	if n <= probeConcurrencyForTest {
+		t.Skipf("需要超过一个并发上限的节点数才量得到波次,当前 DAEDALUS_SCALE_N=%d", n)
+	}
+	pki := newScalePKI(t)
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	agents, addrs := startScaleAgents(t, pki, n)
+	registerScaleNodes(t, reg, addrs)
+	for _, ag := range agents {
+		ag.hangHeartbeat.Store(true)
+	}
+
+	plan := scalePlan(t, n, objectmodel.BatchingCount, n, objectmodel.KindPackage, objectmodel.RiskClassLow)
+	s := fleet.NewScheduler(reg, policy.Default())
+	s.HeartbeatTimeout = heartbeatTestTimeout
+
+	start := time.Now()
+	run, err := s.Run(context.Background(), plan)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	waves := (n + probeConcurrencyForTest - 1) / probeConcurrencyForTest
+	lower := time.Duration(waves) * heartbeatTestTimeout
+	// 上界给 2 秒余量:每个探针还有一次 mTLS 握手,那部分不在波次结构里(与节点
+	// 数成正比,与并发上限无关)。串行是 200 个时限,差着量级。
+	upper := lower + 2*time.Second
+	if elapsed < lower {
+		t.Errorf("墙时 %s 短于 %s(%d 波 × %s):并发上限没有被遵守", elapsed.Round(time.Millisecond), lower, waves, heartbeatTestTimeout)
+	}
+	if elapsed >= upper {
+		t.Errorf("墙时 %s, want < %s(%d 波 × %s,另加 2s 握手余量):串行会是 %d×%s",
+			elapsed.Round(time.Millisecond), upper, waves, heartbeatTestTimeout, n, heartbeatTestTimeout)
+	}
+
+	// 第一台就判脏:一条结果、零下发。
+	if got := len(run.Results); got != 1 {
+		t.Fatalf("results = %d, want 1(第一台就判脏)", got)
+	}
+	if run.Results[0].Outcome.String() != "persistent" {
+		t.Errorf("outcome = %s, want persistent", run.Results[0].Outcome)
+	}
+	if run.Status != objectmodel.PlanStatusDirty {
+		t.Errorf("status = %v, want dirty", run.Status)
+	}
+	for i, ag := range agents {
+		if got := ag.calls.Load(); got != 0 {
+			t.Errorf("第 %d 台收到 %d 次 ApplyIntent, want 0", i, got)
+		}
+	}
+	// 探针集合由输入决定:整批每台都被探到,不是"探到第一个挂死就收工"。
+	for i, ag := range agents {
+		if got := ag.heartbeats.Load(); got != 1 {
+			t.Errorf("第 %d 台被探 %d 次心跳, want 1(探针集合由输入决定)", i, got)
+		}
+	}
+
+	t.Logf("ALL-HUNG %d 节点:%d 波 × %s,墙 %s(串行会是 %s),results=%d,status=%v",
+		n, waves, heartbeatTestTimeout, elapsed.Round(time.Millisecond),
+		time.Duration(n)*heartbeatTestTimeout, len(run.Results), run.Status)
+}
+
 // ---------------- 助手 ----------------
 
 // scaleN 是本次 scale 测量的节点数:默认 200(spec G1 的数),
@@ -432,12 +690,16 @@ func newScalePKI(t *testing.T) *scalePKI {
 	}
 }
 
-// scaleAgent 是被控端桩:只实现 Register 与 ApplyIntent。计数用 sync/atomic
-// (既有 fakeAgent.applied 是裸切片,调度器一旦并发就会 race —— 本层不能照抄)。
+// scaleAgent 是被控端桩:只实现 Register / Heartbeat 与 ApplyIntent。计数用
+// sync/atomic(既有 fakeAgent.applied 是裸切片,调度器一旦并发就会 race ——
+// 本层不能照抄)。
 type scaleAgent struct {
 	agentv1.UnimplementedAgentServiceServer
-	calls      atomic.Int64
-	failFirstN atomic.Int32
+	calls         atomic.Int64
+	heartbeats    atomic.Int64
+	failFirstN    atomic.Int32
+	hangHeartbeat atomic.Bool
+	failHeartbeat atomic.Bool
 }
 
 // Register 回一个 node_id 等于 agent_id 的注册响应(与既有 fakeAgent 同口径)。
@@ -449,7 +711,20 @@ func (a *scaleAgent) Register(_ context.Context, req *agentv1.RegisterRequest) (
 }
 
 // Heartbeat 回 Ack=true:调度器下发前会做一次活性预检,健康节点必须答活。
-func (a *scaleAgent) Heartbeat(_ context.Context, _ *agentv1.HeartbeatRequest) (*agentv1.HeartbeatResponse, error) {
+// 两个故障开关各演一类:
+//   - hangHeartbeat:「收请求不回」—— 一直挂到客户端放弃(心跳时限到点,上游 ctx
+//     被取消)再回 ctx.Err(),连得上但永远不答的那一类;
+//   - failHeartbeat:「立刻答错」—— 当场回一个错误,用来当控制组(墙时与挂死
+//     节点完全同量,只差"等不等满一个时限")。
+func (a *scaleAgent) Heartbeat(ctx context.Context, _ *agentv1.HeartbeatRequest) (*agentv1.HeartbeatResponse, error) {
+	a.heartbeats.Add(1)
+	if a.hangHeartbeat.Load() {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if a.failHeartbeat.Load() {
+		return nil, status.Error(codes.Unavailable, "模拟心跳失败")
+	}
 	return &agentv1.HeartbeatResponse{Ack: true}, nil
 }
 
