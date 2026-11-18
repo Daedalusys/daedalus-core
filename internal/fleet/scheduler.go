@@ -235,13 +235,20 @@ func (s *Scheduler) Run(ctx context.Context, plan objectmodel.Plan) (*PlanRun, e
 		return nil, fmt.Errorf("fleet: Plan 未通过校验,整批不启动: %w", err)
 	}
 
+	// 整批只读一次注册表:一次 List(整表读 + 折叠观测侧车),而不是每台机
+	// 各读一次 —— 200 台的批里那是 200 次整表读。
 	machines := make(map[string]objectmodel.Machine, len(plan.Machines))
 	nodes := make(map[string]Node, len(plan.Machines))
+	all, err := s.Registry.List()
+	if err != nil {
+		return nil, fmt.Errorf("fleet: 读取注册表失败: %w", err)
+	}
+	byID := make(map[string]Node, len(all))
+	for _, n := range all {
+		byID[n.NodeID] = n
+	}
 	for _, m := range plan.Machines {
-		n, ok, err := s.Registry.Get(m.MachineID)
-		if err != nil {
-			return nil, fmt.Errorf("fleet: 读取节点 %s 失败: %w", m.MachineID, err)
-		}
+		n, ok := byID[m.MachineID]
 		if !ok {
 			return nil, fmt.Errorf("fleet: 节点 %s 未注册", m.MachineID)
 		}
