@@ -139,22 +139,36 @@ else
     fi
 fi
 
-# ---- T3b · enabled 维度的回滚(已知缺陷,记 NOTE 不判红) -------------------------
-# service.set 的 Rollback 只按 before_state.active_state 施加逆动词
-# (serviceSetInverseVerbs: active→start / inactive→stop),enabled 这个维度既没进
-# before_state、也没有逆动词 —— 于是 `desired_state=enabled` 回滚后符号链接留在原地,
-# 而事务 status 仍报 rolled_back。这是产品缺陷(Daedalusys/daedalus-core#195),
-# 不是探针问题;v0.1 已知缺口,所以这里只记录事实、不把出货门禁判红。
-say "T3b · enabled 维度的回滚(已知缺陷 #195)"
+# ---- T3b · enabled 维度的回滚 ------------------------------------------------
+# enabled 与运行态是两个正交维度: `desired_state=enabled` 只动 enable 符号链接
+# (`~/.config/systemd/user/*.wants/`),不动 ActiveState。回滚必须按 Propose 期
+# `is-enabled` 的观测值恢复该维度 —— 旧实现只按 active_state 发逆动词,单元原本
+# inactive 时发的是 stop(空转),符号链接留在原地,而事务 status 仍报 rolled_back
+# (Daedalusys/daedalus-core#195,已修)。
+# 判据是「回滚前后 is-enabled 完全一致」,不是硬编码某个值 —— 探针不假设起始态。
+say "T3b · enabled 维度的回滚(#195)"
+T3B_BEFORE="$(gssh "sudo -iu verify bash -lc 'export XDG_RUNTIME_DIR=/run/user/$UID_V; systemctl --user is-enabled $UNIT'" 2>&1 | tr -d '\r')"
+printf '      is-enabled(回滚前): %s\n' "$T3B_BEFORE" | tee -a "$DRIVER_LOG"
 T3B_TX="$(gssh "sudo -iu verify bash -lc 'export XDG_RUNTIME_DIR=/run/user/$UID_V; /usr/local/bin/daedalus-tx begin'" 2>/dev/null | sed -n 's/.*"tx_id":"\([a-f0-9]\{16\}\).*/\1/p')"
-if [ -n "$T3B_TX" ]; then
-    gssh "sudo -iu verify bash -lc 'export XDG_RUNTIME_DIR=/run/user/$UID_V; /usr/local/bin/daedalus-tx propose $T3B_TX service.set \"{\\\"name\\\":\\\"$UNIT\\\",\\\"desired_state\\\":\\\"enabled\\\"}\" >/dev/null 2>&1; /usr/local/bin/daedalus-tx apply $T3B_TX >/dev/null 2>&1; /usr/local/bin/daedalus-tx rollback $T3B_TX >/dev/null 2>&1; systemctl --user is-enabled $UNIT'" >/dev/null 2>&1
+if [ -z "$T3B_TX" ]; then
+    driver_verdict FAIL "T3b begin 没给出 tx_id"
+elif [ -z "$T3B_BEFORE" ]; then
+    driver_verdict FAIL "T3b 回滚前 is-enabled 观测不到,无法判定 enabled 维度"
+else
+    # apply(enabled) → 观测: 必须是 enabled(证明这一步确实动了 enabled 维度)
+    gssh "sudo -iu verify bash -lc 'export XDG_RUNTIME_DIR=/run/user/$UID_V; /usr/local/bin/daedalus-tx propose $T3B_TX service.set \"{\\\"name\\\":\\\"$UNIT\\\",\\\"desired_state\\\":\\\"enabled\\\"}\" >/dev/null 2>&1; /usr/local/bin/daedalus-tx apply $T3B_TX >/dev/null 2>&1'" >/dev/null 2>&1
+    T3B_APPLIED="$(gssh "sudo -iu verify bash -lc 'export XDG_RUNTIME_DIR=/run/user/$UID_V; systemctl --user is-enabled $UNIT'" 2>&1 | tr -d '\r')"
+    printf '      is-enabled(apply 后): %s\n' "$T3B_APPLIED" | tee -a "$DRIVER_LOG"
+    # rollback → 观测: 必须回到回滚前的值(符号链接被摘掉)
+    gssh "sudo -iu verify bash -lc 'export XDG_RUNTIME_DIR=/run/user/$UID_V; /usr/local/bin/daedalus-tx rollback $T3B_TX >/dev/null 2>&1'" >/dev/null 2>&1
     T3B_AFTER="$(gssh "sudo -iu verify bash -lc 'export XDG_RUNTIME_DIR=/run/user/$UID_V; systemctl --user is-enabled $UNIT'" 2>&1 | tr -d '\r')"
-    printf '      is-enabled(enable→rollback 后): %s\n' "$T3B_AFTER" | tee -a "$DRIVER_LOG"
-    if [ "$T3B_AFTER" = "enabled" ]; then
-        driver_verdict NOTE "T3b enabled 回滚不掉(仍是 $T3B_AFTER):已知缺陷 Daedalusys/daedalus-core#195"
+    printf '      is-enabled(rollback 后): %s\n' "$T3B_AFTER" | tee -a "$DRIVER_LOG"
+    if [ "$T3B_APPLIED" != "enabled" ]; then
+        driver_verdict FAIL "T3b apply(enabled) 后 is-enabled 应为 enabled,实得 $T3B_APPLIED"
+    elif [ "$T3B_AFTER" = "$T3B_BEFORE" ]; then
+        driver_verdict PASS "T3b enabled 维度回滚成立(回滚前后都是 $T3B_BEFORE)"
     else
-        driver_verdict PASS "T3b enabled 回滚成立(现状已不是 $T3B_AFTER —— #195 可能已修,顺手关掉它)"
+        driver_verdict FAIL "T3b enabled 维度回滚不掉(回滚前 $T3B_BEFORE → 回滚后 $T3B_AFTER):#195 回归"
     fi
 fi
 

@@ -10,7 +10,9 @@ package main
 //     `systemctl --user <verb> <unit>`。v1 生命周期动词**从不改单元文件**。
 //   - Rollback:重解析重守卫(含快照 unit_file)→ 仅当快照内容与当前实况有漂移时
 //     恢复文件(恢复写之后、逆动词之前必跑 daemon-reload, (f) 条款)→
-//     按 BeforeState.active_state 施加恢复性动词。
+//     按 BeforeState.enabled_state 恢复 enabled 维度 → 按 BeforeState.active_state
+//     恢复运行态。两个维度正交: `enabled`/`disabled` 只动 enabled 维度,
+//     `started`/`stopped`/`restarted` 只动运行态。
 //
 // desired_state 语义面:
 //   - v1 动词集 started|stopped|restarted|enabled|disabled(映射见 serviceSetVerbs);
@@ -22,6 +24,11 @@ package main
 // 逆动词的语义选择:若按 "active→stop, inactive→start" 映射,是把状态推向相反值,
 // 永远无法与 "ActiveState 必须被恢复" 的要求同时成立。故本实现采**恢复语义
 // active→start / inactive→stop / 其余不发动词**,与门控测试断言一致。
+//
+// enabled 维度同理: 回滚目标取 Propose 期 `is-enabled` 的观测值,恢复语义
+// enabled→enable / disabled→disable。旧实现只按 active_state 发逆动词 ——
+// `desired_state=enabled` 的 apply 建了 enable 符号链接,回滚却只发 stop,
+// 符号链接留在原地而事务仍报 rolled_back(假成功,见 #195)。
 
 import (
 	"bytes"
@@ -52,12 +59,22 @@ var serviceSetVerbs = map[string]string{
 	"disabled":  "disable",
 }
 
-// serviceSetInverseVerbs (e) 条款(恢复语义, 见文件头"语义选择"注释):
+// serviceSetInverseActiveVerbs (e) 条款(恢复语义, 见文件头"语义选择"注释):
 // 回滚动词把单元恢复到 BeforeState.active_state 观测到的值; 表外状态
 // (activating/deactivating/failed/空)不发动词 —— 单动词无法可靠复原中间态。
-var serviceSetInverseVerbs = map[string]string{
+var serviceSetInverseActiveVerbs = map[string]string{
 	"active":   "start",
 	"inactive": "stop",
+}
+
+// serviceSetInverseEnabledVerbs 是 enabled 维度的恢复表(与运行态维度正交):
+// enabled→enable / disabled→disable, 把单元恢复到 BeforeState.enabled_state。
+// 表外值(static/linked/masked/indirect/generated/transient/空)不发动词 ——
+// static 单元没有 [Install] 段, enable/disable 本身就不成立(实机实测
+// `systemctl --user disable` 对 static 单元虽返 rc=0,但那是提示而非动作)。
+var serviceSetInverseEnabledVerbs = map[string]string{
+	"enabled":  "enable",
+	"disabled": "disable",
 }
 
 // serviceSetArgs 是步骤 args 的线上形态(锁定的两键 schema, 未知键拒绝)。
@@ -67,11 +84,14 @@ type serviceSetArgs struct {
 }
 
 // serviceSetBefore (c) 条款快照: unit_file 恒在; file_content 单元缺失时整个
-// 键缺席(*string + omitempty, 与"存在但为空文件"可区分); active_state 恒在。
+// 键缺席(*string + omitempty, 与"存在但为空文件"可区分); active_state 恒在;
+// enabled_state 在 is-enabled 可观测时恒在, 观测不到则整键缺席(旧日志同样
+// 缺席 —— 回滚据此跳过该维度并把原因记进 OpResult, 不假装回滚过)。
 type serviceSetBefore struct {
-	UnitFile    string  `json:"unit_file"`
-	FileContent *string `json:"file_content,omitempty"`
-	ActiveState string  `json:"active_state"`
+	UnitFile     string  `json:"unit_file"`
+	FileContent  *string `json:"file_content,omitempty"`
+	ActiveState  string  `json:"active_state"`
+	EnabledState string  `json:"enabled_state,omitempty"`
 }
 
 // serviceSetAfter 提议的目标态视图(未知 desired_state 时 verb 键缺席)。
@@ -133,7 +153,17 @@ func (serviceSetAdapter) Propose(ctx context.Context, args json.RawMessage) (jso
 	if err != nil {
 		return nil, nil, err
 	}
-	before, err := json.Marshal(serviceSetBefore{UnitFile: target, FileContent: content, ActiveState: active})
+	// enabled 维度尽力快照(不阻断 Propose): `is-enabled` 无输出只在单元不存在
+	// / 没有 user manager 时发生 —— 那两种情况下 apply 的 enable/disable 同样
+	// 不可能成功, 所以这里不 fail-closed(与 package.set 的区别: 那里 apply 可能
+	// 成功而回滚不可用, 必须提前拒)。观测不到 → 键缺席 → Rollback 明确记跳过。
+	enabled, _ := observeUnitEnabledState(ctx, unit)
+	before, err := json.Marshal(serviceSetBefore{
+		UnitFile:     target,
+		FileContent:  content,
+		ActiveState:  active,
+		EnabledState: enabled,
+	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("序列化 before_state 失败: %w", err)
 	}
@@ -175,8 +205,9 @@ func (serviceSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 }
 
 // Rollback (e)(f): 三连重校验 + 快照 unit_file 守卫 → 漂移恢复(写后有 reload)
-// → 按 before.active_state 施加恢复动词。恢复写只在"快照有内容且当前不同/缺失"
-// 时发生; 快照无内容(提议时文件本就不存在)而当前存在 → 不删除非适配器所建文件。
+// → 按 before.enabled_state 恢复 enabled 维度 → 按 before.active_state 恢复运行态。
+// 恢复写只在"快照有内容且当前不同/缺失"时发生; 快照无内容(提议时文件本就不存在)
+// 而当前存在 → 不删除非适配器所建文件。
 func (serviceSetAdapter) Rollback(ctx context.Context, step tx.Step) tx.OpResult {
 	in, err := parseServiceSetArgs(step.Args)
 	if err != nil {
@@ -229,8 +260,29 @@ func (serviceSetAdapter) Rollback(ctx context.Context, step tx.Step) tx.OpResult
 			}
 		}
 	}
-	// 恢复性动词: 表外状态不发动词, 原因记入 OpResult.Stdout(尽力恢复语义)。
-	verb, ok := serviceSetInverseVerbs[before.ActiveState]
+	// enabled 维度恢复(与运行态正交): 目标取 Propose 期 is-enabled 的观测值。
+	// 这一段是 #195 的修复点 —— 旧实现只按 active_state 发逆动词, 于是
+	// `desired_state=enabled` 的 apply 建下的 enable 符号链接留在原地,
+	// 事务却照样报 rolled_back。
+	if ev, ok := serviceSetInverseEnabledVerbs[before.EnabledState]; ok {
+		er := systemctlUser(ctx, ev, unit)
+		agg.Stdout += fmt.Sprintf("[systemctl --user %s %s] rc=%d\n", ev, unit, er.Returncode)
+		if er.Stderr != "" {
+			agg.Stderr += er.Stderr + "\n"
+		}
+		if er.Returncode != 0 || er.Error != "" {
+			// 不在这里 return: 运行态是另一条正交的恢复动作, 仍应尽力执行;
+			// 两个维度的失败都要留在 OpResult 里(rc 非 0 即整步判失败)。
+			agg.Returncode = 1
+			agg.Error = fmt.Sprintf("恢复 enabled 维度失败(%s): %s", ev, firstNonEmpty(er.Error, er.Stderr))
+		}
+	} else {
+		// 表外值(含空串=未观测到/旧日志): 不发动词, 但必须把原因记下来 ——
+		// 静默跳过就是 #195 那句「报 rolled_back 实际没回滚」的翻版。
+		agg.Stdout += fmt.Sprintf("enabled_state=%q 无恢复动词映射, 跳过 enabled 维度(尽力恢复语义)\n", before.EnabledState)
+	}
+	// 恢复性动词(运行态维度): 表外状态不发动词, 原因记入 OpResult.Stdout(尽力恢复语义)。
+	verb, ok := serviceSetInverseActiveVerbs[before.ActiveState]
 	if !ok {
 		agg.Stdout += fmt.Sprintf("active_state=%q 无恢复动词映射, 跳过 systemctl 动作(尽力恢复语义)", before.ActiveState)
 		return agg
@@ -242,7 +294,12 @@ func (serviceSetAdapter) Rollback(ctx context.Context, step tx.Step) tx.OpResult
 	}
 	if vr.Returncode != 0 || vr.Error != "" {
 		agg.Returncode = 1
-		agg.Error = fmt.Sprintf("恢复动词 %s 失败: %s", verb, firstNonEmpty(vr.Error, vr.Stderr))
+		msg := fmt.Sprintf("恢复动词 %s 失败: %s", verb, firstNonEmpty(vr.Error, vr.Stderr))
+		if agg.Error != "" {
+			agg.Error += "; " + msg
+		} else {
+			agg.Error = msg
+		}
 	}
 	return agg
 }

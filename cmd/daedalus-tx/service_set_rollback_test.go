@@ -5,10 +5,13 @@ package main
 // restoreUnitFile 恢复内核直测。夹具机制见 service_set_test.go 头注释。
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Daedalusys/daedalus-core/internal/tx"
 )
 
 // TestServiceSet_Rollback_InverseVerbFromPriorState 钉"恢复到事务前的 ActiveState":
@@ -27,7 +30,7 @@ func TestServiceSet_Rollback_InverseVerbFromPriorState(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.prior, func(t *testing.T) {
 			dir := t.TempDir()
-			capture := fakeSystemctlUser(t, "ActiveState="+tc.prior, 0)
+			capture := fakeSystemctlUserStates(t, "ActiveState="+tc.prior, "static", 0)
 			ctx := unitDirCtx(dir)
 			step := stepFor(t, ctx, `{"name":"demo","desired_state":"restarted"}`)
 
@@ -36,10 +39,10 @@ func TestServiceSet_Rollback_InverseVerbFromPriorState(t *testing.T) {
 				t.Fatalf("rollback 结果异常: %+v", res)
 			}
 			got := captureCalls(t, capture)
-			// 首行是 propose 期的 show; 其后是回滚期的动词(若有)。
+			// 前两行是 propose 期的观测(show + is-enabled); 其后是回滚期的动词(若有)。
 			rest := got
-			if len(rest) > 0 {
-				rest = rest[1:]
+			if len(rest) >= 2 {
+				rest = rest[2:]
 			}
 			if strings.Join(rest, "\n") != strings.Join(tc.wants, "\n") {
 				t.Errorf("回滚 argv = %v, want %v", rest, tc.wants)
@@ -62,7 +65,7 @@ func TestServiceSet_Rollback_DriftRestoreReloadBeforeVerb(t *testing.T) {
 	if err := os.WriteFile(unitPath, []byte(orig), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	capture := fakeSystemctlUser(t, "ActiveState=active", 0)
+	capture := fakeSystemctlUserStates(t, "ActiveState=active", "static", 0)
 	ctx := unitDirCtx(dir)
 	step := stepFor(t, ctx, `{"name":"demo","desired_state":"stopped"}`)
 
@@ -78,6 +81,7 @@ func TestServiceSet_Rollback_DriftRestoreReloadBeforeVerb(t *testing.T) {
 	got := captureCalls(t, capture)
 	want := []string{
 		"--user show demo.service --property=ActiveState",
+		"--user is-enabled demo.service",
 		"--user daemon-reload",
 		"--user start demo.service", // before=active → 恢复 start
 	}
@@ -102,7 +106,7 @@ func TestServiceSet_Rollback_NoDriftNoWrite(t *testing.T) {
 	if err := os.WriteFile(unitPath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	capture := fakeSystemctlUser(t, "ActiveState=inactive", 0)
+	capture := fakeSystemctlUserStates(t, "ActiveState=inactive", "static", 0)
 	ctx := unitDirCtx(dir)
 	step := stepFor(t, ctx, `{"name":"demo","desired_state":"started"}`)
 
@@ -111,7 +115,11 @@ func TestServiceSet_Rollback_NoDriftNoWrite(t *testing.T) {
 		t.Fatalf("回滚异常: %+v", res)
 	}
 	got := captureCalls(t, capture)
-	want := []string{"--user show demo.service --property=ActiveState", "--user stop demo.service"}
+	want := []string{
+		"--user show demo.service --property=ActiveState",
+		"--user is-enabled demo.service",
+		"--user stop demo.service",
+	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("无漂移时不应有 daemon-reload: %v", got)
 	}
@@ -141,5 +149,106 @@ func TestRestoreUnitFile_Internal(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(path); string(data) != "BBB\n" {
 		t.Errorf("覆写内容错误: %q", data)
+	}
+}
+
+// TestServiceSet_Rollback_EnabledDimensionRestored 钉 #195 的修复点:
+// desired_state=enabled/disabled 只动 enabled 维度(enable/disable 的符号链接),
+// 回滚必须按 before.enabled_state 发恢复动词。旧实现只看 active_state ——
+// 单元原本 inactive 时回滚发的是 stop(空转), enable 符号链接留在原地,
+// 而事务照样报 rolled_back: 自称回滚、实际没回滚。
+func TestServiceSet_Rollback_EnabledDimensionRestored(t *testing.T) {
+	cases := []struct {
+		name       string
+		snapshot   string // Propose 期 is-enabled 的观测值
+		desired    string
+		wantVerbs  []string // 紧跟在 [show, is-enabled] 之后的 argv
+		wantStdout []string
+	}{
+		{
+			name:     "disabled → enabled,回滚必须 disable",
+			snapshot: "disabled", desired: "enabled",
+			wantVerbs:  []string{"--user disable demo.service", "--user stop demo.service"},
+			wantStdout: []string{"[systemctl --user disable demo.service] rc=0"},
+		},
+		{
+			name:     "enabled → disabled,回滚必须 enable",
+			snapshot: "enabled", desired: "disabled",
+			wantVerbs:  []string{"--user enable demo.service", "--user stop demo.service"},
+			wantStdout: []string{"[systemctl --user enable demo.service] rc=0"},
+		},
+		{
+			name:     "static(表外)不发 enabled 动词,但必须记原因",
+			snapshot: "static", desired: "enabled",
+			wantVerbs:  []string{"--user stop demo.service"},
+			wantStdout: []string{`enabled_state="static" 无恢复动词映射`},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "demo.service"),
+				[]byte("[Unit]\nDescription=demo\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			capture := fakeSystemctlUserStates(t, "ActiveState=inactive", tc.snapshot, 0)
+			ctx := unitDirCtx(dir)
+			step := stepFor(t, ctx, `{"name":"demo","desired_state":"`+tc.desired+`"}`)
+
+			res := serviceSetAdapter{}.Rollback(ctx, step)
+			if res.Returncode != 0 || res.Error != "" {
+				t.Fatalf("rollback 结果异常: %+v", res)
+			}
+			got := captureCalls(t, capture)
+			if len(got) < 2 {
+				t.Fatalf("抓到的 argv 太少: %v", got)
+			}
+			if tail := got[2:]; strings.Join(tail, "|") != strings.Join(tc.wantVerbs, "|") {
+				t.Errorf("回滚 argv(去掉 propose 期观测) = %v, want %v", tail, tc.wantVerbs)
+			}
+			for _, want := range tc.wantStdout {
+				if !strings.Contains(res.Stdout, want) {
+					t.Errorf("OpResult.Stdout 缺 %q: %q", want, res.Stdout)
+				}
+			}
+		})
+	}
+}
+
+// TestServiceSet_Rollback_LegacyJournalWithoutEnabledState 钉向后兼容:
+// 本次修复之前写下的事务日志没有 enabled_state 键 —— 回滚不得凭空猜一个动词,
+// 但必须把「跳过该维度」写进 OpResult(静默跳过就是假成功的翻版)。
+func TestServiceSet_Rollback_LegacyJournalWithoutEnabledState(t *testing.T) {
+	dir := t.TempDir()
+	unitPath := filepath.Join(dir, "demo.service")
+	if err := os.WriteFile(unitPath, []byte("[Unit]\nDescription=demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	capture := fakeSystemctlUser(t, "", 0) // 回滚不观测: 只读快照
+	ctx := unitDirCtx(dir)
+	raw, err := json.Marshal(map[string]any{
+		"unit_file":    unitPath,
+		"active_state": "inactive",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := tx.Step{
+		Adapter:     "service.set",
+		Args:        json.RawMessage(`{"name":"demo","desired_state":"enabled"}`),
+		BeforeState: raw,
+	}
+
+	res := serviceSetAdapter{}.Rollback(ctx, step)
+	if res.Returncode != 0 || res.Error != "" {
+		t.Fatalf("旧日志回滚应尽力完成: %+v", res)
+	}
+	got := captureCalls(t, capture)
+	want := []string{"--user stop demo.service"} // 只有运行态维度, 无 enabled 动词
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("旧日志回滚 argv = %v, want %v(不得凭空发 enable/disable)", got, want)
+	}
+	if !strings.Contains(res.Stdout, `enabled_state="" 无恢复动词映射`) {
+		t.Errorf("跳过 enabled 维度必须记进 OpResult: %q", res.Stdout)
 	}
 }

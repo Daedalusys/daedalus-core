@@ -22,13 +22,27 @@ import (
 // fakeSystemctlUser 安装假 systemctl 并注入包级变量(测试结束自动还原)。
 // showOut 是 `show` 子命令的固定回显(如 "ActiveState=inactive");
 // exitCode 是恒定的退出码(0=全成功; 非零用于观测失败路径)。返回 capture 路径。
+// `is-enabled` 不回显 —— 等价于「enabled 维度观测不到」(缺失单元 / 无 user manager)。
 func fakeSystemctlUser(t *testing.T, showOut string, exitCode int) string {
+	t.Helper()
+	return fakeSystemctlUserStates(t, showOut, "", exitCode)
+}
+
+// fakeSystemctlUserStates 是带 enabled 维度回显的变体: enabledOut 非空时
+// `is-enabled` 回显该值(实机取值 enabled|disabled|static|masked|…)。
+// 空串 = 不回显 → is-enabled 观测失败路径。
+func fakeSystemctlUserStates(t *testing.T, showOut, enabledOut string, exitCode int) string {
 	t.Helper()
 	dir := t.TempDir()
 	capture := filepath.Join(dir, "argv.txt")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + strconv.Quote(capture) +
-		"\nif [ \"$2\" = show ]; then printf '%s\\n' " + strconv.Quote(showOut) + "; fi\nexit " +
-		strconv.Itoa(exitCode) + "\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + strconv.Quote(capture) + "\n"
+	if showOut != "" {
+		script += "if [ \"$2\" = show ]; then printf '%s\\n' " + strconv.Quote(showOut) + "; fi\n"
+	}
+	if enabledOut != "" {
+		script += "if [ \"$2\" = is-enabled ]; then printf '%s\\n' " + strconv.Quote(enabledOut) + "; fi\n"
+	}
+	script += "exit " + strconv.Itoa(exitCode) + "\n"
 	path := filepath.Join(dir, "systemctl")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("写入假 systemctl 失败: %v", err)
@@ -97,7 +111,7 @@ func TestServiceSet_Propose_SnapshotAndArgv(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "demo.service"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	capture := fakeSystemctlUser(t, "ActiveState=inactive", 0)
+	capture := fakeSystemctlUserStates(t, "ActiveState=inactive", "disabled", 0)
 
 	before, after := mustPropose(t, unitDirCtx(dir), `{"name":"demo","desired_state":"started"}`)
 
@@ -110,12 +124,18 @@ func TestServiceSet_Propose_SnapshotAndArgv(t *testing.T) {
 	if before.ActiveState != "inactive" {
 		t.Errorf("active_state = %q, want inactive", before.ActiveState)
 	}
+	if before.EnabledState != "disabled" {
+		t.Errorf("enabled_state = %q, want disabled(回滚目标值必须进快照)", before.EnabledState)
+	}
 	if after.Unit != "demo.service" || after.DesiredState != "started" || after.Verb != "start" {
 		t.Errorf("after_state 不符: %+v", after)
 	}
-	// argv 逐字锁定: 仅一次 show, 形态 = systemctl --user show <unit>.service --property=ActiveState。
+	// argv 逐字锁定: show(运行态) → is-enabled(enabled 维度), 两个维度都必须进快照。
 	got := captureCalls(t, capture)
-	want := []string{"--user show demo.service --property=ActiveState"}
+	want := []string{
+		"--user show demo.service --property=ActiveState",
+		"--user is-enabled demo.service",
+	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("capture argv =\n%v\nwant\n%v", got, want)
 	}
@@ -137,6 +157,9 @@ func TestServiceSet_Propose_AbsentFileContentOmitted(t *testing.T) {
 	}
 	if _, ok := b["file_content"]; ok {
 		t.Errorf("缺失单元不应带 file_content 键: %s", raw)
+	}
+	if _, ok := b["enabled_state"]; ok {
+		t.Errorf("缺失单元的 enabled 维度观测不到, 不应带 enabled_state 键: %s", raw)
 	}
 	// .service 隐式后缀: name 已带后缀也不得重复追加(序列化面直查原文)。
 	if strings.Contains(string(raw), "ghost.service.service") {
@@ -167,7 +190,7 @@ func TestServiceSet_Apply_VerbMap(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.desired, func(t *testing.T) {
 			dir := t.TempDir()
-			capture := fakeSystemctlUser(t, "ActiveState=inactive", 0)
+			capture := fakeSystemctlUserStates(t, "ActiveState=inactive", "disabled", 0)
 			ctx := unitDirCtx(dir)
 			args := `{"name":"demo","desired_state":"` + tc.desired + `"}`
 			step := stepFor(t, ctx, args)
@@ -178,8 +201,9 @@ func TestServiceSet_Apply_VerbMap(t *testing.T) {
 			}
 			got := captureCalls(t, capture)
 			wantLast := "--user " + tc.verb + " demo.service"
-			if len(got) != 2 || got[1] != wantLast {
-				t.Errorf("capture = %v, want [show, %q]", got, wantLast)
+			// 前两次是 propose 期的观测(show + is-enabled), 末次才是 apply 的动词。
+			if len(got) != 3 || got[2] != wantLast {
+				t.Errorf("capture = %v, want [show, is-enabled, %q]", got, wantLast)
 			}
 		})
 	}
