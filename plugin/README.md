@@ -91,9 +91,10 @@ schema 与校验的单一事实源: `daedalus-sdk/plugin/manifest.go`。
   拒 `/` 与 `..`,不携带路径语义;`"*"` 为全类通配)+ `desired_state`(取值词汇归各
   provider 领域,如 service 的 `active`/`inactive`,本层允许空、不枚举)。
   id/metadata 等其它维度未进入 v1 声明模式。
-- **kind 词表从哪查**:`objectmodel.AllKinds()` 共 7 类
-  (`service`/`package`/`container`/`capability`/`task`/`transaction`/`policy`);
-  **v1 仅 `service` 有 provider**,其余六类是保留枚举位。
+- **kind 词表从哪查**:`objectmodel.AllKinds()` 共 8 类
+  (`service`/`package`/`container`/`capability`/`task`/`transaction`/`policy`/`file`);
+  controller 运行时(`internal/controller/runtime/drift.go`)目前只为 `service`/`package`
+  提供 desired→observed 映射,其余为保留枚举位。
 - **新增资源种类的改动面**(三点漂移测试拒绝漏改任何一处):
   `daedalus-sdk/objectmodel/objectmodel.go` 加 Kind 常量并登记 `kindRegistry` →
   `daedalus-sdk/policy` 的 `Default()` → `policy.toml` 的 `[objectmodel].enabled_kinds`。
