@@ -459,10 +459,12 @@ if [ "$install_state" = "DONE" ]; then
 fi
 
 # ------------------------------------------------------------------- 判定汇总 --
+# 顺序很重要:BLOCKED_EXTERNAL 必须**先于**兜底的 LIVE_OK 判。
+# (2026-11-19 实跑踩过:早先把 `elif live_ok -eq 1 → LIVE_OK` 放在 BLOCKED_EXTERNAL
+#  之前,那一步把外因分支整个遮住 —— live 自证通过时永远判 LIVE_OK,装机因外部网络
+#  未完成也照样把出货腿判红。判定表由 tests/ci/iso-verdict-test.sh 钉住。)
 if [ "$live_ok" -eq 1 ] && [ "$installed_state" = "INSTALLED_LOGIN" ]; then
     verdict="INSTALLED_LOGIN"
-elif [ "$live_ok" -eq 1 ]; then
-    verdict="LIVE_OK"
 elif [ "$live_ok" -eq 0 ]; then
     verdict="LIVE_UNREACHABLE"
 elif [ "$install_state" = "BLOCKED_EXTERNAL" ]; then

@@ -354,6 +354,11 @@ jobs:
           # 行为上可见 —— 静态断言能通过而重试逻辑照样可以退化成"永远重试"或"把 fatal
           # 当 transient 重试"(用重试掩盖真缺陷)。
           bash tests/ci/iso-install-retry-test.sh
+          # 上面两条守住「装机脚本本身」;这条守住「验证腿的判定表」:2026-11-19 的
+          # 实际事故是判定块里 BLOCKED_EXTERNAL 分支被前面的兜底分支整个遮住 ——
+          # 外因照样把出货腿判红,而静态 grep「文件里有没有这个词」完全挡不住。
+          # 判定表只有真跑(抽块 + 喂输入 + 看判定与退出码)才钉得住。
+          bash tests/ci/iso-verdict-test.sh
 
       - name: Workflow hygiene gate (cross-repo credential invariants)
         # 四仓 workflow 的 persist-credentials / cache / SHA 钉版不变式集中在此守门:
