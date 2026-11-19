@@ -23,7 +23,10 @@
 #        理由:live 内核参数里没有 console=ttyS0,串口不可能有输出,SSH 是唯一稳定判据。
 #   段二 P2-2b(默认硬判据):live 环境里的 oneshot 单元对**空虚拟盘**执行 `bootc install to-disk`,
 #        装完重启;然后引导那块盘,等串口出现 `login:`,并断言目标盘有分区表。
-#        受阻(例如 live 环境拿不到 source 镜像)时如实记 BLOCKED 并以非 0 退出 ——
+#        受阻(例如 live 环境拿不到 source 镜像)时如实记 BLOCKED —— 但**外因**(拉 source
+#        镜像时的网络问题,装机尝试全判 transient)记 BLOCKED_EXTERNAL 并以 0 退出:
+#        外部 registry 的一次 TCP 抖断不该让整条出货腿红(见 #138),且这类 ISO 不会被
+#        晋级到 Release(只有 INSTALLED_LOGIN 才发,见 #191)。逻辑失败仍以非 0 退出 ——
 #        判据不允许「跑到就算过」;只有本地排查 P2-2a 时才用 VERIFY_REQUIRE_INSTALL=0 临时放宽。
 #
 # 为什么不走 kickstart(这是 Task 1 实测推翻计划前提后的结论,别再走回头路)
@@ -393,6 +396,17 @@ if [ "$live_ok" -eq 1 ] && [ "$install_possible" -eq 1 ]; then
         # 每次尝试一行摘要(attempt/src/rc/class):让"外因不可得"与"装机逻辑失败"在
         # artifact 里就能分开,不用人去翻上面那一大坨日志。
         live_ssh 'cat /run/daedalus-iso-install-summary.txt 2>/dev/null' > "$WORK/install-summary.txt" 2>/dev/null || true
+        # 外因 vs 逻辑:摘要里每一行都带 class=transient|fatal(见 iso-autoinstall.sh)。
+        # 全是 transient → 这次失败是**外部网络**(拉 source 镜像时 TCP/TLS 抖了),
+        # 不是装机逻辑坏了;出现 fatal 才是逻辑问题(ref 写错 / 盘选错 / 脚本崩)。
+        # 2026-11-19 实测:guest 经宿主代理拉 ghcr.io 时被 connection reset,两次尝试
+        # 都判 transient —— 这类失败不该让整条出货腿红(同 #138 的抱怨)。
+        if [ -s "$WORK/install-summary.txt" ] \
+           && grep -q 'attempt=' "$WORK/install-summary.txt" \
+           && ! grep -q 'class=fatal' "$WORK/install-summary.txt"; then
+            install_state="BLOCKED_EXTERNAL"
+            warn "装机失败全部判为 transient(外部网络)—— 记 BLOCKED_EXTERNAL,不判红"
+        fi
         live_ssh "systemctl status daedalus-iso-autoinstall --no-pager 2>&1" > "$WORK/install-unit-status.txt" 2>/dev/null
         live_ssh "lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS" > "$WORK/live-lsblk-after-install.txt" 2>/dev/null
         # 失败现场:谁占着目标盘。下一次红时,这份证据直接给出答案。
@@ -451,7 +465,16 @@ elif [ "$live_ok" -eq 1 ]; then
     verdict="LIVE_OK"
 elif [ "$live_ok" -eq 0 ]; then
     verdict="LIVE_UNREACHABLE"
+elif [ "$install_state" = "BLOCKED_EXTERNAL" ]; then
+    # live 自证通过、ISO 本身没问题,只是装机时拉不到 source 镜像(外部)。
+    verdict="BLOCKED_EXTERNAL"
+else
+    verdict="LIVE_OK"
 fi
+
+# 判定落盘:出货 workflow 的「ISO 晋级到 Release」那一步读它 —— 只有
+# INSTALLED_LOGIN 才允许把 ISO 当用户资产发出去(没验过装机的 ISO 不该被当安装器发布,见 #191)。
+printf '%s\n' "$verdict" > "$WORK/iso-verdict.txt"
 
 say "Summary"
 cat <<EOF
@@ -467,10 +490,18 @@ cat <<EOF
    工作目录     : $WORK
    SSH 公钥指纹 : $KEY_FP
 
-   已知边界:段二(P2-2b)是默认硬判据 —— live 环境拿不到 source 镜像 / 装完起不来就是失败(非 0 退出),
-   实情会写进上面的「P2-2b 装机」一行。只在本地排查段一时用 VERIFY_REQUIRE_INSTALL=0 临时放宽。
+   已知边界:段二(P2-2b)是默认硬判据 —— 装完起不来就是失败(非 0 退出),实情会写进上面的
+   「P2-2b 装机」一行。**外因例外**:装机尝试全部判 transient(拉 source 镜像时的外部网络问题)
+   且 live 自证通过时,判定为 BLOCKED_EXTERNAL 并以 0 退出 —— 外部 registry 的一次 TCP 抖断
+   不该让整条出货腿红,但这类 ISO 也不会被晋级到 Release(只有 INSTALLED_LOGIN 才发)。
+   只在本地排查段一时用 VERIFY_REQUIRE_INSTALL=0 临时放宽。
 EOF
 
+if [ "$verdict" = "BLOCKED_EXTERNAL" ]; then
+    warn "判定 BLOCKED_EXTERNAL:live 自证通过,但装机因外部网络未完成 —— 本腿不判红"
+    warn "证据: $WORK/install-attempt.log 与 $WORK/install-summary.txt(全量尝试)"
+    exit 0
+fi
 if [ "$REQUIRE_INSTALL" = "1" ] && [ "$verdict" != "INSTALLED_LOGIN" ]; then
     bad "VERIFY_REQUIRE_INSTALL=1:要求装完能引导到 login:,实际判定 $verdict"
     exit 1
