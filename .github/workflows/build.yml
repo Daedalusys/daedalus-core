@@ -539,6 +539,19 @@ jobs:
         working-directory: daedalus-core
         env:
           DAEDALUS_FETCH_ZIP_DIR: /tmp/plugins-release
+          # ⚠ 公开 alpha 试用账号(故意写死,不是 secret):出货档(main / tag /
+          # dispatch+PUSH)注入 daedalus/daedalus,让拿到 qcow2/ISO 的人开箱能登录
+          # 看到产品,而不是停在 login: 提示符前什么也做不了。
+          #
+          # 只适合本机 / 内网 / 用完即弃的玩具 VM。**绝不要把这份镜像暴露到公网**:
+          # 该账号有 NOPASSWD sudo,且 78-dev-user.sh 会把 root 口令设成同一个值。
+          # 这个账号是产品验收入口,不是远程登录方案。
+          #
+          # 怎么改:改下面两个字面量并重跑出货构建(旧 Release 的产物不会变);
+          # 不想带账号:把两行都置空 —— feat/* 与纯构建(dispatch+PUSH=false)
+          # 本来就不注入,免得未合并分支的 :<sha> 镜像也带 sudo 账号。
+          DAEDALUS_DEV_USER: ${{ ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.PUSH)) && 'daedalus' || '' }}
+          DAEDALUS_DEV_PASS: ${{ ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.PUSH)) && 'daedalus' || '' }}
         run: just build
 
       - name: Verify plugin inventory in image
@@ -1175,8 +1188,8 @@ jobs:
           persist-credentials: false
           path: daedalus-core
 
-      - name: "Guest probes: systemd sandbox / audit inode / destructive / fs guard / readonly / inventory / copilot / bootc install+upgrade / blueprint-ui / host bootc"
-        # 十个探针串行跑:共享一个 VERIFY_WORK 目录 —— 首个探针派生一次性 verify
+      - name: "Guest probes: systemd sandbox / audit inode / destructive / fs guard / readonly / inventory / copilot / bootc install+upgrade / blueprint-ui / host bootc / first run"
+        # 十一个探针串行跑:共享一个 VERIFY_WORK 目录 —— 首个探针派生一次性 verify
         # 镜像与 qcow2,其余复用(driver_init 幂等),否则每条都要重出 ~7GB 镜像。
         # 任一探针非 0 即 job 红(含 fs 写守卫:它已是判据任务)。
         shell: bash
@@ -1204,6 +1217,7 @@ jobs:
             probe-bootc-install-upgrade \
             probe-blueprint-ui \
             probe-host-bootc \
+            probe-first-run \
           ; do
             echo "########## $p ##########"
             # sudo 会清环境变量,VERIFY_* 全都要显式透传
