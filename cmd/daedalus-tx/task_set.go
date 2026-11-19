@@ -119,7 +119,7 @@ func (taskSetAdapter) Propose(ctx context.Context, args json.RawMessage) (json.R
 		// unit 不存在失败;absent 无副作用但 Propose 需要可逆快照才能生成回滚计划。
 		return nil, nil, fmt.Errorf(taskFileMissingMsg, target)
 	}
-	enabled, err := observeTimerEnabledState(ctx, timer)
+	enabled, err := observeUnitEnabledState(ctx, timer)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -178,7 +178,7 @@ func (taskSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 		// 复合流程:observe → 必要时 disable → rm → daemon-reload。
 		// 任一步失败即整体失败,**不**继续 rm。
 		var agg tx.OpResult
-		currentEnabled, err := observeTimerEnabledState(ctx, timer)
+		currentEnabled, err := observeUnitEnabledState(ctx, timer)
 		if err != nil {
 			agg.Returncode = 1
 			agg.Error = fmt.Sprintf("absent 前置观测失败: %v", err)

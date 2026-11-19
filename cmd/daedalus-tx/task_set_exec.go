@@ -26,11 +26,13 @@ func normalizeTimerName(name string) (string, error) {
 	return name + ".timer", nil
 }
 
-// observeTimerEnabledState argv 直发 `systemctl --user is-enabled <unit>`, 解析首行输出。
+// observeUnitEnabledState argv 直发 `systemctl --user is-enabled <unit>`, 解析首行输出。
+// service.set 与 task.set 共用: 两个适配器的 enabled 维度都靠它取回滚目标值。
 //
-// rc **不是**判据:`is-enabled` 对 disabled/masked 等合法态返回 rc=1 且 stdout
-// 有单行值。只有拿不到 stdout(unit 不存在 / 进程无法启动 / 超时)才算观测失败。
-func observeTimerEnabledState(ctx context.Context, unit string) (string, error) {
+// rc **不是**判据:`is-enabled` 对 disabled(实机实测 rc=1) / masked 等合法态
+// 返回非 0 且 stdout 有单行值。只有拿不到 stdout(unit 不存在 / 进程无法启动 /
+// 超时)才算观测失败。
+func observeUnitEnabledState(ctx context.Context, unit string) (string, error) {
 	res := systemctlUser(ctx, "is-enabled", unit)
 	s := strings.TrimSpace(res.Stdout)
 	if s == "" {

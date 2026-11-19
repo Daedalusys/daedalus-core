@@ -49,10 +49,12 @@ func TestServiceSet_CLI_RoundtripApplyRollback(t *testing.T) {
 	}
 	// 双链验证必须绿。
 	mustVerify(t, logPath)
-	// argv 全序: show(propose) → start(apply) → stop(rollback, prior=inactive→stop)。
-	// 无文件漂移 → 无恢复写 → 无 daemon-reload。
+	// argv 全序: show + is-enabled(propose 的两个维度观测)→ start(apply)
+	// → stop(rollback, prior=inactive→stop)。无文件漂移 → 无恢复写 → 无 daemon-reload。
+	// is-enabled 不回显(夹具缺省)→ enabled 维度未观测到 → 回滚不凭空发动词。
 	want := []string{
 		"--user show demo.service --property=ActiveState",
+		"--user is-enabled demo.service",
 		"--user start demo.service",
 		"--user stop demo.service",
 	}

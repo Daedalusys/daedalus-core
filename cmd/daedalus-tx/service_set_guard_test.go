@@ -129,7 +129,7 @@ func TestServiceSet_Guard_AllowedUserRoots(t *testing.T) {
 	if want := filepath.Join(guarded, "demo.service"); b.UnitFile != want {
 		t.Errorf("unit_file = %q, want %q", b.UnitFile, want)
 	}
-	if got := captureCalls(t, capture); len(got) != 1 {
-		t.Errorf("应恰一次 show: %v", got)
+	if got := captureCalls(t, capture); len(got) != 2 {
+		t.Errorf("propose 应恰两次观测(show + is-enabled): %v", got)
 	}
 }
