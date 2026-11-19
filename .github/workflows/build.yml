@@ -808,7 +808,7 @@ jobs:
           staged="$stagedir/$name"
           rm -f "$staged"
           ln "$qcow2" "$staged" 2>/dev/null || cp "$qcow2" "$staged"
-          trap 'rm -f "$staged"' EXIT
+          trap 'rm -f "$staged" "$stagedir/SHA256SUMS"' EXIT
           # --target 把 tag 钉在本 run 的 commit 上:不给它,gh 会把新 tag 建在默认
           # 分支当时的头上,于是"货"与 tag 未必对得上。
           # Release 已存在时必须确认它指向的就是本 run 的 commit —— 绝不在"指向
@@ -831,9 +831,20 @@ jobs:
               || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
               || { echo "ERROR: 创建 Release $tag 失败" >&2; exit 1; }
           fi
+          # 校验和随资产同源产出:从**即将上传的那一份字节**现算,不事后补、不手工传。
+          # 用户校验的是「我下的东西是不是这个 Release 里的东西」;加速器/镜像站
+          # 只是第三方传输通道,校验和对得上才作数(#196 实测:直连 GitHub 约
+          # 0.1 MB/s,加速站 1.3–1.9 MB/s 且字节一致 —— 前提是有校验和)。
+          # 先取回已有的 SHA256SUMS 再追加本腿这一行:一份文件描述本次发布的全部
+          # 资产,ISO 腿若也晋级,两边各加一行而不是互相覆盖。
+          sums="$stagedir/SHA256SUMS"
+          gh release download "$tag" --pattern SHA256SUMS --dir "$stagedir" \
+              --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || rm -f "$sums"
+          ( cd "$stagedir" && sha256sum "$name" >> SHA256SUMS )
           # --clobber:同一 ref 重跑 workflow 时覆盖同名资产,而不是报 already exists 变红
-          gh release upload "$tag" "$staged" --clobber --repo "$GITHUB_REPOSITORY"
-          echo "已晋级 Release 资产: $name"
+          gh release upload "$tag" "$staged" "$sums" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "已晋级 Release 资产: $name + SHA256SUMS"
+          cat "$sums"
 
   # 真机引导门禁:qcow2 在真 KVM 上起起来,串口必须出现 login 提示符。
   # 此前 qcow2 只产出不引导——「镜像能不能起来」这件事从未被任何 CI 判过。
@@ -1147,7 +1158,7 @@ jobs:
           staged="$stagedir/$name"
           rm -f "$staged"
           ln "$iso" "$staged" 2>/dev/null || cp "$iso" "$staged"
-          trap 'rm -f "$staged"' EXIT
+          trap 'rm -f "$staged" "$stagedir/SHA256SUMS"' EXIT
           # Release 已存在时必须确认它指向的就是本 run 的 commit(理由见 qcow2 那条腿)。
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha || true)"
@@ -1165,9 +1176,15 @@ jobs:
               || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
               || { echo "ERROR: 创建 Release $tag 失败" >&2; exit 1; }
           fi
+          # 校验和与 qcow2 腿同一套规则(追加而非覆盖):ISO 若真的晋级,
+          # 它和 qcow2 各占 SHA256SUMS 的一行。
+          sums="$stagedir/SHA256SUMS"
+          gh release download "$tag" --pattern SHA256SUMS --dir "$stagedir" \
+              --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || rm -f "$sums"
+          ( cd "$stagedir" && sha256sum "$name" >> SHA256SUMS )
           # --clobber:同一 ref 重跑 workflow 时覆盖同名资产,而不是报 already exists 变红
-          gh release upload "$tag" "$staged" --clobber --repo "$GITHUB_REPOSITORY"
-          echo "已晋级 Release 资产: $name"
+          gh release upload "$tag" "$staged" "$sums" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "已晋级 Release 资产: $name + SHA256SUMS"
 
       - name: Prune stale iso-verify work dirs
         # 同 deploy-verify-kvm 的理由:runner 持久化,每个 run 在盘上留 ~2.2GB(ISO 与派生层都在里面)。
