@@ -1,0 +1,63 @@
+[1;32m   OK 复用已构建产物(qcow2 与被测镜像指纹一致: 1769ca31f90d4cdd4929765b382a5d117e1d2e7c51eca89fe51c6d70669e5c40)[0m
+   qemu pid=974249,串口 → /home/udefine-dev/daedalus-try/serial-console.log
+[1;32m   OK SSH 可达(verify@127.0.0.1:2223)[0m
+
+[1;36m== K0 · 把 key 与 helper 送进 guest(key 是文件,0600;不进命令行) ==[0m
+      -rw-------. 1 root root  54 Nov 19 11:14 /root/.llmkey
+      -rwxr-xr-x. 1 root root 368 Nov 19 11:14 /root/llmrun
+[1;32m   OK key 已就位(内容不回显)[0m
+
+[1;36m== K1 · guest 到网关的连通性 ==[0m
+      http=404 ip=10.66.0.6
+
+[1;36m== A11-1 · --dry-run 翻译(有 key) ==[0m
+      note: host is not the process parent; the above is only the constructed start command; systemd executes it per ExecStart
+      [dry-run] Proposed command (not run): cat /etc/os-release
+        (explanation: Displays the operating system name and version information from /etc/os-release.)
+      RC=0
+PASS  A11-1 --dry-run 经真 provider 产出翻译(rc=0)
+
+[1;36m== A11-2 · watchdog(rc=124 + 无残留进程) ==[0m
+      note: host is not the process parent; the above is only the constructed start command; systemd executes it per ExecStart
+      → ping -c 5 -i 2 127.0.0.1
+        Pings the local loopback address five times with a two-second interval between each packet.
+      Timeout: command execution exceeded 1sRC=124
+      残留 ping 进程数: 0
+PASS  A11-2 watchdog rc=124 且无残留 ping 进程
+
+[1;36m== A11-4 · 真 provider 执行 + 审计链 ==[0m
+      note: host is not the process parent; the above is only the constructed start command; systemd executes it per ExecStart
+      → cat /etc/os-release
+        Displays the operating system name and version details.
+      NAME="AlmaLinux Kitten"
+      VERSION="10 (Lion Cub)"
+      RELEASE_TYPE=stable
+      ID="almalinux"
+      ID_LIKE="rhel centos fedora"
+      VERSION_ID="10"
+      PLATFORM_ID="platform:el10"
+      PRETTY_NAME="AlmaLinux Kitten 10 (Lion Cub)"
+      ANSI_COLOR="0;34"
+      LOGO="fedora-logo-icon"
+      CPE_NAME="cpe:/o:almalinux:almalinux:10::baseos"
+      HOME_URL="https://almalinux.org/"
+      DOCUMENTATION_URL="https://wiki.almalinux.org/"
+      VENDOR_NAME="AlmaLinux"
+      VENDOR_URL="https://almalinux.org/"
+      BUG_REPORT_URL="https://bugs.almalinux.org/"
+      
+      ALMALINUX_MANTISBT_PROJECT="AlmaLinux-10"
+      ALMALINUX_MANTISBT_PROJECT_VERSION="10"
+      REDHAT_SUPPORT_PRODUCT="AlmaLinux"
+      REDHAT_SUPPORT_PRODUCT_VERSION="10"
+      
+      VARIANT=headless
+      VARIANT_ID="daedalus-os"
+      RC=0
+      {"args": {"query": "show os version", "risk_level": "safe", "round": 0}, "entry_hash": "3230a02a3de19d9344a94248301baf6c4f970f9350b1b8178fc4570f552a603b", "identity": "daedalus-copilot", "outcome": "success", "policy_version": "1.0", "prev_hash": "a0b9df8a3b1ccb79219276092efaf8f148efde63ebdbff92773eb59c4098b22f", "timestamp": "2026-11-19T11:15:02.946252+00:00", "tool": "copilot_translate"}
+      {"args": {"args": ["/etc/os-release"], "auto": true, "command": "cat", "risk_level": "safe"}, "entry_hash": "2214fb04a9d15353ea6cfcece40afd757333a67cd298ae44a7873abcb62b7813", "identity": "daedalus-copilot", "outcome": "success", "policy_version": "1.0", "prev_hash": "3230a02a3de19d9344a94248301baf6c4f970f9350b1b8178fc4570f552a603b", "timestamp": "2026-11-19T11:15:02.948250+00:00", "tool": "copilot_confirm"}
+      {"args": {"allowed": true, "args": ["/etc/os-release"], "command": "cat", "returncode": 0}, "entry_hash": "cc45ffc1d829d775118d18180db72cae7fff6cec9ae7982a0b210f8aaa4f86e3", "identity": "daedalus-shell", "outcome": "success", "policy_version": "1.0", "prev_hash": "2214fb04a9d15353ea6cfcece40afd757333a67cd298ae44a7873abcb62b7813", "timestamp": "2026-11-19T11:15:02.955241+00:00", "tool": "shell_exec"}
+      verified 11 entries; hash chain intact
+PASS  A11-4 真 provider 返回且审计链 intact
+
+判定: PASS

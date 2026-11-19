@@ -1,0 +1,81 @@
+[1;32m   OK 复用已构建产物(qcow2 与被测镜像指纹一致: 1769ca31f90d4cdd4929765b382a5d117e1d2e7c51eca89fe51c6d70669e5c40)[0m
+
+[1;36m== T0 · 发布产物 ghcr.io/daedalusys/daedalus-os:78ee0c39a2dbef736bcbbcbdefc661318f2d4c5b 里有没有可登录账号(宿主侧,进 guest 之前) ==[0m
+      非系统账号: （无）
+      root 口令字段: root:*::0:99999:7:::
+      sshd: -rw-------. 1 root root 3674 Jan  1  1970 /etc/ssh/sshd_config enabled 
+NOTE  T0 发布镜像无任何可登录账号(root 口令字段见上)→ 产物开起来只有 login: 提示符,人无法进入
+   qemu pid=952030,串口 → /home/udefine-dev/daedalus-try/serial-console.log
+[1;32m   OK SSH 可达(verify@127.0.0.1:2223)[0m
+
+[1;36m== T1 · 这台机器是谁 ==[0m
+      NAME="AlmaLinux Kitten"
+      VERSION="10 (Lion Cub)"
+      RELEASE_TYPE=stable
+      ID="almalinux"
+      ID_LIKE="rhel centos fedora"
+      VERSION_ID="10"
+      PLATFORM_ID="platform:el10"
+      PRETTY_NAME="AlmaLinux Kitten 10 (Lion Cub)"
+      ANSI_COLOR="0;34"
+      LOGO="fedora-logo-icon"
+      CPE_NAME="cpe:/o:almalinux:almalinux:10::baseos"
+      HOME_URL="https://almalinux.org/"
+      DOCUMENTATION_URL="https://wiki.almalinux.org/"
+      VENDOR_NAME="AlmaLinux"
+      VENDOR_URL="https://almalinux.org/"
+      BUG_REPORT_URL="https://bugs.almalinux.org/"
+      
+      ALMALINUX_MANTISBT_PROJECT="AlmaLinux-10"
+      ALMALINUX_MANTISBT_PROJECT_VERSION="10"
+      REDHAT_SUPPORT_PRODUCT="AlmaLinux"
+      REDHAT_SUPPORT_PRODUCT_VERSION="10"
+      
+      VARIANT=headless
+      VARIANT_ID="daedalus-os"
+      bootc: {"apiVersion":"org.containers.bootc/v1","kind":"BootcHost","metadata":{"name":"host"},"spec":{"bootOrder":"default","image":{"image":"localhost/daedalus-verify:base","transport":"registry"}},"status":
+PASS  T1 系统身份可读(kernel=6.12.0-273.el10.x86_64,bootc 有 booted 部署)
+
+[1;36m== T2 · 能力面:daedalus-host list(根口径) ==[0m
+      ID                  NAME                                                             VERSION  TYPE        RUNTIME  I18N          STATUS
+      daedalus.blueprint  Daedalus Blueprint                                               0.1.0    capability  native   -             ok
+      daedalus.copilot    Daedalus Copilot                                                 1.0.0    copilot     deno     en_US, zh_CN  ok
+      daedalus.diskclean  Daedalus Disk Cleanup (Cache / Journal / Coredump / Old Kernel)  0.1.0    capability  native   en_US, zh_CN  ok
+      daedalus.dupe       Daedalus Large & Duplicate File Scanner                          0.1.0    capability  native   -             ok
+      daedalus.fs         Daedalus Filesystem Access                                       0.1.0    capability  native   -             ok
+      daedalus.organize   Daedalus File Organizer (By Type / Date / Size / Extension)      0.1.0    capability  native   en_US, zh_CN  ok
+      daedalus.osstate    Daedalus OS State                                                0.1.0    capability  native   -             ok
+      daedalus.pkg        Daedalus Package Query                                           0.1.0    capability  native   -             ok
+      daedalus.proc       Daedalus Process Reconnaissance                                  0.1.0    capability  native   -             ok
+      daedalus.service    Daedalus Service Query                                           0.1.0    capability  native   -             ok
+      daedalus.shell      Daedalus Command Execution                                       0.1.0    capability  native   -             ok
+      daedalus.snapshot   Daedalus Snapshot Capability                                     0.1.0    capability  native   -             ok
+      daedalus.sysinfo    Daedalus System Information                                      0.1.0    capability  native   -             ok
+      daedalus.trace      Daedalus Audit Trace Viewer                                      0.1.0    capability  native   -             ok
+PASS  T2 14 个插件全部 ok(实测 ok=14 degraded=0)
+
+[1;36m== T2b · 镜像自带自检 daedalus-smoke ==[0m
+      toml : name=daedalus-smoke read_only=true
+      mcp  : tool=smoke_ping echo="pong: daedalus-smoke" (server github.com/Daedalusys/daedalus-core v0.1.3)
+      SMOKE OK
+      RC=0
+PASS  T2b daedalus-smoke 通过
+
+[1;36m== T3 · 事务闭环:真装一个包,再回滚掉 ==[0m
+[1;32m   OK tx_id=86fe896e9350e211[0m
+[1;32m   OK propose 通过: package.set zsh present[0m
+      {"error":"步骤 0(package.set) 失败: 步骤 0(package.set) returncode=1"}
+      daedalus-tx: 步骤 0(package.set) 失败: 步骤 0(package.set) returncode=1
+      rpm -q: package zsh is not installed
+      {"id":"86fe896e9350e211","created_at":"2026-11-19T09:57:14.346254691Z","status":"failed","steps":[{"index":0,"adapter":"package.set","args":{"name":"zsh","desired_state":"present"},"before_state":{"name":"zsh","installed":false},"after_state":{"name":"zsh","desired_state":"present","verb":"install"},"op_result":{"returncode":1,"stdout":"AlmaLinux Kitten 10 - CRB                        75 kB/s | 846 kB     00:11    \nDaedalus Aliyun BaseOS (AlmaLinux 10)           2.2 MB/s | 4.2 MB     00:01    \nDaedalus Aliyun AppStream (AlmaLinux 10)        2.3 MB/s | 2.1 MB     00:00    \nDaedalus Aliyun Extras (AlmaLinux 10)            28 kB/s |  13 kB     00:00    \nDaedalus Aliyun HighAvailability (AlmaLinux 10)  30 kB/s |  13 kB     00:00    \nDaedalus Aliyun CRB (AlmaLinux 10)              1.1 MB/s | 512 kB     00:00    \nDaedalus Aliyun EPEL 10                          10 MB/s | 7.3 MB     00:00    \nExtra Packages for Enterprise Linux 10 - x86_64 1.1 MB/s | 7.4 MB     00:06    \nDependencies resolved.\n================================================================================\n Package   Architecture Version              Repository                    Size\n================================================================================\nInstalling:\n zsh       x86_64       5.9-15.el10          daedalus-aliyun-baseos       3.3 M\n\nTransaction Summary\n================================================================================\nInstall  1 Package\n\nTotal download size: 3.3 M\nInstalled size: 7.9 M","stderr":"Traceback (most recent call last):\n  File \"/usr/bin/dnf\", line 62, in \u003cmodule\u003e\n    main.user_main(sys.argv[1:], exit_code=True)\n  File \"/usr/lib/python3.12/site-packages/dnf/cli/main.py\", line 222, in user_main\n    errcode = main(args)\n              ^^^^^^^^^^\n  File \"/usr/lib/python3.12/site-packages/dnf/cli/main.py\", line 70, in main\n    return _main(base, args, cli_class, option_parser_class)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/site-packages/dnf/cli/main.py\", line 109, in _main\n    return cli_run(cli, base)\n           ^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/site-packages/dnf/cli/main.py\", line 144, in cli_run\n    ret = resolving(cli, base)\n          ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/site-packages/dnf/cli/main.py\", line 197, in resolving\n    base.do_transaction(display=displays)\n  File \"/usr/lib/python3.12/site-packages/dnf/cli/cli.py\", line 235, in do_transaction\n    bootc_system = dnf.util._BootcSystem()\n                   ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.12/site-packages/dnf/util.py\", line 654, in __init__\n    import gi\nModuleNotFoundError: No module named 'gi'"}}],"rollback_plan":{}}
+      rpm -q(回滚后): package zsh is not installed
+RC=1
+FAIL  T3 zsh 的安装/回滚结果与期望不符(见上两行 rpm -q)
+
+[1;36m== T4 · 证据链 ==[0m
+      verified 5 entries; hash chain intact
+      {"args": {"tx_id": "86fe896e9350e211"}, "entry_hash": "88acd1f3e00e2c093f87c45d8fed69069cfef3acaccb36ac147f733ccb6e79b1", "identity": "daedalus-tx", "outcome": "success", "policy_version": "1.0", "prev_hash": "e75052feeaf51107c929acbde02afe2d69133d0bb29667e3810acdfd6497771e", "timestamp": "2026-11-19T09:57:14.492840+00:00", "tool": "daedalus_tx_propose"}
+      {"args": {"adapter": "package.set", "step": 1, "tx_id": "86fe896e9350e211"}, "entry_hash": "a8c00898a4f71f1d4a7db829df713ab30f3c68f22f2e5690f19627c228655f15", "identity": "daedalus-tx", "outcome": "error", "policy_version": "1.0", "prev_hash": "88acd1f3e00e2c093f87c45d8fed69069cfef3acaccb36ac147f733ccb6e79b1", "timestamp": "2026-11-19T09:57:41.664536+00:00", "tool": "daedalus_tx_apply", "tx_id": "86fe896e9350e211", "tx_prev_hash": "e75052feeaf51107c929acbde02afe2d69133d0bb29667e3810acdfd6497771e", "tx_step": 1}
+PASS  T4 审计链 intact(verified 5 entries; hash chain intact)
+
+判定: FAIL(1 条)

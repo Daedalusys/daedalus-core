@@ -1,0 +1,32 @@
+
+[1;36m== 产物指纹不一致或产物不唯一 → 重建。旧=<无> 新=1769ca31f90d4cdd4929765b382a5d117e1d2e7c51eca89fe51c6d70669e5c40 现有产物数=0 ==[0m
+
+[1;36m== driver_init · 派生一次性 verify 镜像(本地,不推 registry) ==[0m
+[1;32m   OK 派生镜像就绪: localhost/daedalus-verify:base(verify 用户: verify,密码随机)[0m
+
+[1;36m== driver_init · 出 qcow2(从 base 派生镜像) ==[0m
+[1;32m   OK qcow2: /home/udefine-dev/daedalus-fix/output/qcow2/qcow2/disk.qcow2(1.3G)[0m
+
+[1;36m== F0 · 派生修复镜像:发布镜像 + python3-gobject-base ==[0m
+
+[1;36m== F1 · 出修复 qcow2 ==[0m
+[1;32m   OK qcow2: /home/udefine-dev/daedalus-fix/fix-qcow2/qcow2/disk.qcow2[0m
+   qemu pid=967498,串口 → /home/udefine-dev/daedalus-fix/serial-console.log
+[1;32m   OK SSH 可达(verify@127.0.0.1:2223)[0m
+
+[1;36m== F2 · gi 是否到位 ==[0m
+      gi ok
+      python3-gobject-base-3.46.0-7.el10.x86_64
+
+[1;36m== F3 · 同一个 tx package.set 交易(修复前 FAIL) ==[0m
+      tx=2d7ce77b4c587b34
+      {"id":"2d7ce77b4c587b34","created_at":"2026-11-19T10:06:18.961664346Z","status":"proposed","steps":[{"index":0,"adapter":"package.set","args":{"name":"zsh","desired_state":"present"},"before_state":{"name":"zsh","installed":false},"after_state":{"name":"zsh","desired_state":"present","verb":"install      {"error":"步骤 0(package.set) 失败: 步骤 0(package.set) returncode=1"}
+      daedalus-tx: 步骤 0(package.set) 失败: 步骤 0(package.set) returncode=1
+      APPLY_RC=1
+      package zsh is not installed
+      IN_RC=1
+      {"id":"2d7ce77b4c587b34","created_at":"2026-11-19T10:06:18.961664346Z","status":"failed","steps":[{"index":0,"adapter":"package.set","args":{"name":"zsh","desired_state":"present"},"before_state":{"name":"zsh","installed":false},"after_state":{"name":"zsh","desired_state":"present","verb":"install"},"op_result":{"returncode":1,"stdout":"Last metadata expiration check: 0:00:42 ago on Thu Nov 19 10:05:37 2026.\nDependencies resolved.\n================================================================================\n Package   Architecture Version              Repository                    Size\n      package zsh is not installed
+      OUT_RC=1
+      verified 4 entries; hash chain intact
+
+判定: PASS

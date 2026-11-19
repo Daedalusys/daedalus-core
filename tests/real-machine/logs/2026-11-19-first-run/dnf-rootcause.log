@@ -1,0 +1,43 @@
+[1;32m   OK 复用已构建产物(qcow2 与被测镜像指纹一致: 1769ca31f90d4cdd4929765b382a5d117e1d2e7c51eca89fe51c6d70669e5c40)[0m
+   qemu pid=952510,串口 → /home/udefine-dev/daedalus-try/serial-console.log
+[1;32m   OK SSH 可达(verify@127.0.0.1:2223)[0m
+
+[1;36m== D1 · dnf 版本与 gi 是否在位 ==[0m
+      4.20.0
+        Installed: dnf-0:4.20.0-28.el10.alma.1.noarch at Tue Oct 20 06:52:46 2026
+        Built    : AlmaLinux Packaging Team <packager@almalinux.org> at Sat Aug 29 16:33:21 2026
+      ---
+      package python3-gobject is not installed
+      package python3-gobject-base is not installed
+      ---
+      ModuleNotFoundError: No module named 'gi'
+      ---
+      -rw-r--r--. 1 root root 194 Nov 19 09:59 /run/ostree-booted
+
+[1;36m== D2 · 不经 tx,直接 dnf install(隔离 tx 适配器) ==[0m
+                 ^^^^^^^^^^^^^^^^^^
+        File "/usr/lib/python3.12/site-packages/dnf/cli/main.py", line 144, in cli_run
+          ret = resolving(cli, base)
+                ^^^^^^^^^^^^^^^^^^^^
+        File "/usr/lib/python3.12/site-packages/dnf/cli/main.py", line 197, in resolving
+          base.do_transaction(display=displays)
+        File "/usr/lib/python3.12/site-packages/dnf/cli/cli.py", line 235, in do_transaction
+          bootc_system = dnf.util._BootcSystem()
+                         ^^^^^^^^^^^^^^^^^^^^^^^
+        File "/usr/lib/python3.12/site-packages/dnf/util.py", line 654, in __init__
+          import gi
+      ModuleNotFoundError: No module named 'gi'
+      RC=0
+
+[1;36m== D3 · 装上 python3-gobject 之后 dnf 是否恢复(不走 dnf,直接用 rpm 取包试) ==[0m
+        File "/usr/lib/python3.12/site-packages/dnf/util.py", line 654, in __init__
+          import gi
+      ModuleNotFoundError: No module named 'gi'
+      RC=0
+
+[1;36m== D4 · tx 通道换适配器:user-scope service.set(需要 user manager) ==[0m
+      1000
+      running
+      {"tx_id":"bd1f2a66be7dcb7e"}
+
+判定: PASS

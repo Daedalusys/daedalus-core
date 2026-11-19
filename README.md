@@ -6,6 +6,22 @@ Daedalus 核心仓：镜像编排（`files/` 构建树 + 根 `Containerfile`）+
 与 `daedalus-sdk`（11 个安全核心包）、`daedalus-plugins`（13 个 Go 能力插件 monorepo）
 构成 3 仓体系；本地开发以**平级目录**形态共存，经 `go.work` 桥接。
 
+## 发布物：先试试
+
+发布时间是 **alpha**：给你一台 QEMU/KVM 能跑的试用镜像，不是生产系统。
+上手步骤、试用账号、以及「哪些事在 immutable 节点上做不到」都在
+[docs/quickstart.md](docs/quickstart.md)。
+
+| Release 资产 | 是什么 |
+|---|---|
+| `qcow2-<ver>.qcow2` | QEMU/KVM 试用镜像（带文档化的 alpha 试用账号，口令公开） |
+| `iso-<ver>.iso` | **CI 验证夹具，不是安装器**：开机自动装到 `/dev/vda`，见 [#191](https://github.com/Daedalusys/daedalus-core/issues/191) |
+
+「第一次跑起来」的验收探针是 `tests/real-machine/probe-first-run.sh`；最近一次真机实跑
+的证据（含它抓到的 3 个缺陷）在
+[tests/real-machine/logs/2026-11-19-first-run/EVIDENCE.md](tests/real-machine/logs/2026-11-19-first-run/EVIDENCE.md)。
+
+
 ## 本地开发
 
 **前置**：3 仓以平级目录形态 clone（`go.work` 本地 dev 桥依赖兄弟仓路径）：
