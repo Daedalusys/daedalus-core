@@ -10,8 +10,21 @@
 
 ```bash
 base=https://github.com/Daedalusys/daedalus-core/releases/download/v0.1.0
-curl -fLO "$base/qcow2-v0.1.0.qcow2"
+curl -fLO "$base/qcow2-v0.1.0.qcow2" "$base/SHA256SUMS"
+sha256sum -c --strict SHA256SUMS
 ```
+
+**直连太慢的话**(2026-11-19 实测:直连 GitHub 约 0.1 MB/s,1.24 GiB 要 6 小时以上),
+走加速站下载,然后**必须**用 Release 上的 `SHA256SUMS` 校验:
+
+```bash
+curl -fL -o qcow2-v0.1.0.qcow2 \
+  "https://ghfast.top/$base/qcow2-v0.1.0.qcow2"
+sha256sum -c --strict SHA256SUMS     # 通过即字节与 Release 一致
+```
+
+同一时刻实测该加速站约 1.3–1.9 MB/s(≈15 分钟)。加速站只是第三方传输通道 ——
+**校验通过才算数**,校验不过就别用。
 
 同页的 `iso-v0.1.0.iso` **不是安装器**:它是 CI 的验证夹具(开机自动装到 `/dev/vda`,
 live 里有一个构建期临时账号),见
