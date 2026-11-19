@@ -38,7 +38,7 @@ ENV TARGETARCH=${TARGETARCH}
 # 跑完才报错,不知道哪一步");改单个脚本(如 77-xrdp.sh)只重跑对应 stage,
 # 不重跑 65-ai-safety / 70-mcp-servers / 76-plugin-gen 等无关阶段。
 #
-# dnf cache mount 只在真正装包的 stage(65、77)挂,其他 stage 不挂,减少
+# dnf cache mount 只在真正装包的 stage(65、66、77)挂,其他 stage 不挂,减少
 # 不必要的 cache 锁竞争。
 #
 # 共享约束:
@@ -83,6 +83,15 @@ RUN --mount=type=tmpfs,dst=/tmp \
     --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=cache,target=/var/cache/dnf,sharing=locked \
     /ctx/build_files/build.sh 65
+
+# === Stage 3.5:dnf 的 bootc 后端依赖(66-bootc-dnf-gobject) ===
+# dnf 在 ostree 节点上要 import gi 才能判定 bootc 只读语义; 缺包时用户看到的是
+# Python traceback, 而不是 package.set 的清晰拒绝。独立 Daedalus stage: vendor
+# 10-50 会被上游同步覆盖, 65 是 AI 工具链, 不该背这条运行时依赖。
+RUN --mount=type=tmpfs,dst=/tmp \
+    --mount=type=bind,from=ctx,source=/,target=/ctx \
+    --mount=type=cache,target=/var/cache/dnf,sharing=locked \
+    /ctx/build_files/build.sh 66
 
 # === Stage 4:Daedalus 服务(70 + 70a + 75) ===
 RUN --mount=type=tmpfs,dst=/tmp \
