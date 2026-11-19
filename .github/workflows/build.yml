@@ -1117,6 +1117,21 @@ jobs:
         run: |
           set -euo pipefail
           tag="${RELEASE_TAG:-$(git rev-parse --short=12 HEAD)}"
+          # 判定闸:只有 INSTALLED_LOGIN(装机链完整验过)的 ISO 才许当用户资产发出去。
+          # BLOCKED_EXTERNAL(装机因外部网络未完成)/ LIVE_OK(没装)都不发 ——
+          # 一个没验过装机的 ISO 不该被当成安装器发布(见 #191);ISO 是 CI 验证夹具,
+          # 它的价值在 artifact 里的证据,不在 Release 资产里。
+          verdict_file="$VERIFY_WORK/iso-verdict.txt"
+          if [ ! -f "$verdict_file" ]; then
+            echo "ERROR: 判定文件缺失($verdict_file)—— 不得在无判定的情况下晋级 ISO" >&2
+            exit 1
+          fi
+          verdict="$(cat "$verdict_file")"
+          echo "ISO 判定: $verdict"
+          if [ "$verdict" != "INSTALLED_LOGIN" ]; then
+            echo "判定为 $verdict —— 不把 ISO 晋级到 Release(证据仍在 artifact 里)"
+            exit 0
+          fi
           # iso-verify.sh 的产物落在 $VERIFY_WORK/output 下,不重新构建 ——
           # 被验证的那份 ISO 与被发布的 ISO 必须是同一份字节。
           iso="$(find "$VERIFY_WORK/output" -name '*.iso' -type f | head -1)"
