@@ -40,7 +40,6 @@ DRIVER_QEMU_SNAPSHOT=1
 
 # 事务闭环用的 user-scope 单元(不是 daemon,只是让 systemctl --user 有个可开关的目标)
 UNIT="daedalus-probe.service"
-UID_V=1000
 
 driver_init
 
@@ -95,7 +94,27 @@ fi
 
 # ------------------------------------------------------------------------- T3
 say "T3 · 事务闭环:service.set enabled → rollback(user-scope)"
-gssh "sudo loginctl enable-linger verify; sleep 2" >/dev/null 2>&1
+# user-scope 事务要 user manager 在跑。探针从 root 经 SSH 进来,不是 login session,
+# pam_systemd 不会替 verify 建 /run/user/<uid> —— 必须显式 enable-linger 并把
+# user@<uid> 拉起来,再等 /run/user/<uid>/bus 出现。
+# (2026-11-19 出货构建里这一段没备好,`systemctl --user` 报 "Failed to connect to user
+#  scope bus",T3 因此判 FAIL —— 那是探针环境没备好,不是产品缺陷。)
+UID_V="$(gssh "id -u verify" 2>/dev/null | tr -d '\r')"
+if [ -z "$UID_V" ]; then
+    driver_verdict FAIL "T3 取不到 verify 的 uid"
+    driver_exit
+fi
+ok "verify uid=$UID_V"
+gssh "sudo loginctl enable-linger verify >/dev/null 2>&1; sudo systemctl start user@$UID_V.service >/dev/null 2>&1" >/dev/null 2>&1
+T3_BUS=0
+for _i in $(seq 1 20); do
+    if gssh "test -S /run/user/$UID_V/bus" >/dev/null 2>&1; then T3_BUS=1; break; fi
+    sleep 2
+done
+if [ "$T3_BUS" != "1" ]; then
+    driver_verdict FAIL "T3 user manager 没起来(/run/user/$UID_V/bus 不存在),环境不备"
+    driver_exit
+fi
 gssh "sudo -iu verify bash -lc 'export XDG_RUNTIME_DIR=/run/user/$UID_V; mkdir -p ~/.config/systemd/user; printf \"[Unit]\\nDescription=probe\\n[Service]\\nExecStart=/bin/sleep 300\\n[Install]\\nWantedBy=default.target\\n\" > ~/.config/systemd/user/$UNIT; systemctl --user daemon-reload'" >/dev/null 2>&1
 T3_TX="$(gssh "sudo -iu verify bash -lc 'export XDG_RUNTIME_DIR=/run/user/$UID_V; /usr/local/bin/daedalus-tx begin'" 2>/dev/null | sed -n 's/.*"tx_id":"\([a-f0-9]\{16\}\)".*/\1/p')"
 if [ -z "$T3_TX" ]; then
