@@ -38,6 +38,11 @@ run_checks() {
     run_one "VARIANT=headless 标记" grep -q '^VARIANT=headless$' /etc/os-release
     # 宿主 CLI 是镜像内一切插件操作/救援路径的入口,必须是可执行文件。
     run_one "宿主 CLI 可执行(/usr/local/bin/daedalus-host)" test -x /usr/local/bin/daedalus-host
+    # dnf 在 bootc/ostree 节点上靠 python3-gobject-base 判定只读部署;缺包时
+    # `dnf` 抛 Python traceback, package.set 的 fail-closed 文案就无从谈起。
+    # rpm 查包证明包在, import 证明后端真的可用(两者不是同一件事)。
+    run_one "dnf bootc 后端包(rpm -q python3-gobject-base)" rpm -q python3-gobject-base
+    run_one "dnf bootc 后端可导入(python3 -c 'import gi')" python3 -c 'import gi'
     # QA 链路端到端:daedalus-smoke 在镜像内自检并通过。它此前从未装进镜像,
     # 于是 tests/deploy/headless-test.sh 的 F1 恒 SKIP(假绿);装上之后退出码即判据。
     run_one "qa: daedalus-smoke 端到端" /usr/local/bin/daedalus-smoke
@@ -71,6 +76,8 @@ EOS
 run --rm test-image bootc container lint
 run --rm test-image grep -q ^VARIANT=headless$ /etc/os-release
 run --rm test-image test -x /usr/local/bin/daedalus-host
+run --rm test-image rpm -q python3-gobject-base
+run --rm test-image python3 -c import gi
 run --rm test-image /usr/local/bin/daedalus-smoke
 EOF
     }

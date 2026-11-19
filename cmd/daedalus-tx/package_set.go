@@ -107,6 +107,28 @@ func desiredStateOK(state string) bool {
 	return ok
 }
 
+// immutableNodeRejectMsg 是 immutable(bootc)节点的逐字拒绝串, 三段共用。
+// 文案必须同时点出「为什么不可用」与「正确通道」—— 验收探针按这些词判定
+// 「清晰 fail-closed」而不是 Python traceback。
+const immutableNodeRejectMsg = "package.set 在 immutable(bootc)节点上不可用:atomic 节点的包变更走 bootc upgrade(新部署 + bootc rollback);package kind 仅适用于 daedalus-agent 节点"
+
+// immutableNode 报告本节点是否由 bootc/ostree 接管: 只看标记文件存在, 不读内容。
+// 路径经 bootcMarkerPath 注入, 绝不在此硬编码。
+func immutableNode() bool {
+	_, err := os.Stat(bootcMarkerPath)
+	return err == nil
+}
+
+// rejectImmutableNode 是 package.set 三段共用的 fail-closed 门: 在 immutable
+// 节点上 dnf 的持久变更没有意义(下一次部署即被替换), 正解是 bootc upgrade +
+// bootc rollback。拒绝必须发生在任何 dnf/rpm 副作用之前。
+func rejectImmutableNode() error {
+	if immutableNode() {
+		return errors.New(immutableNodeRejectMsg)
+	}
+	return nil
+}
+
 // parsePackageSetArgs 边界解析(严格镜像 service_set.go 的 parseServiceSetArgs;
 // DisallowUnknownFields: 手改注入的多余键即拒)。
 func parsePackageSetArgs(raw json.RawMessage) (packageSetArgs, error) {
@@ -169,6 +191,11 @@ func (packageSetAdapter) Propose(ctx context.Context, args json.RawMessage) (jso
 	if !desiredStateOK(in.DesiredState) {
 		return nil, nil, fmt.Errorf(`unknown desired_state %q (v1 支持 present|absent|latest)`, in.DesiredState)
 	}
+	// immutable 节点在 Propose 即拒: package kind 的目标节点是普通发行版,
+	// atomic 节点的包生命周期归 bootc upgrade, propose 阶段的 rpm 查询也不该跑。
+	if err := rejectImmutableNode(); err != nil {
+		return nil, nil, err
+	}
 	installed, version, err := rpmQueryFn(ctx, in.Name)
 	if err != nil {
 		return nil, nil, err
@@ -202,6 +229,11 @@ func (packageSetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 	}
 	if !desiredStateOK(in.DesiredState) {
 		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(`unknown desired_state %q (v1 支持 present|absent|latest)`, in.DesiredState)}
+	}
+	// 纵深防御: 手改 journal 可以绕过 Propose, 故 Apply 在任何 dnf 副作用之前
+	// 重判一次 immutable 节点。
+	if err := rejectImmutableNode(); err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
 	}
 	// root 守门: dnf install/remove/upgrade 是系统域写操作, v1 只允许
 	// root 经 sudo 走本通道; 经 geteuid var 判定(注入契约, 测试翻非零)。
@@ -262,6 +294,11 @@ func (packageSetAdapter) Rollback(ctx context.Context, step tx.Step) tx.OpResult
 	}
 	if !desiredStateOK(in.DesiredState) {
 		return tx.OpResult{Returncode: 1, Error: fmt.Sprintf(`unknown desired_state %q (v1 支持 present|absent|latest)`, in.DesiredState)}
+	}
+	// 与 Apply 同款纵深防御: bootc 节点上的 dnf history undo 同样改写不了
+	// 部署, 任何 dnf 动作都不该发生。
+	if err := rejectImmutableNode(); err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
 	}
 	if geteuid() != 0 {
 		return tx.OpResult{Returncode: 1, Error: "package.set requires root (euid=0); re-run via sudo"}
