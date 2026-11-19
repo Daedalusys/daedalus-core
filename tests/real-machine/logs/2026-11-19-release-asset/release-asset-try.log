@@ -1,0 +1,26 @@
+
+[1;36m== R1 · 从 Release 下载 qcow2-v0.1.0.qcow2 ==[0m
+[1;32m   OK 已存在,复用:qcow2-v0.1.0.qcow2(1.3G)[0m
+PASS  PASS R1 Release 资产可下载且是合法 qcow2
+
+[1;36m== R2 · 直接引导这份 qcow2(snapshot=on,不写原文件) ==[0m
+[1;32m   OK qemu pid=1036348,串口 → /home/udefine-dev/daedalus-release-try/serial-v0.1.0.log[0m
+PASS  PASS R2 引导后可用发布账号 daedalus 登录(口令登录,无需注入任何东西)
+
+[1;36m== R3 · 登录之后能看到什么 ==[0m
+      host=10.0.2.15 user=daedalus uid=1000
+      PRETTY_NAME="AlmaLinux Kitten 10 (Lion Cub)"
+      VARIANT_ID="daedalus-os"
+      sudo=yes
+      host_list_ok=14
+      host_list_degraded=0
+      smoke=SMOKE OK
+      bootc={"apiVersion":"org.containers.bootc/v1","kind":"BootcHost","
+PASS  PASS R3 试用账号有免密 sudo,14 插件全 ok,smoke 通过
+
+[1;36m== R4 · package.set 在这份产物上的文案 ==[0m
+      {"error":"propose 失败: package.set 在 immutable(bootc)节点上不可用:atomic 节点的包变更走 bootc upgrade(新部署 + bootc rollback);package kind 仅适用于 daedalus-agent 节点"}
+      daedalus-tx: propose 失败: package.set 在 immutable(bootc)节点上不可用:atomic 节点的包变更走 bootc upgrade(新部署 + bootc rollback);package kind 仅适用于 daedalus-agent 节点
+PASS  PASS R4 package.set 在 immutable 节点上清晰 fail-closed(逐字文案)
+
+判定: PASS
