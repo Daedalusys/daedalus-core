@@ -121,6 +121,11 @@ run_leg() {
     rm -rf "$TMP/ws" "$TMP/iso-verify" "$TMP/runner-temp" "$TMP/gh.viewn"
     mkdir -p "$TMP/ws/output/qcow2" "$TMP/iso-verify/output" "$TMP/runner-temp"
     : >"$TMP/gh.log"
+    # ISO 发布腿先读判定文件(iso-verify.sh 写的):只有 INSTALLED_LOGIN 才晋级。
+    # ISO_VERDICT 可改判定;__MISSING__ 模拟「判定文件没落盘」。
+    if [ "$leg" = iso ] && [ "${ISO_VERDICT:-INSTALLED_LOGIN}" != "__MISSING__" ]; then
+        printf '%s\n' "${ISO_VERDICT:-INSTALLED_LOGIN}" >"$TMP/iso-verify/iso-verdict.txt"
+    fi
     case "${SIZE:-0}" in
       0) ;;
       *) if [ "$leg" = qcow2 ]; then truncate -s "$SIZE" "$TMP/ws/output/qcow2/disk.qcow2"
@@ -171,6 +176,16 @@ st "qcow2-v0.4.0.qcow2" "$(upload_name)" "tag push → 上传文件名带 tag"
 # --- G ISO 腿同型 ---
 st 0 "$(SIZE=1200000000 GH_VIEW_RC=1 rc_of run_leg iso v0.4.0)" "ISO 正常路径 → 退出码 0"
 st "iso-v0.4.0.iso" "$(upload_name)" "ISO 上传文件名 = 目标资产名"
+
+# --- G2 ISO 判定不是 INSTALLED_LOGIN → 不晋级(证据留在 artifact) ---
+st 0 "$(SIZE=1200000000 GH_VIEW_RC=1 ISO_VERDICT=BLOCKED_EXTERNAL rc_of run_leg iso v0.4.0)" \
+    "ISO 判定 BLOCKED_EXTERNAL → 退出码 0(外因不判红)"
+st 0 "$(gh_calls)" "ISO 判定 BLOCKED_EXTERNAL → gh 零调用(不把没验过装机的 ISO 发出去)"
+st 0 "$(SIZE=1200000000 GH_VIEW_RC=1 ISO_VERDICT=LIVE_OK rc_of run_leg iso v0.4.0)" \
+    "ISO 判定 LIVE_OK(没装机) → 退出码 0"
+st 0 "$(gh_calls)" "ISO 判定 LIVE_OK → gh 零调用"
+st 1 "$(SIZE=1200000000 GH_VIEW_RC=1 ISO_VERDICT=__MISSING__ rc_of run_leg iso v0.4.0)" \
+    "ISO 判定文件缺失 → 退出码 1(不得在无判定时晋级)"
 
 # --- H 超 2GiB → rc2,gh 一次都不调(不产生半截 Release) ---
 st 2 "$(SIZE=2200000000 GH_VIEW_RC=1 rc_of run_leg qcow2)" "qcow2 超 2GiB → 退出码 2"
