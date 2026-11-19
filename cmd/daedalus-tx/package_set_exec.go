@@ -37,6 +37,11 @@ const (
 // dnfHistoryIDPattern 从 `dnf history` 表格行提取事务 ID(ID 列数字 + 竖线分隔)。
 var dnfHistoryIDPattern = regexp.MustCompile(`\s+(\d+)\s+\|`)
 
+// bootcMarkerPath 是「本节点由 bootc/ostree 接管」的判定路径注入缝, 生产态固定
+// /run/ostree-booted, 只 stat 不读内容。测试覆写指向 t.TempDir() 下的夹具
+// (模式镜像 podmanExecutable 同款契约), 使 bootc 语义可在普通宿主上验证。
+var bootcMarkerPath = "/run/ostree-booted"
+
 // runNormalized 是 dnfExec/rpmQuery 共用的执行内核: argv 直发
 // `binary <args...>` 并规范化为 tx.OpResult —— rc=子进程退出码(透传);
 // 无法启动 → 126(shellpolicy 拒绝惯例); 超时 → 124(同款约定)。
