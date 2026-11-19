@@ -1,4 +1,4 @@
-# 第一次跑起来(v0.1.0)
+# 第一次跑起来(v0.1.1)
 
 这是 **alpha 试用镜像**,不是生产系统。它跑在 QEMU/KVM 里,自带一个**公开口令**的试用
 账号 —— 默认 **不要**把它暴露到公网,也不要拿它装真机。
@@ -9,8 +9,8 @@
 ## 1. 下载
 
 ```bash
-base=https://github.com/Daedalusys/daedalus-core/releases/download/v0.1.0
-curl -fLO "$base/qcow2-v0.1.0.qcow2" "$base/SHA256SUMS"
+base=https://github.com/Daedalusys/daedalus-core/releases/download/v0.1.1
+curl -fLO "$base/qcow2-v0.1.1.qcow2" "$base/SHA256SUMS"
 sha256sum -c --strict SHA256SUMS
 ```
 
@@ -18,23 +18,24 @@ sha256sum -c --strict SHA256SUMS
 走加速站下载,然后**必须**用 Release 上的 `SHA256SUMS` 校验:
 
 ```bash
-curl -fL -o qcow2-v0.1.0.qcow2 \
-  "https://ghfast.top/$base/qcow2-v0.1.0.qcow2"
+curl -fL -o qcow2-v0.1.1.qcow2 \
+  "https://ghfast.top/$base/qcow2-v0.1.1.qcow2"
 sha256sum -c --strict SHA256SUMS     # 通过即字节与 Release 一致
 ```
 
 同一时刻实测该加速站约 1.3–1.9 MB/s(≈15 分钟)。加速站只是第三方传输通道 ——
 **校验通过才算数**,校验不过就别用。
 
-同页的 `iso-v0.1.0.iso` **不是安装器**:它是 CI 的验证夹具(开机自动装到 `/dev/vda`,
-live 里有一个构建期临时账号),见
-[#191](https://github.com/Daedalusys/daedalus-core/issues/191)。
+> **这个 Release 里没有 ISO 资产。** ISO 那条腿再一次撞上外部网络(guest 拉 `ghcr.io`
+> 时装不上),按设计只记 `BLOCKED_EXTERNAL`、**不晋级到 Release**;而且那个 ISO 形态本来
+> 就是 CI 的验证夹具、不是安装器(开机自动装到 `/dev/vda`,live 里有一个构建期临时账号),
+> 见 [#191](https://github.com/Daedalusys/daedalus-core/issues/191)。装机请用 qcow2。
 
 ## 2. 起机
 
 ```bash
 qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 4096 -smp 2 \
-  -drive file=qcow2-v0.1.0.qcow2,if=virtio,format=qcow2 \
+  -drive file=qcow2-v0.1.1.qcow2,if=virtio,format=qcow2 \
   -netdev user,id=net0,hostfwd=tcp::2222-:22 -device virtio-net,netdev=net0 \
   -nographic
 ```
@@ -77,6 +78,11 @@ daedalus-tx rollback "$tx"
 systemctl --user is-enabled demo.service      # → disabled
 sudo daedalus-audit verify --log-path /var/log/daedalus/audit.jsonl   # → hash chain intact
 ```
+
+`enabled` 与运行态是**两个正交维度**:这条命令回滚的是 enable 符号链接,不是进程状态。
+(v0.1.0 里这一步是坏的 —— 回滚只按运行态发动词,符号链接留在原地而事务仍报
+`rolled_back`,见 [#195](https://github.com/Daedalusys/daedalus-core/issues/195);v0.1.1 已修,
+真机证据在 `tests/real-machine/logs/2026-11-19-service-enabled-rollback/`。)
 
 ## 5. 让 AI 帮你翻译一句话
 

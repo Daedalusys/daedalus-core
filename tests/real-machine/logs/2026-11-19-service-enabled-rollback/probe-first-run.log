@@ -1,0 +1,85 @@
+   OK 复用已构建产物(qcow2 与被测镜像指纹一致: 487e0670f7828a2a0e338fe0cfe3ad4180a537c856d552d52d4b0df7df6523ba)
+
+== T0 · 发布产物 ghcr.io/daedalusys/daedalus-os:9814ed738dfee6f884a291bf3b37b779d395ccc4 里有没有可登录账号(宿主侧,进 guest 之前) ==
+      非系统账号: daedalus:x:1000:1000::/var/home/daedalus:/bin/bash
+      root 口令字段: root:$y$j9T$tr79LNFPtBFSj9ZwsHJQ6/$Xb26bT02EzzDY2PSqIKq6o4506goG1zEhhl45O5HQD/:20776:0:99999:7:::
+PASS T0 发布镜像带可登录账号: daedalus:x:1000:1000::/var/home/daedalus:/bin/bash
+   qemu pid=1231920,串口 → /opt/actions-runner/_work/daedalus-core/daedalus-core/guest-probes-44576858616/serial-console.log
+   OK SSH 可达(verify@127.0.0.1:2223)
+
+== T1 · 这台机器是谁 ==
+      NAME="AlmaLinux Kitten"
+      VERSION="10 (Lion Cub)"
+      RELEASE_TYPE=stable
+      ID="almalinux"
+      ID_LIKE="rhel centos fedora"
+      VERSION_ID="10"
+      PLATFORM_ID="platform:el10"
+      PRETTY_NAME="AlmaLinux Kitten 10 (Lion Cub)"
+      ANSI_COLOR="0;34"
+      LOGO="fedora-logo-icon"
+      CPE_NAME="cpe:/o:almalinux:almalinux:10::baseos"
+      HOME_URL="https://almalinux.org/"
+      DOCUMENTATION_URL="https://wiki.almalinux.org/"
+      VENDOR_NAME="AlmaLinux"
+      VENDOR_URL="https://almalinux.org/"
+      BUG_REPORT_URL="https://bugs.almalinux.org/"
+      
+      ALMALINUX_MANTISBT_PROJECT="AlmaLinux-10"
+      ALMALINUX_MANTISBT_PROJECT_VERSION="10"
+      REDHAT_SUPPORT_PRODUCT="AlmaLinux"
+      REDHAT_SUPPORT_PRODUCT_VERSION="10"
+      
+      VARIANT=headless
+      VARIANT_ID="daedalus-os"
+      bootc: {"apiVersion":"org.containers.bootc/v1","kind":"BootcHost","metadata":{"name":"host"},"spec":{"bootOrder":"default","image":{"image":"localhost/daedalus-verify:base","transport":"registry"}},"status":
+PASS T1 系统身份可读(kernel=6.12.0-273.el10.x86_64,bootc 有 booted 部署)
+
+== T2 · 能力面:daedalus-host list(根口径) ==
+      ID                  NAME                                                             VERSION  TYPE        RUNTIME  I18N          STATUS
+      daedalus.blueprint  Daedalus Blueprint                                               0.1.0    capability  native   -             ok
+      daedalus.copilot    Daedalus Copilot                                                 1.0.0    copilot     deno     en_US, zh_CN  ok
+      daedalus.diskclean  Daedalus Disk Cleanup (Cache / Journal / Coredump / Old Kernel)  0.1.0    capability  native   en_US, zh_CN  ok
+      daedalus.dupe       Daedalus Large & Duplicate File Scanner                          0.1.0    capability  native   -             ok
+      daedalus.fs         Daedalus Filesystem Access                                       0.1.0    capability  native   -             ok
+      daedalus.organize   Daedalus File Organizer (By Type / Date / Size / Extension)      0.1.0    capability  native   en_US, zh_CN  ok
+      daedalus.osstate    Daedalus OS State                                                0.1.0    capability  native   -             ok
+      daedalus.pkg        Daedalus Package Query                                           0.1.0    capability  native   -             ok
+      daedalus.proc       Daedalus Process Reconnaissance                                  0.1.0    capability  native   -             ok
+      daedalus.service    Daedalus Service Query                                           0.1.0    capability  native   -             ok
+      daedalus.shell      Daedalus Command Execution                                       0.1.0    capability  native   -             ok
+      daedalus.snapshot   Daedalus Snapshot Capability                                     0.1.0    capability  native   -             ok
+      daedalus.sysinfo    Daedalus System Information                                      0.1.0    capability  native   -             ok
+      daedalus.trace      Daedalus Audit Trace Viewer                                      0.1.0    capability  native   -             ok
+PASS T2 14 个插件全部 ok(实测 ok=14 degraded=0)
+
+== T2b · 镜像自带自检 daedalus-smoke ==
+      toml : name=daedalus-smoke read_only=true
+      mcp  : tool=smoke_ping echo="pong: daedalus-smoke" (server github.com/Daedalusys/daedalus-core v0.1.3)
+      SMOKE OK
+      RC=0
+PASS T2b daedalus-smoke 通过
+
+== T3 · 事务闭环:service.set started → rollback(user-scope) ==
+   OK verify uid=1001
+   OK tx_id=930311ef970aff51
+      is-active(apply 后): active
+      is-active(回滚后): inactive
+PASS T3 daedalus-probe.service started → rollback 回 inactive,事务闭环成立
+
+== T3b · enabled 维度的回滚(#195) ==
+      is-enabled(回滚前): disabled
+      is-enabled(apply 后): enabled
+      is-enabled(rollback 后): disabled
+PASS T3b enabled 维度回滚成立(回滚前后都是 disabled)
+
+== T4 · 证据链 ==
+      verified 2 entries; hash chain intact
+      {"args": {"interval_ns": 2000000000}, "entry_hash": "a62b152d3576a33cc2dcda91d82cdda52326ae1734f63142c62046114b5f5e36", "identity": "daedalus-host", "outcome": "success", "policy_version": "1.0", "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000", "timestamp": "2026-11-19T17:45:47.233499+00:00", "tool": "host_controller_start"}
+      {"args": {"dir": "/opt/daedalus/plugins", "id": ""}, "entry_hash": "b73f5b13e5ba7cd889ef80ed2aa746efb10aded21b852ae6ece371c15e8c754a", "identity": "daedalus-host", "outcome": "success", "policy_version": "1.0", "prev_hash": "a62b152d3576a33cc2dcda91d82cdda52326ae1734f63142c62046114b5f5e36", "timestamp": "2026-11-19T17:45:50.311116+00:00", "tool": "host_list"}
+PASS T4 审计链 intact(verified 2 entries; hash chain intact)
+
+== T5 · package.set 在 immutable 节点上的失败形态(propose 即拒) ==
+      {"error":"propose 失败: package.set 在 immutable(bootc)节点上不可用:atomic 节点的包变更走 bootc upgrade(新部署 + bootc rollback);package kind 仅适用于 daedalus-agent 节点"}
+      daedalus-tx: propose 失败: package.set 在 immutable(bootc)节点上不可用:atomic 节点的包变更走 bootc upgrade(新部署 + bootc rollback);package kind 仅适用于 daedalus-agent 节点
+PASS T5 package.set 在 immutable 节点上 propose 即清晰 fail-closed
