@@ -104,7 +104,26 @@ case "$1" in
         [ "$n" -ge 2 ] && exit "${GH_VIEW_RC2:-${GH_VIEW_RC:-1}}"
         exit "${GH_VIEW_RC:-1}" ;;
       create) exit "${GH_CREATE_RC:-0}" ;;
-      upload) exit "${GH_UPLOAD_RC:-0}" ;;
+      upload)
+        # 把被上传的文件各留一份副本:校验和的核心断言是「SHA256SUMS 能校验
+        # 住被上传的那份字节」,所以必须真的看到文件内容,而不是数 argv。
+        shift 3
+        for f in "$@"; do
+          case "$f" in --*) continue ;; */*) [ -f "$f" ] && cp "$f" "$GH_UPLOAD_DIR/" 2>/dev/null || true ;; esac
+        done
+        exit "${GH_UPLOAD_RC:-0}" ;;
+      download)
+        # 默认「Release 里还没有 SHA256SUMS」(rc=1);GH_PREEXISTING_SUMS 非空时
+        # 模拟另一条腿已经上传过一行 —— 用来钉「追加而不是覆盖」。
+        dir=""
+        while [ $# -gt 0 ]; do
+          case "$1" in --dir) dir="$2"; shift 2 ;; *) shift ;; esac
+        done
+        if [ -n "${GH_PREEXISTING_SUMS:-}" ] && [ -n "$dir" ]; then
+          printf '%s\n' "$GH_PREEXISTING_SUMS" >"$dir/SHA256SUMS"
+          exit 0
+        fi
+        exit 1 ;;
     esac ;;
 esac
 exit 0
@@ -118,8 +137,8 @@ SHORT="${SHA:0:12}"
 run_leg() {
     local leg="$1" tag="${2:-}" script
     if [ "$leg" = qcow2 ]; then script="$QC_SH"; else script="$ISO_SH"; fi
-    rm -rf "$TMP/ws" "$TMP/iso-verify" "$TMP/runner-temp" "$TMP/gh.viewn"
-    mkdir -p "$TMP/ws/output/qcow2" "$TMP/iso-verify/output" "$TMP/runner-temp"
+    rm -rf "$TMP/ws" "$TMP/iso-verify" "$TMP/runner-temp" "$TMP/gh.viewn" "$TMP/uploads"
+    mkdir -p "$TMP/ws/output/qcow2" "$TMP/iso-verify/output" "$TMP/runner-temp" "$TMP/uploads"
     : >"$TMP/gh.log"
     # ISO 发布腿先读判定文件(iso-verify.sh 写的):只有 INSTALLED_LOGIN 才晋级。
     # ISO_VERDICT 可改判定;__MISSING__ 模拟「判定文件没落盘」。
@@ -134,7 +153,7 @@ run_leg() {
     ( cd "$ROOT" && PATH="$FAKEBIN:$PATH" GH_LOG="$TMP/gh.log" GH_VIEW_N="$TMP/gh.viewn" \
       GITHUB_WORKSPACE="$TMP/ws" GITHUB_REPOSITORY="Daedalusys/daedalus-core" \
       GITHUB_SHA="${OVERRIDE_SHA:-$SHA}" RELEASE_TAG="$tag" VERIFY_WORK="$TMP/iso-verify" \
-      RUNNER_TEMP="$TMP/runner-temp" \
+      RUNNER_TEMP="$TMP/runner-temp" GH_UPLOAD_DIR="$TMP/uploads" \
       bash "$script" ) >"$TMP/out.txt" 2>"$TMP/err.txt"
 }
 rc_of() { local rc=0; "$@" || rc=$?; printf '%s' "$rc"; }
@@ -153,6 +172,10 @@ st "qcow2-$SHORT.qcow2" "$(upload_name)" "上传的文件名 = 目标资产名(�
 st 1 "$(grep -c -- '--clobber --repo Daedalusys/daedalus-core' "$TMP/gh.log")" "upload 带 --clobber(同一 ref 重跑幂等)"
 st 0 "$(find "$TMP/runner-temp" -type f | wc -l | tr -d ' ')" "上传后清理临时落位"
 st 1 "$(find "$TMP/ws/output/qcow2" -name '*.qcow2' | wc -l | tr -d ' ')" "产物目录未被污染(仍是 1 个原件)"
+# 校验和必须随资产同源产出:内容真能校验住被上传的那份字节,而不是一张空表
+st 1 "$(grep -c '^release upload .*SHA256SUMS' "$TMP/gh.log")" "upload 同时带 SHA256SUMS"
+st 1 "$( ( cd "$TMP/uploads" && sha256sum -c --strict SHA256SUMS >/dev/null 2>&1 ) && echo 1 || echo 0 )" \
+    "SHA256SUMS 能校验被上传的资产字节(内容真的对得上)"
 
 # --- C 已存在且 tag 指向本 run commit → 只补不建 ---
 st 0 "$(SIZE=1300000000 GH_VIEW_RC=0 GH_API_SHA="$SHA" rc_of run_leg qcow2)" "已存在且 tag 指向本 commit → 退出码 0"
@@ -172,6 +195,12 @@ st 1 "$(grep -c '^release upload ' "$TMP/gh.log")" "create 撞车后仍补传资
 # --- F tag push → 用 tag 名 ---
 st 0 "$(SIZE=1300000000 GH_VIEW_RC=1 rc_of run_leg qcow2 v0.4.0)" "tag push → 退出码 0"
 st "qcow2-v0.4.0.qcow2" "$(upload_name)" "tag push → 上传文件名带 tag"
+# 另一条腿已上传过一行时,SHA256SUMS 必须**追加**而不是覆盖 ——
+# 一份文件描述本次发布的全部资产。
+st 0 "$(SIZE=1300000000 GH_VIEW_RC=1 GH_PREEXISTING_SUMS="deadbeef  iso-v0.4.0.iso" \
+    rc_of run_leg qcow2 v0.4.0)" "已有 SHA256SUMS 时 → 退出码 0"
+st 2 "$(wc -l <"$TMP/uploads/SHA256SUMS" | tr -d ' ')" "已有一行时 SHA256SUMS 追加为两行(不覆盖别人的)"
+st 1 "$(grep -c 'iso-v0.4.0.iso' "$TMP/uploads/SHA256SUMS")" "原有那一行仍在"
 
 # --- G ISO 腿同型 ---
 st 0 "$(SIZE=1200000000 GH_VIEW_RC=1 rc_of run_leg iso v0.4.0)" "ISO 正常路径 → 退出码 0"
