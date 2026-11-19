@@ -1,0 +1,33 @@
+[1;32m   OK 复用已构建产物(qcow2 与被测镜像指纹一致: 1769ca31f90d4cdd4929765b382a5d117e1d2e7c51eca89fe51c6d70669e5c40)[0m
+   qemu pid=969985,串口 → /home/udefine-dev/daedalus-try/serial-console.log
+[1;32m   OK SSH 可达(verify@127.0.0.1:2223)[0m
+
+[1;36m== A5-1 · blueprint_apply 失败回滚(guest 无 nginx → post_check 必失败) ==[0m
+   原文件 sha256: 8e48ba85daed2b98970feaad831fc2296f96c154b60f4c465cce441caa541065
+      RENDER={"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\n  \"plan_id\": \"9feab6792480adda\",\n  \"rendered_content\": \"# Nginx 虚拟主机 server block\\n# 由 daedalus-blueprint 渲染;输出到 /etc/nginx/conf.d/{domain}.conf\\n# 注意:此模板使用 Go text/template 语法,占位符(形如 {param} 的路径模板,与 schema.json 字段一一对应)。\\nserver {\\n    server_
+      PLAN_ID=9feab6792480adda
+      TOKEN=8073642fea0fc8d27feb8086f6691b862e361104ce12e6e303070b16442b00cf
+      APPLY={"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Error: post_check 失败(已回滚): post_check 命令 \"nginx\" 失败: exec: \"nginx\": executable file not found in $PATH"}],"isError":true}}
+   回滚后 sha256: 8e48ba85daed2b98970feaad831fc2296f96c154b60f4c465cce441caa541065
+PASS  A5-1 blueprint_apply 失败后回滚把 /etc/nginx/conf.d/probe-a5.example.com.conf 恢复到原 sha256(8e48ba85daed2b98970feaad831fc2296f96c154b60f4c465cce441caa541065)
+
+[1;36m== A5-2a · diskclean 走完整 begin→propose→apply→rollback ==[0m
+   tx_id(disk.clean)=0cdaeea476c2245d
+   propose: {"id":"0cdaeea476c2245d","created_at":"2026-11-19T10:34:22.733535471Z","status":"proposed","steps":[{"index":0,"adapter":"disk.clean","args":{"paths":["/home/verify/a5-disk/junk1.bin","/home/verify/a5-disk/junk2.bin","/home/verify/a5-disk/junk3.bin"]},"before_state":{"snapshots":[{"path":"/var/home/
+   apply: {"id":"0cdaeea476c2245d","created_at":"2026-11-19T10:34:22.733535471Z","status":"applied","steps":[{"index":0,"adapter":"disk.clean","args":{"paths":["/home/verify/a5-disk/junk1.bin","/home/verify/a5-
+   apply 后清单: /home/verify/a5-disk/keep.txt
+   rollback 后清单: /home/verify/a5-disk/junk1.bin /home/verify/a5-disk/junk2.bin /home/verify/a5-disk/junk3.bin /home/verify/a5-disk/keep.txt
+PASS  A5-2a disk.clean 真删除了目标(keep.txt 留存),清单 diff 已记录
+
+[1;36m== A5-2b · organize 走完整 begin→propose→apply→rollback ==[0m
+   tx_id(organize.move)=4bb23895cdfbe225
+   propose: {"id":"4bb23895cdfbe225","created_at":"2026-11-19T10:34:23.547304858Z","status":"proposed","steps":[{"index":0,"adapter":"organize.move","args":{"plan_id":"probe-a5","moves":[{"from":"/home/verify/a5-
+   apply: {"id":"4bb23895cdfbe225","created_at":"2026-11-19T10:34:23.547304858Z","status":"applied","steps":[{"index":0,"adapter":"organize.move","args":{"plan_id":"probe-a5","moves":[{"from":"/home/verify/a5-o
+   apply 后清单: /home/verify/a5-org/dst/m1.txt /home/verify/a5-org/dst/m2.txt
+   rollback 后清单: /home/verify/a5-org/src/m1.txt /home/verify/a5-org/src/m2.txt
+PASS  A5-2b organize.move apply 生效且 rollback 归位(src↔dst 清单 diff 已记录)
+
+[1;36m== A5-3 · 宿主 lsblk 前后一致 ==[0m
+PASS  A5-3 宿主 lsblk 前后逐字节一致(未碰宿主盘)
+
+判定: PASS

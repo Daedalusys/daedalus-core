@@ -1,0 +1,41 @@
+[1;32m   OK 复用已构建产物(qcow2 与被测镜像指纹一致: 1769ca31f90d4cdd4929765b382a5d117e1d2e7c51eca89fe51c6d70669e5c40)[0m
+   qemu pid=952811,串口 → /home/udefine-dev/daedalus-try/serial-console.log
+[1;32m   OK SSH 可达(verify@127.0.0.1:2223)[0m
+
+[1;36m== A · service.set(user-scope):enabled → rollback ==[0m
+      {"tx_id":"cdca705f287ece8b"}
+      tx1=1fce9e8128adcd29
+      {"id":"1fce9e8128adcd29","created_at":"2026-11-19T10:01:00.142933405Z","status":"proposed","steps":[{"index":0,"adapter":"service.set","args":{"name":"daedalus-probe.service","desired_state":"enabled"},"before_state":{"unit_file":"/var/home/verify/.config/systemd/user/daedalus-probe.service","file_content":"[Unit]\nDescription=probe\n[Service]\nExecStart=/bin/sleep 300\n[Install]\nWantedBy=default.target\n","active_state":"inactive"},"after_state":{"unit":"daedalus-probe.service","desired_state":"enabled","verb":"enable"},"op_result":{"returncode":0}}],"rollback_plan":{}}
+      {"id":"1fce9e8128adcd29","created_at":"2026-11-19T10:01:00.142933405Z","status":"applied","steps":[{"index":0,"adapter":"service.set","args":{"name":"daedalus-probe.service","desired_state":"enabled"},"before_state":{"unit_file":"/var/home/verify/.config/systemd/user/daedalus-probe.service","file_content":"[Unit]\nDescription=probe\n[Service]\nExecStart=/bin/sleep 300\n[Install]\nWantedBy=default.target\n","active_state":"inactive"},"after_state":{"unit":"daedalus-probe.service","desired_state":"enabled","verb":"enable"},"op_result":{"returncode":0,"stderr":"Created symlink '/var/home/verify/.config/systemd/user/default.target.wants/daedalus-probe.service' → '/var/home/verify/.config/systemd/user/daedalus-probe.service'."}}],"rollback_plan":{"steps":[{"index":0,"adapter":"service.set","args":{"name":"daedalus-probe.service","desired_state":"enabled"},"before_state":{"unit_file":"/var/h      enabled
+      {"id":"1fce9e8128adcd29","created_at":"2026-11-19T10:01:00.142933405Z","status":"rolled_back","steps":[{"index":0,"adapter":"service.set","args":{"name":"daedalus-probe.service","desired_state":"enabled"},"before_state":{"unit_file":"/var/home/verify/.config/systemd/user/daedalus-probe.service","file_content":"[Unit]\nDescription=probe\n[Service]\nExecStart=/bin/sleep 300\n[Install]\nWantedBy=default.target\n","active_state":"inactive"},"after_state":{"unit":"daedalus-probe.service","desired_state":"enabled","verb":"enable"},"op_result":{"returncode":0,"stderr":"Created symlink '/var/home/verify/.config/systemd/user/default.target.wants/daedalus-probe.service' → '/var/home/verify/.config/systemd/user/daedalus-probe.service'."}}],"rollback_plan":{"steps":[{"index":0,"adapter":"service.set","args":{"name":"daedalus-probe.service","desired_state":"enabled"},"before_state":{"unit_f
+[1;36m== B · policy.set(root):往 /opt/daedalus/shared/policy.toml 写 ==[0m
+      drwxr-xr-x. 3 root root 47 Jan  1  1970 /opt
+      drwxr-xr-x. 2 root root 50 Jan  1  1970 /opt/daedalus/shared
+      touch: cannot touch '/opt/daedalus/shared/.probe': Read-only file system
+      TOUCH_RC=1
+      composefs on / type overlay (ro,relatime,seclabel,lowerdir+=/run/ostree/.private/cfsroot-lower,datadir+=/sysroot/ostree/repo/objects,redirect_dir=on,metacopy=on)
+      tx2=167de6122156ed93
+      {"error":"propose 失败: content_ref must be a relative path, got absolute \"/etc/daedalus/probe-policy.toml\""}
+      daedalus-tx: propose 失败: content_ref must be a relative path, got absolute "/etc/daedalus/probe-policy.toml"
+      {"id":"167de6122156ed93","created_at":"2026-11-19T10:01:00.934597964Z","status":"applied","rollback_plan":{}}
+      APPLY_RC=0
+
+[1;36m== C · container.set(rootless,verify):absent 幂等 ==[0m
+      tx3=83f2667182f9fba7
+      {"id":"83f2667182f9fba7","created_at":"2026-11-19T10:01:01.286883324Z","status":"proposed","steps":[{"index":0,"adapter":"container.set","args":{"name":"daedalus-probe-ctr","desired_state":"absent"},"before_state":{"container_name":"daedalus-probe-ctr"},"after_state":{"container":"daedalus-probe-ctr","desired_state":"absent","verb":"rm"},"op_result":{"returncode":0}}],"rollback_plan":{}}
+      {"id":"83f2667182f9fba7","created_at":"2026-11-19T10:01:01.286883324Z","status":"applied","steps":[{"index":0,"adapter":"container.set","args":{"name":"daedalus-probe-ctr","desired_state":"absent"},"before_state":{"container_name":"daedalus-probe-ctr"},"after_state":{"container":"daedalus-probe-ctr","desired_state":"absent","verb":"rm"},"op_result":{"returncode":0}}],"rollback_plan":{"steps":[{"index":0,"adapter":"container.set","args":{"name":"daedalus-probe-ctr","desired_state":"absent"},"before_state":{"container_name":"daedalus-probe-ctr"},"after_state":{"container":"daedalus-probe-ctr","desired_state":"absent","verb":"rm"},"op_result":{"returncode":0}}]}}
+      APPLY_RC=0
+
+[1;36m== D · copilot 无 key 时的行为 ==[0m
+      note: host is not the process parent; the above is only the constructed start command; systemd executes it per ExecStart
+      Configuration error: missing LLM API key. Set DAEDALUS_LLM_API_KEY or configure ~/.config/daedalus/copilot.json
+      Audit logging process failed (code 1): audit: 打开日志文件失败: open /var/log/daedalus/audit.jsonl: permission denied
+      
+      RC=0
+
+[1;36m== E · 其它能力服务器的运行时是否在位(插件能不能真被 systemd 拉起) ==[0m
+      daedalus-audit.service active exited
+      daedalus-env.service active exited
+      daedalus-host-controller.service active running
+
+判定: PASS
