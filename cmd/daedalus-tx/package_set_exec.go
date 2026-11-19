@@ -115,13 +115,6 @@ func parseDnfHistoryLastEntry(output string) (int64, string, error) {
 	return 0, "", errors.New("dnf history 输出中无可解析的事务 ID 行")
 }
 
-// parseDnfHistoryLastID 是 parseDnfHistoryLastEntry 的纯 ID 投影
-// (既有解析单测钉的旧形态, 生产路径消费的是带 Command line 的全 entry)。
-func parseDnfHistoryLastID(output string) (int64, error) {
-	id, _, err := parseDnfHistoryLastEntry(output)
-	return id, err
-}
-
 // cmdlineMatches 判定 `dnf history` 末行记录的 Command line 是否属于本次事务:
 // 按空白切 token, 要求首 token==verb 且其余 token 中存在一个==name。
 // 不能用连续子串判定——Apply 实发 argv 是 [verb, "-y", name], dnf 记录的

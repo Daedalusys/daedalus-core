@@ -59,7 +59,7 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 | Task | Location | Notes |
 |------|----------|-------|
 | Go MCP 能力服务器实现 | `../daedalus-plugins/{fs,shell,pkg,sysinfo,service,blueprint,dupe,diskclean,organize,trace,proc,osstate,snapshot}/cmd/` | go-sdk stdio 服务器;唯一实现 (Python/Deno 双实现已删除) |
-| 主机运行时共享 SDK 包 | `../daedalus-sdk/{pathguard,shellpolicy,pkgquery,sysinfo,policy,audit,plugin,objectmodel,i18n,blueprint,version,state,dirs}/` | 公开 contract 仓;威胁面见 `../daedalus-sdk/AGENTS.md` |
+| 主机运行时共享 SDK 包 | `../daedalus-sdk/{pathguard,shellpolicy,pkgquery,sysinfo,policy,audit,plugin,objectmodel,i18n,blueprint,confirmation,proto,version,state,dirs}/` | 公开 contract 仓;威胁面见 `../daedalus-sdk/AGENTS.md` |
 | Provider/Slot 契约(sdk#2) | `../daedalus-sdk/{slot,secretprovider,memoryprovider}/` + `../daedalus-sdk/docs/provider-slot.md` | 契约缝·零运行时;实现与接线归装配构造期;swappability L0–L3;blueprint `secret://` resolver 是第一个未来消费者 |
 | Modify Daedalus Copilot CLI | `plugin/copilot/` (源码) + `files/system/opt/daedalus/plugins/daedalus.copilot/` (镜像安装态) | policy, audit, llm, exec, main orchestration;安装态是构建产物勿手改 |
 | core runtime 二进制 | `cmd/daedalus-{host,audit,tx,smoke,plugin-pack}/` | 宿主 / 审计 / 事务 / smoke / 打包器 |
@@ -297,7 +297,7 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
   - 现有代码文件中残留的英文注释必须翻译为中文,新提交也必须遵守此规则
   - 标识符、字符串字面量、API 协议字段(如 JSON 键、HTTP 头、协议名)、系统命令、URL、日志中可被外部解析的 token 等**不视为注释**,保留英文以保证互操作性
 - **代码文件清单**:本项目涉及的主要代码文件包括:
-  - **Go (core)**: `cmd/daedalus-{audit,host,plugin-pack,smoke,tx}/` + `internal/{controller,tx}/` + `../daedalus-sdk/{pathguard,shellpolicy,pkgquery,sysinfo,policy,audit,plugin,objectmodel,i18n,blueprint,confirmation,version,state,dirs}/` + `../daedalus-plugins/{fs,shell,pkg,sysinfo,service,blueprint,dupe,diskclean,organize,trace,proc,osstate,snapshot}/cmd/`
+  - **Go (core)**: `cmd/daedalus-{audit,host,plugin-pack,smoke,tx}/` + `internal/{controller,tx}/` + `../daedalus-sdk/{pathguard,shellpolicy,pkgquery,sysinfo,policy,audit,plugin,objectmodel,i18n,blueprint,confirmation,proto,version,state,dirs}/` + `../daedalus-plugins/{fs,shell,pkg,sysinfo,service,blueprint,dupe,diskclean,organize,trace,proc,osstate,snapshot}/cmd/`
   - **TS / Deno (copilot 源码)**: `plugin/copilot/{policy,audit,exec,llm,main}.ts` + `daedalus.plugin.json`
   - **TS 测试 (镜像外)**: `tests/deno/{policy,audit,exec,llm,main}.test.ts` + `tests/deno/shellpolicy_contract.test.ts`
   - **Shell scripts**: `files/scripts/{60-ai-middleware,65-ai-safety,70-daedalus-mcp-servers,75-daedalus-copilot,76-daedalus-plugin-gen}.sh`, `usr/local/bin/daedalus` wrapper, `scripts/sync-daedalus.sh`, `scripts/pack-copilot-plugin.sh`, `scripts/justfile.demo`, `scripts/copilot-prep.sh`

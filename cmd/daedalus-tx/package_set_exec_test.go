@@ -105,47 +105,6 @@ func TestRpmQuery_RejectsBadName(t *testing.T) {
 	}
 }
 
-// TestParseDnfHistoryLastID: 纯解析器对真实 `dnf history` 尾部形态的行为——
-// 取最后一条事务行的 ID; 空输出/表头噪声/无可解析行一律 error。
-func TestParseDnfHistoryLastID(t *testing.T) {
-	const header = "    ID  | Command line             | Date and time    | Action(s)      | Altered\n" +
-		"-------------------------------------------------------------------------------\n"
-	const rows = "     1 | remove vim               | 2026-09-10 08:00 | Removed        |    1\n" +
-		"     4 | install htop             | 2026-09-12 09:30 | Install        |    1\n" +
-		"     5 | upgrade kernel           | 2026-09-15 10:15 | Updated        |    2"
-
-	cases := []struct {
-		name    string
-		output  string
-		wantID  int64
-		wantErr bool
-	}{
-		{"最后事务行", header + rows, 5, false},
-		{"尾部空行仍取最后事务", header + rows + "\n\n", 5, false},
-		{"单行事务", "    37 | install nginx | 2026-09-15 08:00 | Install | 2", 37, false},
-		{"空输出", "", 0, true},
-		{"仅表头与分隔线", strings.TrimSuffix(header, "\n"), 0, true},
-		{"无关文本", "No matches found", 0, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			id, err := parseDnfHistoryLastID(tc.output)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("期望 error, 实际返回 id=%d", id)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("解析失败: %v", err)
-			}
-			if id != tc.wantID {
-				t.Errorf("id = %d, 期望 %d", id, tc.wantID)
-			}
-		})
-	}
-}
-
 //
 // 真 readDnfHistoryID 的无-dnf 单测: dnfExecFn 本就是注入缝, stub 它回造
 // `dnf history` 表格输出, 钉末行 Command line 相关性校验的三种落点

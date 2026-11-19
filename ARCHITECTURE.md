@@ -188,7 +188,7 @@ Spec(资源声明) → Tx(事务五步) → Observe(state 缓存) → Audit(哈�
 | `base_image/` | Vendored AlmaLinux 镜像树(gitignored,自带 `.git`),`just sync` 的落位目标,禁止直接改 |
 | `scripts/` | 镜像外构建工具:`sync-daedalus.sh`、`fetch-plugins.sh`、`verify-dev-layout.sh`、`pack-copilot-plugin.sh`、`arch-diagram.py` |
 | `tests/` | `tests/deno/`(copilot 测试与 Go↔Deno 跨语言契约)与 `tests/integration/`(tx roundtrip) |
-| `docs/` | 架构图 `architecture.svg`/`png` 与设计裁决(如 `desired-state-projection.md`) |
+| `docs/` | 架构图 `architecture.svg` 与设计裁决(如 `desired-state-projection.md`) |
 
 源码(`cmd/`、`internal/`、`plugin/`)永不进镜像 rootfs,`/opt` 只允许构建产物落地,`just verify-image` 对此做零残留断言。
 
