@@ -113,6 +113,9 @@ printf '%s\n' 'error: Installing to disk: Creating ostree deployment: Preparing 
 printf '%s\n' 'error: Installing to disk: Creating rootfs: Device /dev/vda is mounted' >"$WORK/log-mounted"
 printf '%s\n' 'error: Installing to disk: Creating ostree deployment: Preparing import: writing deployment: Invalid argument' >"$WORK/log-ostree"
 printf '%s\n' 'error: pulling image: read tcp 10.0.2.15:37666->1.2.3.4:443: i/o timeout' >"$WORK/log-iotimeout"
+# 2026-11-19 实跑原文(ISO 腿两次构建都是它):guest 经宿主代理拉 ghcr 时连接被提前关闭。
+# 表里原本没有 EOF → 判 fatal → 不重试 → 整条出货腿判红 —— 它其实是外部网络,必须命中。
+printf '%s\n' 'error: Installing to disk: Creating ostree deployment: Preparing import: Fetching manifest: failed to invoke method OpenImage: fetching manifest f641a9c253fc0ced0402cd8e6b1f5d1b5cd39b4d in ghcr.io/daedalusys/daedalus-os: pinging container registry ghcr.io: Get "https://ghcr.io/v2/": EOF' >"$WORK/log-eof"
 
 classify_case() { # classify_case <rc> <日志路径> <期望分类> <说明>
     local out
@@ -122,6 +125,7 @@ classify_case() { # classify_case <rc> <日志路径> <期望分类> <说明>
 classify_case 1 "$WORK/log-tls" transient "分类 rc=1 + TLS handshake timeout → transient"
 classify_case 1 "$WORK/log-mounted" fatal "分类 rc=1 + Device is mounted → fatal(装机逻辑失败不重试)"
 classify_case 1 "$WORK/log-ostree" fatal "分类 rc=1 + Creating ostree deployment 失败 → fatal"
+classify_case 1 "$WORK/log-eof" transient "分类 rc=1 + 拉取时 EOF(实跑原文)→ transient"
 classify_case 124 "$WORK/log-tls" timeout "分类 rc=124 → timeout(同源不重试)"
 classify_case 137 "$WORK/log-tls" timeout "分类 rc=137(SIGKILL) → timeout"
 classify_case 0 "$WORK/log-tls" "" "分类 rc=0 → 空输出(成功不分类,哪怕日志里有超时字样)"
@@ -132,6 +136,10 @@ out="$(LIB_TTY="$WORK/tty.tr" lib_eval "is_transient_log '$WORK/log-mounted' && 
 [ "$out" = miss ]; st $? "分类 is_transient_log 不命中装机逻辑失败日志(不兜底成 transient)"
 out="$(LIB_TTY="$WORK/tty.tr" lib_eval "is_transient_log '$WORK/log-iotimeout' && echo hit || echo miss")"
 [ "$out" = hit ]; st $? "分类 is_transient_log 命中 i/o timeout"
+out="$(LIB_TTY="$WORK/tty.tr" lib_eval "is_transient_log '$WORK/log-eof' && echo hit || echo miss")"
+[ "$out" = hit ]; st $? "分类 is_transient_log 命中拉取时 EOF(2026-11-19 实跑原文)"
+out="$(LIB_TTY="$WORK/tty.tr" lib_eval "is_transient_log '$WORK/log-ostree' && echo hit || echo miss")"
+[ "$out" = miss ]; st $? "分类 is_transient_log 仍不命中 ostree 逻辑失败(表只认网络特征)"
 
 # ------------------------------------------------------------------ 循环:重试 --
 # 第 1 次 TLS 超时、第 2 次成功:同源重试一次就够,不该去开第二个源。

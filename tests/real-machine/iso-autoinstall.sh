@@ -182,10 +182,16 @@ umount_target_disk() {
 #
 # 只认这张表,表外一律不算瞬时:把 "Creating ostree deployment: ... Device ... is mounted"
 # 这种装机逻辑失败当瞬时错误去重试,等于用重试掩盖真缺陷(而且白烧预算)。
+#
+# 2026-11-19 补表:实跑(ISO 腿,两次构建)撞到的**同一个**外因长这样 ——
+#   Get "https://ghcr.io/v2/": EOF            (guest 经宿主代理,连接被提前关闭)
+#   read tcp 10.0.2.15:46564->10.0.2.2:7890: read: connection reset by peer
+# 前者表里没有 → 被判 fatal → 不重试 → 整条出货腿判红(而它其实是外部网络)。
+# 表按「拉取侧网络特征」增补,逻辑类失败(Device is mounted / Invalid argument)仍然不命中。
 is_transient_log() {
     local log="$1"
     [ -r "$log" ] || return 1
-    grep -qE 'TLS handshake timeout|i/o timeout|net/http: request canceled|connection reset by peer|Client\.Timeout exceeded|Temporary failure in name resolution|no such host|502 Bad Gateway|503 Service Unavailable|429 Too Many Requests' "$log"
+    grep -qE 'TLS handshake timeout|i/o timeout|net/http: request canceled|connection reset by peer|Client\.Timeout exceeded|Temporary failure in name resolution|no such host|502 Bad Gateway|503 Service Unavailable|429 Too Many Requests|: EOF$|: EOF"|unexpected EOF|connection refused|broken pipe' "$log"
 }
 
 # classify_failure <rc> <logfile> —— 一次尝试的结局归成四态之一(抄到 stdout):
