@@ -15,6 +15,7 @@
 #   T3 事务闭环(service.set:enabled → rollback)—— atomic 节点上的可回滚变更通道
 #   T4 证据链(audit 哈希链 intact + 事务条目确实上链)
 #   T5 package.set 在 immutable 节点上的行为(必须是**清晰 fail-closed**,不是 Python traceback)
+#   T5b policy.set 同上(composefs 只读根 → propose 即清晰 fail-closed)
 #
 # 为什么 T0 在宿主侧
 #   guest-driver 派生的是一个**带随机口令的一次性镜像**,它不能证明发布镜像本身
@@ -198,6 +199,22 @@ elif printf '%s' "$T5" | grep -qiE 'immutable|bootc|不支持|not supported|agen
     driver_verdict PASS "T5 package.set 在 immutable 节点上 propose 即清晰 fail-closed"
 else
     driver_verdict NOTE "T5 package.set 的失败文案既非 traceback 也不含明确边界词,原文见上"
+fi
+
+# ------------------------------------------------------------------------- T5b
+# policy kind 同样在 immutable(bootc)节点上**按设计**不可用: composefs 只读根使
+# /opt/daedalus/shared/policy.toml 写不进去, 策略真源在镜像内(只读副本);变更只能
+# 走镜像重建 + bootc upgrade(新部署 + bootc rollback)。拒绝发生在 propose,
+# 验的是「清晰边界文案」而不是 traceback,也不是写盘失败后的半截事务。
+say "T5b · policy.set 在 immutable 节点上的失败形态(propose 即拒)"
+T5B="$(gssh "T=\$(sudo /usr/local/bin/daedalus-tx begin 2>/dev/null | sed -n 's/.*\"tx_id\":\"\([a-f0-9]\{16\}\)\".*/\1/p'); sudo /usr/local/bin/daedalus-tx propose \$T policy.set '{\"name\":\"probe\",\"desired_state\":\"absent\"}' 2>&1 | head -c 700" 2>&1)"
+printf '%s\n' "$T5B" | sed 's/^/      /' | tee -a "$DRIVER_LOG"
+if printf '%s' "$T5B" | grep -qi 'Traceback'; then
+    driver_verdict FAIL "T5b policy.set 在 immutable 节点上抛的是 Python traceback,不是清晰拒绝"
+elif printf '%s' "$T5B" | grep -qiE 'immutable|bootc|不可用'; then
+    driver_verdict PASS "T5b policy.set 在 immutable 节点上 propose 即清晰 fail-closed"
+else
+    driver_verdict NOTE "T5b policy.set 的失败文案既非 traceback 也不含明确边界词,原文见上"
 fi
 
 driver_exit

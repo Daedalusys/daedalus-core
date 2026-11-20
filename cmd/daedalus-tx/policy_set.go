@@ -90,9 +90,13 @@ func parsePolicySetArgs(raw json.RawMessage) (policySetArgs, error) {
 	return in, nil
 }
 
-// Propose: euid 守门 → 词表门 → ref 解析(loaded)→ 当前文件读取(A-form)→ ref 读取(loaded)
-// → 双快照序列化。
+// Propose: immutable 门 → euid 守门 → 词表门 → ref 解析(loaded)→ 当前文件读取(A-form)
+// → ref 读取(loaded)→ 双快照序列化。immutable 门放在 euid 之前: 「本 kind 在此节点
+// 不可用」与调用者是谁无关。
 func (policySetAdapter) Propose(ctx context.Context, args json.RawMessage) (json.RawMessage, json.RawMessage, error) {
+	if err := rejectPolicyImmutableNode(); err != nil {
+		return nil, nil, err
+	}
 	in, err := parsePolicySetArgs(args)
 	if err != nil {
 		return nil, nil, err
@@ -157,6 +161,9 @@ func (policySetAdapter) Propose(ctx context.Context, args json.RawMessage) (json
 // 写盘(loaded=ref 内容 / absent=DisabledSentinel)→ 读回 sha256 校验(防"写了没生效")。
 // drift 失败 / 写回失败 / 任何中间失败均返 rc=1,不修改文件。
 func (policySetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
+	if err := rejectPolicyImmutableNode(); err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
 	in, err := parsePolicySetArgs(step.Args)
 	if err != nil {
 		return tx.OpResult{Returncode: 1, Error: err.Error()}
@@ -235,6 +242,9 @@ func (policySetAdapter) Apply(ctx context.Context, step tx.Step) tx.OpResult {
 // 同一路径同时覆盖 loaded 与 absent(若之前是 absent 写 sentinel,这里把旧内容写回,
 // 拆掉 kill switch; 之前是 loaded 改内容,这里恢复)。
 func (policySetAdapter) Rollback(_ context.Context, step tx.Step) tx.OpResult {
+	if err := rejectPolicyImmutableNode(); err != nil {
+		return tx.OpResult{Returncode: 1, Error: err.Error()}
+	}
 	in, err := parsePolicySetArgs(step.Args)
 	if err != nil {
 		return tx.OpResult{Returncode: 1, Error: err.Error()}
