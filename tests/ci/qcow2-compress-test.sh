@@ -69,7 +69,7 @@ st "keep" "$(adopt_or_keep 0 0)" "0 字节 → 0 字节 → 保留原件"
 # --- 3. workflow 的静态不变式(只看非注释行:注释里写着 -c 不算数) ---
 live_lines="$(awk '!/^[[:space:]]*#/ && !/^[[:space:]]*$/' "$WORKFLOW")"
 
-has_live() { printf '%s\n' "$live_lines" | grep -Fq -- "$1"; }
+has_live() { case "$live_lines" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 st 1 "$(has_live 'qemu-img convert -O qcow2 -c' && echo 1 || echo 0)" \
     "压缩步骤用 qemu-img convert -O qcow2 -c(带 -c 才是 zlib 压缩簇)"
 st 1 "$(has_live 'qemu-img check' && echo 1 || echo 0)" \
