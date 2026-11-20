@@ -292,9 +292,10 @@ plugin-pack: blueprint-embed
     # render-unit 指向);/usr/local/bin 副本服务镜像内以字面路径直接启动该二进制的 QA
     # 链路。两态互不替代。
     install -Dm0755 "${cap_bin[service]}" "$root/daedalus-core/files/system/usr/local/bin/daedalus-service"
-    # daedalus-tx 为 out-of-band CLI(无插件清单、无 systemd 单元、不进 76 脚本
-    #   render/handshake 环路)——与 audit 同款仅落 /usr/local/bin,服务 copilot spawn
-    #   与用户直接 CLI(v1 执行模型 = 调用者进程)。
+    # 这里落的是 **daedalus-tx CLI**(不是插件):CLI 没有自己的插件清单与 systemd 单元,
+    #   不进 76 脚本的 render/handshake 环路 —— 与 audit 同款仅落 /usr/local/bin,服务用户
+    #   直接调用(v1 执行模型 = 调用者进程)。插件 daedalus.tx 的 MCP 二进制叫
+    #   daedalus-tx-mcp,走能力插件循环,与这个 CLI 是两回事。
     install -Dm0755 "bin/daedalus-tx" "$root/daedalus-core/files/system/usr/local/bin/daedalus-tx"
     echo "plugin-pack: 全部能力插件 zip(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot/tx)-> daedalus-core/bin/;全部已解包校验安装 -> daedalus-core/files/system/opt/daedalus/plugins/;host/audit/tx CLI(core 现构)+ shell/service(插件仓现构)-> daedalus-core/files/system/usr/local/bin/"
 
