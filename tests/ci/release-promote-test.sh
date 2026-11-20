@@ -197,14 +197,14 @@ st 0 "$(SIZE=1300000000 GH_VIEW_RC=1 rc_of run_leg qcow2 v0.4.0)" "tag push → 
 st "qcow2-v0.4.0.qcow2" "$(upload_name)" "tag push → 上传文件名带 tag"
 # 另一条腿已上传过一行时,SHA256SUMS 必须**追加**而不是覆盖 ——
 # 一份文件描述本次发布的全部资产。
-st 0 "$(SIZE=1300000000 GH_VIEW_RC=1 GH_PREEXISTING_SUMS="deadbeef  iso-v0.4.0.iso" \
+st 0 "$(SIZE=1300000000 GH_VIEW_RC=1 GH_PREEXISTING_SUMS="deadbeef  iso-verify-v0.4.0.iso" \
     rc_of run_leg qcow2 v0.4.0)" "已有 SHA256SUMS 时 → 退出码 0"
 st 2 "$(wc -l <"$TMP/uploads/SHA256SUMS" | tr -d ' ')" "已有一行时 SHA256SUMS 追加为两行(不覆盖别人的)"
-st 1 "$(grep -c 'iso-v0.4.0.iso' "$TMP/uploads/SHA256SUMS")" "原有那一行仍在"
+st 1 "$(grep -c 'iso-verify-v0.4.0.iso' "$TMP/uploads/SHA256SUMS")" "原有那一行仍在"
 
 # --- G ISO 腿同型 ---
 st 0 "$(SIZE=1200000000 GH_VIEW_RC=1 rc_of run_leg iso v0.4.0)" "ISO 正常路径 → 退出码 0"
-st "iso-v0.4.0.iso" "$(upload_name)" "ISO 上传文件名 = 目标资产名"
+st "iso-verify-v0.4.0.iso" "$(upload_name)" "ISO 上传文件名 = 目标资产名"
 
 # --- G2 ISO 判定不是 INSTALLED_LOGIN → 不晋级(证据留在 artifact) ---
 st 0 "$(SIZE=1200000000 GH_VIEW_RC=1 ISO_VERDICT=BLOCKED_EXTERNAL rc_of run_leg iso v0.4.0)" \
