@@ -8,11 +8,13 @@
 //	daedalus-tx rollback <tx-id> [--unit-dir <path>]
 //	daedalus-tx resolve  <tx-id>
 //	daedalus-tx status   <tx-id>
+//	daedalus-tx service-observe --unit <name>
 //
 // stdout 契约(每条子命令**恰一份**机器可读 JSON 文档; 上层 copilot 层
 // 解析 CLI stdout, 而非 JSON-RPC):
 //   - begin   → {"tx_id":"<16hex>"}
 //   - propose/apply/rollback/resolve/status → 事务日志全文(id/created_at/status/steps/rollback_plan)
+//   - service-observe → {"unit","active_state","unit_file_state","enabled","running","known"}
 //   - 一切错误 → {"error":"..."} 且退出码非零
 //
 // 退出码与 daedalus 家族 CLI 对齐(镜像 cmd/daedalus-host/main.go):
@@ -86,6 +88,8 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		return cmdResolve(args, stdout, stderr)
 	case "status":
 		return cmdStatus(args, stdout, stderr)
+	case "service-observe":
+		return cmdServiceObserve(args, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "daedalus-tx: 未知子命令: %s\n\n", sub)
 		fmt.Fprint(stderr, usage())
@@ -157,11 +161,15 @@ func usage() string {
 		"  daedalus-tx apply    <tx-id> [--unit-dir <path>]\n" +
 		"  daedalus-tx rollback <tx-id> [--unit-dir <path>]\n" +
 		"  daedalus-tx resolve   <tx-id>\n" +
-		"  daedalus-tx status   <tx-id>\n\n" +
+		"  daedalus-tx status   <tx-id>\n" +
+		"  daedalus-tx service-observe --unit <name>\n\n" +
 		"旗标: --unit-dir <path> —— service.set 单元文件解析目录覆写(集成测试逃生舱;\n" +
 		"      不给时按 $HOME/.config/systemd/user 解析; 只影响解析目录, 守卫恒生效)。\n" +
+		"      --unit <name> —— service-observe 观测的 user 域单元名(可省略 .service)。\n" +
 		"输出: 每条子命令向 stdout 打印恰一份机器可读 JSON 文档;\n" +
-		"      begin → {\"tx_id\":\"<16hex>\"}; 其余 → 事务日志全文; 错误 → {\"error\":\"...\"}。\n" +
+		"      begin → {\"tx_id\":\"<16hex>\"}; propose/apply/rollback/resolve/status → 事务日志全文;\n" +
+		"      service-observe → {\"unit\",\"active_state\",\"unit_file_state\",\"enabled\",\"running\",\"known\"};\n" +
+		"      错误 → {\"error\":\"...\"}。\n" +
 		"可用 adapter: " + strings.Join(registeredAdapterNames(), ", ") + "\n" +
 		"退出码: 0 成功 / 1 运行期 / 2 用法错误。\n"
 }
