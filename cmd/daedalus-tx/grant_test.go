@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,6 +26,10 @@ import (
 )
 
 const testGrantScope = "systemd:user:restart:nginx.service"
+
+// grantIDPattern 是签发命令自己生成的 id 形状: g-<UTC 日期>-<8 位随机 hex>。
+// 生产代码不消费它(revoke 按文件找条子, 不能硬卡形状), 只在这里钉住签发面的输出契约。
+var grantIDPattern = regexp.MustCompile(`^g-[0-9]{8}-[0-9a-f]{8}$`)
 
 // newGrantEnv 建隔离环境: 审计/事务目录(harness)+ 条子目录 + 默认不存在的档位表。
 // 档位表路径必须显式指向不存在的位置: 否则测试会读到宿主机 /etc 下的真实配置。
@@ -425,6 +430,18 @@ func TestGrantListShowsGrantsAndUsage(t *testing.T) {
 	if doc.Grants[0].IssuedBy != "alice" || doc.Grants[0].MaxUses != 3 {
 		t.Errorf("live 条子字段异常: %+v", doc.Grants[0])
 	}
+	me, err := user.Current()
+	if err != nil {
+		t.Fatalf("取当前用户失败: %v", err)
+	}
+	wantUID, err := strconv.Atoi(me.Uid)
+	if err != nil {
+		t.Fatalf("解析当前 uid 失败: %v", err)
+	}
+	if doc.Grants[0].OwnerUID != wantUID || doc.Grants[1].OwnerUID != wantUID {
+		t.Errorf("owner_uid = %d/%d, want %d(文件属主是唯一可信身份)",
+			doc.Grants[0].OwnerUID, doc.Grants[1].OwnerUID, wantUID)
+	}
 	if !doc.Grants[1].Expired {
 		t.Errorf("dead 条子应标记 expired: %+v", doc.Grants[1])
 	}
@@ -515,6 +532,10 @@ func TestGrantRevokeRemovesOwnGrant(t *testing.T) {
 		IssuedAt: now, ExpiresAt: now.Add(time.Hour), MaxUses: 1,
 	}
 	path := writeTestGrant(t, dir, g)
+	ownUID, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		t.Fatalf("解析当前 uid 失败: %v", err)
+	}
 
 	code, out, errOut := rc("grant", "revoke", g.ID)
 	if code != exitOK {
@@ -536,6 +557,9 @@ func TestGrantRevokeRemovesOwnGrant(t *testing.T) {
 		}
 		if rec.Args["grant_id"] != g.ID {
 			t.Errorf("revoke 审计 grant_id = %v, want %s", rec.Args["grant_id"], g.ID)
+		}
+		if rec.Args["owner_uid"] != float64(ownUID) {
+			t.Errorf("revoke 审计 owner_uid = %v, want %d(身份以文件属主为准)", rec.Args["owner_uid"], ownUID)
 		}
 	}
 	if !found {
@@ -603,4 +627,344 @@ func TestGrantUsageMentionsSubcommands(t *testing.T) {
 			t.Errorf("usage 缺 %q", want)
 		}
 	}
+}
+
+// TestCanRevoke 直接钉「文件属主 ≠ 自己」这道门: 非 root 下造不出别人拥有的文件,
+// 只能把判定本身拿来做单元测试。
+func TestCanRevoke(t *testing.T) {
+	tests := []struct {
+		name      string
+		fileUID   int
+		issuerUID int
+		euid      int
+		wantErr   bool
+	}{
+		{name: "非 root 且属主不同 ⇒ 拒", fileUID: 1001, issuerUID: 1000, euid: 1000, wantErr: true},
+		{name: "非 root 且属主相同 ⇒ 过", fileUID: 1000, issuerUID: 1000, euid: 1000},
+		{name: "root 且属主不同 ⇒ 过", fileUID: 1001, issuerUID: 1000, euid: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := canRevoke(tc.fileUID, tc.issuerUID, tc.euid)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("canRevoke(%d, %d, %d) = nil, want 拒", tc.fileUID, tc.issuerUID, tc.euid)
+				}
+				if !strings.Contains(err.Error(), "root") {
+					t.Errorf("拒绝原因应点明需要 root: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("canRevoke(%d, %d, %d) = %v, want 放行", tc.fileUID, tc.issuerUID, tc.euid, err)
+			}
+		})
+	}
+}
+
+// TestIssuerIdentity 钉死代签语义: 属主与签发权限都跟着真实发起人(SUDO_USER 优先)。
+func TestIssuerIdentity(t *testing.T) {
+	lookupUsers := func(users map[string]*user.User) func(string) (*user.User, error) {
+		return func(name string) (*user.User, error) {
+			if u, ok := users[name]; ok {
+				return u, nil
+			}
+			return nil, fmt.Errorf("user: unknown user %s", name)
+		}
+	}
+
+	t.Run("非 root + SUDO_USER=alice", func(t *testing.T) {
+		uid, name, err := issuerIdentity(1000, "alice",
+			lookupUsers(map[string]*user.User{"alice": {Uid: "1001", Username: "alice"}}))
+		if err != nil {
+			t.Fatalf("issuerIdentity 失败: %v", err)
+		}
+		if uid != 1001 || name != "alice" {
+			t.Errorf("issuerIdentity = (%d, %q), want (1001, \"alice\")", uid, name)
+		}
+	})
+
+	t.Run("root + SUDO_USER=alice ⇒ 属主仍是调用者", func(t *testing.T) {
+		uid, name, err := issuerIdentity(0, "alice",
+			lookupUsers(map[string]*user.User{"alice": {Uid: "1001", Username: "alice"}}))
+		if err != nil {
+			t.Fatalf("issuerIdentity 失败: %v", err)
+		}
+		if uid != 1001 || name != "alice" {
+			t.Errorf("issuerIdentity = (%d, %q), want (1001, \"alice\")", uid, name)
+		}
+	})
+
+	t.Run("非 root + SUDO_USER 查不到 ⇒ 拒", func(t *testing.T) {
+		_, _, err := issuerIdentity(1000, "no-such-user", lookupUsers(nil))
+		if err == nil {
+			t.Fatal("SUDO_USER 查不到用户时必须拒绝签发")
+		}
+		if !strings.Contains(err.Error(), "SUDO_USER") {
+			t.Errorf("错误应点名 SUDO_USER: %v", err)
+		}
+	})
+
+	t.Run("root + 无 SUDO_USER ⇒ root", func(t *testing.T) {
+		uid, name, err := issuerIdentity(0, "", lookupNameOrUID)
+		if err != nil {
+			t.Fatalf("issuerIdentity 失败: %v", err)
+		}
+		if uid != 0 || name != "root" {
+			t.Errorf("issuerIdentity = (%d, %q), want (0, \"root\")", uid, name)
+		}
+	})
+
+	t.Run("名字取 NSS 规范化结果", func(t *testing.T) {
+		uid, name, err := issuerIdentity(1000, "alice-alias",
+			lookupUsers(map[string]*user.User{"alice-alias": {Uid: "1001", Username: "alice"}}))
+		if err != nil {
+			t.Fatalf("issuerIdentity 失败: %v", err)
+		}
+		if uid != 1001 || name != "alice" {
+			t.Errorf("issuerIdentity = (%d, %q), want (1001, \"alice\")", uid, name)
+		}
+	})
+}
+
+// TestGrantAddChownsToIssuer 钉 chown 的正向: 断言 (path, uid) 逐字正确。
+func TestGrantAddChownsToIssuer(t *testing.T) {
+	dir, _, rc := newGrantEnv(t)
+	_, uid := signerContext(t)
+
+	type chownCall struct {
+		path string
+		uid  int
+		gid  int
+	}
+	var calls []chownCall
+	orig := chownFile
+	chownFile = func(path string, uid, gid int) error {
+		calls = append(calls, chownCall{path: path, uid: uid, gid: gid})
+		return nil
+	}
+	t.Cleanup(func() { chownFile = orig })
+
+	code, out, errOut := rc("grant", "add", "--scope", testGrantScope)
+	if code != exitOK {
+		t.Fatalf("grant add 退出码 = %d; stderr: %s", code, errOut)
+	}
+	var doc grantAddDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 grantAddDoc: %v", err)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("chown 调用次数 = %d, want 1(chown 是身份生效的唯一落点): %+v", len(calls), calls)
+	}
+	got := calls[0]
+	if got.uid != int(uid) {
+		t.Errorf("chown uid = %d, want %d", got.uid, uid)
+	}
+	if got.gid != -1 {
+		t.Errorf("chown gid = %d, want -1(只改属主)", got.gid)
+	}
+	if filepath.Dir(got.path) != dir {
+		t.Errorf("chown 路径目录 = %q, want %q", filepath.Dir(got.path), dir)
+	}
+	base := filepath.Base(got.path)
+	if !strings.HasPrefix(base, ".grant-") || !strings.HasSuffix(base, ".tmp") {
+		t.Errorf("chown 应作用于同目录临时文件, 实际 %q", base)
+	}
+	if _, err := os.Stat(filepath.Join(dir, doc.ID+".json")); err != nil {
+		t.Errorf("条子最终文件不存在: %v", err)
+	}
+}
+
+// TestGrantAddFailsAfterIDCollisions 钉「三次撞车不许静默覆盖」。
+func TestGrantAddFailsAfterIDCollisions(t *testing.T) {
+	dir, _, rc := newGrantEnv(t)
+	signerContext(t)
+
+	const fixed = "g-20261120-ffffffff"
+	existing := filepath.Join(dir, fixed+".json")
+	if err := os.WriteFile(existing, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("预置条子失败: %v", err)
+	}
+	orig := newGrantID
+	newGrantID = func(time.Time) (string, error) { return fixed, nil }
+	t.Cleanup(func() { newGrantID = orig })
+
+	code, out, errOut := rc("grant", "add", "--scope", testGrantScope)
+	if code != exitRuntime {
+		t.Fatalf("退出码 = %d, want %d; stdout: %s", code, exitRuntime, out)
+	}
+	if !strings.Contains(errOut, "唯一 id") {
+		t.Errorf("stderr 应说明生成唯一 id 失败: %q", errOut)
+	}
+	oneJSONDoc(t, out)
+	data, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatalf("既有条子不应被删: %v", err)
+	}
+	if string(data) != "{}" {
+		t.Errorf("既有条子被覆盖: %q", data)
+	}
+}
+
+// TestGrantDirRejectsRelativePath 钉 DAEDALUS_GRANTS_DIR 必须是绝对路径。
+func TestGrantDirRejectsRelativePath(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+	}{
+		{"add", []string{"grant", "add", "--scope", testGrantScope}},
+		{"list", []string{"grant", "list"}},
+		{"revoke", []string{"grant", "revoke", "g-20260101-deadbeef"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, rc := newGrantEnv(t)
+			signerContext(t)
+			const rel = "daedalus-rel-grants-test"
+			t.Cleanup(func() { _ = os.RemoveAll(rel) })
+			t.Setenv(envGrantsDir, rel)
+
+			code, out, errOut := rc(tc.argv...)
+			if code != exitRuntime {
+				t.Fatalf("退出码 = %d, want %d; stdout: %s", code, exitRuntime, out)
+			}
+			if !strings.Contains(errOut, "绝对路径") {
+				t.Errorf("stderr 应点明必须是绝对路径: %q", errOut)
+			}
+			oneJSONDoc(t, out)
+			if _, err := os.Stat(rel); err == nil {
+				t.Errorf("相对路径不得被创建: %s", rel)
+			}
+		})
+	}
+}
+
+// TestGrantListKeysIDByFileName 钉「列出来的 id 一定能撤销」: 手写文件另写 id 只进 invalid[]。
+func TestGrantListKeysIDByFileName(t *testing.T) {
+	dir, _, rc := newGrantEnv(t)
+	now := time.Now().UTC()
+	g := &grant.Grant{
+		ID: "g-20261120-abcdef01", Scope: []string{testGrantScope}, IssuedBy: "alice",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour), MaxUses: 1,
+	}
+	data, err := json.Marshal(g)
+	if err != nil {
+		t.Fatalf("序列化条子失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "renamed.json"), data, 0o644); err != nil {
+		t.Fatalf("写条子失败: %v", err)
+	}
+
+	code, out, errOut := rc("grant", "list")
+	if code != exitOK {
+		t.Fatalf("grant list 退出码 = %d; stderr: %s", code, errOut)
+	}
+	var doc grantListDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 grantListDoc: %v", err)
+	}
+	if len(doc.Grants) != 0 {
+		t.Errorf("文件名与 id 不一致的条子不得列出: %+v", doc.Grants)
+	}
+	if len(doc.Invalid) != 1 || doc.Invalid[0].File != "renamed.json" {
+		t.Errorf("文件名与 id 不一致的条子应进 invalid[]: %+v", doc.Invalid)
+	}
+
+	// 反证: 该 id 本来也撤不掉, 所以列出来只会骗人。
+	code, _, errOut = rc("grant", "revoke", g.ID)
+	if code != exitRuntime || !strings.Contains(errOut, "不存在") {
+		t.Errorf("按文件里自报的 id 撤销应失败: code=%d stderr=%q", code, errOut)
+	}
+}
+
+// TestGrantHelpExitsOK 钉帮助是成功路径, 不是用法错。
+func TestGrantHelpExitsOK(t *testing.T) {
+	for _, argv := range [][]string{
+		{"grant", "-h"},
+		{"grant", "--help"},
+		{"grant", "help"},
+		{"grant", "add", "--help"},
+		{"grant", "add", "help"},
+		{"grant", "list", "--help"},
+		{"grant", "revoke", "-h"},
+	} {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			_, _, rc := newGrantEnv(t)
+			code, out, _ := rc(argv...)
+			if code != exitOK {
+				t.Fatalf("退出码 = %d, want %d; stdout: %s", code, exitOK, out)
+			}
+			if !strings.Contains(out, "grant add") || !strings.Contains(out, "用法") {
+				t.Errorf("应输出 usage: %q", out)
+			}
+		})
+	}
+}
+
+// TestGrantAddNoteValues 钉 --note 的空值合法、以 -- 开头的值视为缺值。
+func TestGrantAddNoteValues(t *testing.T) {
+	t.Run("空备注合法", func(t *testing.T) {
+		dir, _, rc := newGrantEnv(t)
+		signerContext(t)
+
+		code, out, errOut := rc("grant", "add", "--scope", testGrantScope, "--note", "")
+		if code != exitOK {
+			t.Fatalf("退出码 = %d; stderr: %s", code, errOut)
+		}
+		var doc grantAddDoc
+		if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+			t.Fatalf("stdout 非 grantAddDoc: %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, doc.ID+".json"))
+		if err != nil {
+			t.Fatalf("读条子失败: %v", err)
+		}
+		g, err := grant.Parse(data)
+		if err != nil {
+			t.Fatalf("条子过不了 grant.Parse: %v", err)
+		}
+		if g.Note != "" {
+			t.Errorf("空备注应原样保留为空, 实际 %q", g.Note)
+		}
+	})
+
+	t.Run("以 -- 开头的值视为缺值", func(t *testing.T) {
+		_, _, rc := newGrantEnv(t)
+		code, out, _ := rc("grant", "add", "--scope", testGrantScope, "--note", "--ttl", "30m")
+		if code != exitUsage {
+			t.Fatalf("退出码 = %d, want %d; stdout: %s", code, exitUsage, out)
+		}
+		oneJSONDoc(t, out)
+	})
+
+	t.Run("--note 后无值", func(t *testing.T) {
+		_, _, rc := newGrantEnv(t)
+		code, out, _ := rc("grant", "add", "--scope", testGrantScope, "--note")
+		if code != exitUsage {
+			t.Fatalf("退出码 = %d, want %d; stdout: %s", code, exitUsage, out)
+		}
+		oneJSONDoc(t, out)
+	})
+}
+
+// TestGrantAddDistinguishesBrokenAutonomyConfig 钉「没有档位表」与「档位表非法」两种提示。
+func TestGrantAddDistinguishesBrokenAutonomyConfig(t *testing.T) {
+	_, _, rc := newGrantEnv(t)
+	if os.Geteuid() != 0 {
+		t.Setenv("SUDO_USER", nonRootUser(t).Username)
+	}
+	writeAutonomy(t, "[[signer]\nuser = \"alice\"\n")
+
+	code, out, errOut := rc("grant", "add", "--scope", testGrantScope)
+	if code != exitRuntime {
+		t.Fatalf("退出码 = %d, want %d; stdout: %s", code, exitRuntime, out)
+	}
+	if !strings.Contains(errOut, "不可用") {
+		t.Errorf("stderr 应说明档位表存在但不可用: %q", errOut)
+	}
+	if strings.Contains(errOut, "还没有档位表") {
+		t.Errorf("档位表非法时不得误报「没有档位表」: %q", errOut)
+	}
+	oneJSONDoc(t, out)
 }
