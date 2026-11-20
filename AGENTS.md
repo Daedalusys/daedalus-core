@@ -49,8 +49,9 @@ Daedalusys/                    # 本仓 = daedalus-core (镜像编排 + 5 个 co
 │       ├── usr/lib/systemd/system/   # daedalus-*.service + .service.d drop-ins (landlock/credentials)
 │       ├── usr/local/bin/            # daedalus CLI wrapper + daedalus-{host,audit,shell} 二进制
 │       └── etc/credstore/            # systemd LoadCredential placeholders
-├── examples/                  # mcp_client_config.json (4 Go 能力服务器条目)
+├── examples/                  # mcp_client_config.json (7 个能力服务器条目;缺 service/snapshot/osstate/trace/proc/blueprint)
 ├── tests/deno/                # 镜像外 Deno 测试: copilot 5 组 .test.ts + shellpolicy_contract.test.ts (Go↔Deno 跨语言契约)
+├── tests/mcp/                 # 外部 AI 客户端接入演练: spike-ai-agent.sh + 报告器 + EVIDENCE/(量「agent 住在节点上」的事实)
 ├── base_image/                # VENDORED AlmaLinux/atomic-desktop fork (gitignored, own .git) — sync-daedalus.sh 落位目标
 └── .github/workflows/         # build-daedalus.yml (runs `just build` from repo root + go-test/test 门 + 镜像零残留断言)
 ```
@@ -208,7 +209,7 @@ Daedalus implements OS capability servers adhering to the Model Context Protocol
 ### 4c. Blueprint Server (`daedalus.blueprint` plugin / `cmd/daedalus-blueprint`)
 - **Purpose**: 可复用的参数化配置模板(蓝图)渲染与安全应用:nginx 站点/反代、postgres 库/用户、redis ACL、haproxy 后端。数据经 `//go:embed` 编入二进制(`../daedalus-plugins/blueprint/cmd/daedalus-blueprint/blueprints/`,构建期由 `just blueprint-embed` 从 `../daedalus-plugins/blueprint/blueprints/` 复制,源码侧为唯一事实源),渲染走 Go `text/template`,schema 校验经 `../daedalus-sdk/blueprint` + `jsonschema-go` 预编译。
 - **6 Tools**: `blueprint_list` / `blueprint_inspect`(只读)/ `blueprint_render`(渲染预览 + 确认令牌)/ `blueprint_apply` / `blueprint_status` / `blueprint_remove`(写型,经确认令牌消费)。
-- **执行模型 v1-direct**: render 产生单次有效 confirm_token(15 分钟过期,成功即消费),apply 以令牌为前提,渲染内容经 daedalus-tx `blueprint.write` 适配器落盘(三段生命周期快照/写/回滚)。secret 引用只接受 `secret://` 形态,明文 fail-closed 拒绝(v1 恒返 `ErrSecretSourceUnavailable`,KWallet/credstore 接入位预留)。
+- **执行模型 v1-direct**: render 产生单次有效 confirm_token(15 分钟过期,成功即消费),apply 以令牌为前提,自己读旧文件快照 → 写入渲染结果 → post_check → reload(白名单服务),失败逆序回滚。**不经 daedalus-tx**(`tx_id` 恒为 `(v1-direct)`;`blueprint.write` 适配器从未落地,tx 注册表里没有它),审计由 `handleApply` 单点经 `recordAudit` 落链。secret 引用只接受 `secret://` 形态,明文 fail-closed 拒绝(v1 恒返 `ErrSecretSourceUnavailable`,KWallet/credstore 接入位预留)。
 - **6 蓝图**: `nginx-vhost` / `nginx-reverse-proxy` / `postgres-db` / `postgres-user` / `redis-acl` / `haproxy-backend`(每目录 manifest.json + schema.json + template.tmpl + pre_check.sh + post_check.sh + README.md)。
 - **Policy**: `policy.toml [blueprints]` 节(输出目录白名单 `output_dirs` / post_check 命令白名单 `post_check_commands` / reload 服务白名单 `reload_services` / secret 来源 `secret_sources`);post_check 白名单经 `../daedalus-sdk/shellpolicy` 的 `RegisterBlueprintsPostCheckSource` 钩子注入(严格子集,独立于主白名单,与 policy.toml 三点漂移测试钉死)。
 - **Systemd**: `daedalus-blueprint.service` 参照 shell/fs 模式(DynamicUser/Landlock/seccomp drop-in),`ReadWritePaths` 放行 output_dirs 落盘;ExecStart 由 76 脚本 render-unit 渲染自校验。构建期打包走暂存目录排除 `blueprints/` 数据(zip 只含 manifest + bin/,蓝图数据不重复进 rootfs,plan §4 line 121)。
