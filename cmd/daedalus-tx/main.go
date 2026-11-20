@@ -9,12 +9,16 @@
 //	daedalus-tx resolve  <tx-id>
 //	daedalus-tx status   <tx-id>
 //	daedalus-tx service-observe --unit <name>
+//	daedalus-tx grant add --scope <scope> [--ttl <dur>] [--count N] [--note <text>]
+//	daedalus-tx grant list
+//	daedalus-tx grant revoke <id>
 //
 // stdout 契约(每条子命令**恰一份**机器可读 JSON 文档; 上层 copilot 层
 // 解析 CLI stdout, 而非 JSON-RPC):
 //   - begin   → {"tx_id":"<16hex>"}
 //   - propose/apply/rollback/resolve/status → 事务日志全文(id/created_at/status/steps/rollback_plan)
 //   - service-observe → {"unit","active_state","unit_file_state","enabled","running","known"}(恰六键)
+//   - grant add/list/revoke → 条子文档 / 条子列表 / {"revoked":"<id>"}
 //   - 一切错误 → {"error":"..."} 且退出码非零
 //
 // 退出码与 daedalus 家族 CLI 对齐(镜像 cmd/daedalus-host/main.go):
@@ -91,6 +95,8 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		return cmdStatus(args, stdout, stderr)
 	case "service-observe":
 		return cmdServiceObserve(args, stdout, stderr)
+	case "grant":
+		return cmdGrant(args, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "daedalus-tx: 未知子命令: %s\n\n", sub)
 		fmt.Fprint(stderr, usage())
@@ -163,15 +169,26 @@ func usage() string {
 		"  daedalus-tx rollback <tx-id> [--unit-dir <path>]\n" +
 		"  daedalus-tx resolve   <tx-id>\n" +
 		"  daedalus-tx status   <tx-id>\n" +
-		"  daedalus-tx service-observe --unit <name>\n\n" +
+		"  daedalus-tx service-observe --unit <name>\n" +
+		"  daedalus-tx grant add    --scope <scope> [--scope <scope>...] [--ttl <dur>] [--count N] [--note <text>]\n" +
+		"  daedalus-tx grant list\n" +
+		"  daedalus-tx grant revoke <id>\n\n" +
 		"旗标:\n" +
 		"  --unit-dir <path> —— service.set 单元文件解析目录覆写(集成测试逃生舱;\n" +
 		"      不给时按 $HOME/.config/systemd/user 解析; 只影响解析目录, 守卫恒生效)。\n" +
 		"  --unit <name> —— service-observe 观测的 user 域单元名; 必须带 .service 后缀\n" +
 		"      (观测侧绝不隐式补后缀或改名: 防「以为观测 A、实际查 B」)。\n" +
+		"  --scope <scope> —— grant add 覆盖的作用域, 可重复; 严格形态\n" +
+		"      systemd:user:<action>:<target> 或 <runtime>:<action>:<target>。\n" +
+		"  --ttl <dur> —— grant add 的有效期(默认 30m), 全局上限 24h。\n" +
+		"  --count N —— grant add 的可用次数(默认 1), 全局上限 10。\n" +
+		"  --note <text> —— 条子备注(只作线索, 不参与判定)。\n" +
+		"  grant 条子目录默认 /run/daedalus/grants, 可用 DAEDALUS_GRANTS_DIR 覆盖;\n" +
+		"      签发身份 = 文件属主 uid(SUDO_USER 优先, 否则当前用户), 撤销别人的条子需要 root。\n" +
 		"输出: 每条子命令向 stdout 打印恰一份机器可读 JSON 文档;\n" +
 		"      begin → {\"tx_id\":\"<16hex>\"}; propose/apply/rollback/resolve/status → 事务日志全文;\n" +
 		"      service-observe → {\"unit\",\"active_state\",\"unit_file_state\",\"enabled\",\"running\",\"known\"}(恰六键);\n" +
+		"      grant add → 条子文档; grant list → {\"grants\":[...],\"invalid\":[...]}; grant revoke → {\"revoked\":\"<id>\"};\n" +
 		"      错误 → {\"error\":\"...\"}。\n" +
 		"可用 adapter: " + strings.Join(registeredAdapterNames(), ", ") + "\n" +
 		"退出码: 0 成功 / 1 运行期 / 2 用法错误。\n" +
