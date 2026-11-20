@@ -5,17 +5,15 @@
 # 与 probe-first-run.sh 的分工:那个验的是**镜像**;本脚本验的是 **Release 资产本身**
 # (下载、引导、试用账号能否登录、sudo 是否可用)。这是「第一版能不能上手」的最后一环。
 #
-# 下载慢的实测口径(2026-11-19):直连 GitHub 约 0.1 MB/s(1.24 GiB 要 6 小时以上),
-# 走加速站约 1.3–1.9 MB/s(≈15 分钟)。本脚本默认直连,可用 DL_PREFIX 换成加速前缀;
-# 两条路都下完要用 Release 上的 SHA256SUMS 校验,校验不过就不算拿到。
+# 下载完必须用 Release 上的 SHA256SUMS 校验,校验不过就不算拿到。
 #
 # 用法:
 #   bash try-release-asset.sh <release-tag>          # 默认 v0.1.0
 # 环境:
 #   WORK=/path       工作目录(默认 ~/daedalus-release-try)
 #   TRY_SSH_PORT     宿主端口(默认 2244)
-#   DL_PREFIX=""     下载 URL 前缀;例:"https://ghfast.top/" 会拼成
-#                    https://ghfast.top/https://github.com/...
+#   DL_PREFIX=""     下载 URL 前缀(默认直连 Release);给自定义前缀时会拼成
+#                    <DL_PREFIX><Release URL>
 #   SKIP_DOWNLOAD=1  跳过下载(本地已有该文件时用)
 # =============================================================================
 set -uo pipefail
