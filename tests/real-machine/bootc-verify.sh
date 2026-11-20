@@ -181,7 +181,7 @@ fi
 avail_gb="$(df -BG --output=avail "$WORK" 2>/dev/null | tail -1 | tr -dc '0-9')"
 info "工作目录可用空间: ${avail_gb:-?} GB"
 if [ "${avail_gb:-0}" -lt 15 ]; then
-    warn "可用空间 < 15 GB;qcow2 未压缩约 1.3 GB(发布资产是压缩 qcow2,体积更小),但 podman 存储/解包会额外占用"
+    warn "可用空间 < 15 GB;qcow2 约 1.3 GB,但 podman 存储/解包会额外占用"
 fi
 
 say "Phase 0.1 · 宿主盘基线(用于事后证明未被写入)"
