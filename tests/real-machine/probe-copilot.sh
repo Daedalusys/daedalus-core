@@ -44,14 +44,14 @@ printf '%s\n' "$LAUNCH" | sed 's/^/      /' | tee -a "$DRIVER_LOG"
 say "A11-1 · --dry-run 是否能在无 key 下翻译"
 D1="$(gssh "daedalus --dry-run 'show os version' 2>&1; echo RC=\$?" 2>&1)"
 printf '%s\n' "$D1" | sed 's/^/      /' | tee -a "$DRIVER_LOG"
-if printf '%s' "$D1" | grep -qi 'missing LLM API key'; then
-    driver_verdict NOTE "A11-1 BLOCKED: no key(dry-run 仍需 LLM 翻译;实测文案见上)"
+if printf '%s' "$D1" | grep -q 'RC=2' && printf '%s' "$D1" | grep -qi 'missing LLM API key'; then
+    driver_verdict NOTE "A11-1 BLOCKED: no key(dry-run 仍需 LLM 翻译;缺 key 属前置不满足 rc=2;实测文案见上)"
 elif printf '%s' "$D1" | grep -qiE 'is degraded|permission denied'; then
     driver_verdict FAIL "A11-1 CLI 在 guest 内不可用:copilot 插件被判 degraded(目录权限不足,普通用户读不到 manifest;见 Daedalusys/daedalus-core#89)"
 elif printf '%s' "$D1" | grep -qE 'RC=0' && printf '%s' "$D1" | grep -qiE 'command|mode|dry'; then
     driver_verdict PASS "A11-1 --dry-run 产出翻译(rc=0)"
 else
-    driver_verdict FAIL "A11-1 --dry-run 未产出可判定输出: $(printf '%s' "$D1" | head -1)"
+    driver_verdict FAIL "A11-1 缺 key 未按前置不满足拒绝(期望 rc=2 且文案含 'missing LLM API key'): $(printf '%s' "$D1" | head -1)"
 fi
 
 say "A11-2 · watchdog(rc=124 + 无残留进程)"

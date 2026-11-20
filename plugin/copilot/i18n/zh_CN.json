@@ -14,6 +14,7 @@
   "dryrun.would_execute": "[dry-run] 建议命令(本次未运行): {0}",
   "dryrun.explanation": "  (说明: {0})",
   "error.config": "配置错误: {0}",
+  "error.audit_unavailable": "审计日志不可用:/var/log/daedalus 与 $HOME/.local/share/daedalus 均不可写,无法写入防篡改哈希链。已拒绝启动。修复:设置 DAEDALUS_AUDIT_LOG_PATH 指向可写的审计文件,或让 $HOME/.local/share/daedalus 可写。",
   "error.translate": "{0}",
   "error.policy_reject": "安全策略拒绝: {0}",
   "error.interactive_non_tty": "交互确认(-i)需要终端。非终端环境下仅沙箱白名单内的只读诊断会运行,其余只展示。\n",

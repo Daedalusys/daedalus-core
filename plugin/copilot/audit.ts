@@ -85,39 +85,66 @@ export function getAuditBinary(): string {
 
 /**
  * 审计日志路径解析：DAEDALUS_AUDIT_LOG_PATH → /var/log/daedalus/audit.jsonl
- * → 父目录不可访问时回退 $HOME/.local/share/daedalus/audit.jsonl。
+ * → $HOME/.local/share/daedalus/audit.jsonl；两条都不可写返回空串。
+ *
+ * 判据是"当前用户能否真正写入"：实测创建并删除一个探测文件。仅看目录存在
+ * 或 mode 位会被 root 与 ACL 骗过（非 root 对 /var/log/daedalus 可读可进不可写
+ * 却 stat 成功），导致写入静默失败、哈希链审计丢失。
  */
-export function resolveAuditPath(): string {
+export interface ResolveAuditPathOptions {
+  primaryDir?: string;
+  home?: string;
+}
+
+/** 实际落一个探测文件再删除；写不进去就是不可用（探测文件残留不影响判定）。 */
+function directoryWritable(dir: string): boolean {
+  const pid = (globalThis as any).Deno?.pid ?? 0;
+  const probe = `${dir}/.daedalus-audit-write-probe-${pid}-${
+    Math.random().toString(36).slice(2)
+  }`;
+  try {
+    Deno.writeTextFileSync(probe, "");
+  } catch {
+    return false;
+  } finally {
+    try {
+      Deno.removeSync(probe);
+    } catch {
+      // 写入失败时文件可能从未创建；清理失败不改变可写性判定
+    }
+  }
+  return true;
+}
+
+/** mkdir -p；目录已存在视为成功，创建失败留给可写性探测判定。 */
+function ensureDirectory(dir: string): boolean {
+  try {
+    Deno.mkdirSync(dir, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveAuditPath(opts: ResolveAuditPathOptions = {}): string {
   const envPath = Deno.env.get("DAEDALUS_AUDIT_LOG_PATH");
   if (envPath) {
+    // 显式覆盖原样返回：不探测、不改写调用方的意图（探测失败也照样交给 CLI 报错）。
     return envPath;
   }
 
-  const primaryPath = "/var/log/daedalus/audit.jsonl";
-  const parentDir = "/var/log/daedalus";
-  const home = Deno.env.get("HOME") || "/root";
+  const primaryDir = opts.primaryDir ?? "/var/log/daedalus";
+  const home = (opts.home ?? Deno.env.get("HOME") ?? "/root").replace(/\/+$/, "");
   const fallbackDir = `${home}/.local/share/daedalus`;
-  const fallbackPath = `${fallbackDir}/audit.jsonl`;
 
-  try {
-    if (typeof (Deno as any).statSync === "function") {
-      (Deno as any).statSync(parentDir);
-    } else if (typeof (Deno as any).stat === "function") {
-      (Deno as any).stat(parentDir);
-    }
-    return primaryPath;
-  } catch (_err) {
-    try {
-      if (typeof (Deno as any).mkdirSync === "function") {
-        (Deno as any).mkdirSync(fallbackDir, { recursive: true });
-      } else if (typeof (Deno as any).mkdir === "function") {
-        (Deno as any).mkdir(fallbackDir, { recursive: true });
-      }
-    } catch {
-      // 忽略 mkdir 失败
-    }
-    return fallbackPath;
+  if (directoryWritable(primaryDir)) {
+    return `${primaryDir}/audit.jsonl`;
   }
+  if (ensureDirectory(fallbackDir) && directoryWritable(fallbackDir)) {
+    return `${fallbackDir}/audit.jsonl`;
+  }
+  // 空串 = 明确"审计不可用"信号；绝不返回一条必然写入失败的路径。
+  return "";
 }
 
 /**
