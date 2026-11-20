@@ -156,7 +156,7 @@ OS 层早有这个文化:bootc/OSTree 让整个部署可一键原子回滚。Dae
 | `capability` | OS 能力 | 保留位,无 provider(七件 capability 插件是打包维度,不声明 capability 资源) |
 | `task` | 任务 | 已落地:tx `task.set`(仅生命周期 `enabled`/`disabled`/`absent`;无独立 MCP server,无资源声明) |
 | `transaction` | 事务 | 保留位,无 provider(tx 原语另位) |
-| `policy` | 策略 | 已落地:tx `policy.set`(manager-only,`loaded`/`absent` 两档;`absent` 写 DisabledSentinel,`policy.Load`返 `ErrDisabled`,daedalus 服务 fail-closed;agent 侧不实现,fleet push 分发) |
+| `policy` | 策略 | 已落地:tx `policy.set`(`loaded`/`absent` 两档;`absent` 写 DisabledSentinel,`policy.Load` 返 `ErrDisabled`,daedalus 服务 fail-closed;**immutable/atomic 节点 fail-closed** —— atomic 上策略变更走镜像重建 + `bootc upgrade`,可自助改策略需把真源迁到 `/etc`,未做;agent 侧不实现,fleet push 分发) |
 
 **轴三 · 节点 `kind`**(fleet 版新增,正交于轴二;spec G8):
 

@@ -27,6 +27,22 @@ var policyFilePath = policy.ProductionPath
 // policyScopeRejectMsg 三段共用 euid!=0 拒串(逐字锁定,测试与 AGENTS.md 描述引用)。
 const policyScopeRejectMsg = "policy.set requires root (euid=0) to write /opt/daedalus/shared/policy.toml"
 
+// policyImmutableNodeRejectMsg 是 policy.set 在 immutable(bootc)节点的逐字拒绝串,
+// 三段共用。文案同时点出「为什么不可用」与「正确通道」——真机探针按
+// immutable / bootc upgrade 等词判定「清晰 fail-closed」而不是 Python traceback。
+const policyImmutableNodeRejectMsg = "policy.set 在 immutable(bootc)节点上不可用:atomic 节点的 / 是 composefs 只读,策略真源在镜像内(只读副本);改策略走镜像重建 + bootc upgrade(新部署 + bootc rollback)"
+
+// rejectPolicyImmutableNode 是 policy.set 三段共用的 fail-closed 门, 语义与
+// package.set 的 rejectImmutableNode 同构: bootc/atomic 节点的 / 由 composefs
+// 只读接管, policy.toml 写不进去, 策略变更只能走镜像重建 + bootc upgrade。
+// 拒绝必须发生在任何快照 / ref 解析 / 写盘之前。
+func rejectPolicyImmutableNode() error {
+	if immutableNode() {
+		return errors.New(policyImmutableNodeRejectMsg)
+	}
+	return nil
+}
+
 // readPolicyFileBytes 读整份文件;不存在 → (nil, nil)(不当作错,Propose 期仅用于 loaded;
 // absent 不关心内容)。其余读错如实上抛。
 func readPolicyFileBytes(path string) ([]byte, error) {

@@ -139,7 +139,7 @@ Spec(资源声明) → Tx(事务五步) → Observe(state 缓存) → Audit(哈�
    不是执行破坏性命令。
 2. **Tx(执行面)**:`daedalus-tx` 走 `begin`→`propose`→`apply`(`rollback` 兜底),
    每步带 before/after 快照与逆序回滚计划并落 journal;适配器执行真实副作用,
-   现役 `service.set`(user-scope-only)、`package.set`(要求 euid=0)、`task.set`(user-scope-only)、`container.set`(rootless-only,euid==0 拒;podman domain — issue #1 container 第二刀)、`policy.set`(manager-only,euid==0 要求;`content_ref` 写 `/opt/daedalus/shared/policy.toml`;`absent` 写 `policy.DisabledSentinel` 触发 `policy.Load` fail-closed,可逆 — issue #1 第三刀)。
+   现役 `service.set`(user-scope-only)、`package.set`(要求 euid=0)、`task.set`(user-scope-only)、`container.set`(rootless-only,euid==0 拒;podman domain — issue #1 container 第二刀)、`policy.set`(euid==0 要求;`content_ref` 写 `/opt/daedalus/shared/policy.toml`;`absent` 写 `policy.DisabledSentinel` 触发 `policy.Load` fail-closed,可逆 — issue #1 第三刀;**immutable/atomic 节点 fail-closed**,atomic 上策略变更走镜像重建 + `bootc upgrade` — issue #188)。
    package 的 Apply 以捕获 dnf history id 并落 sidecar 为成功必要条件,fail-closed。
 3. **Observe(观测面)**:只读查询(`service.query` / `service.list` 等)写 `state.jsonl`
    追加式缓存,行形 `StateEntry{kind, name, observed_at, payload}`;派生缓存与证据层分离。
