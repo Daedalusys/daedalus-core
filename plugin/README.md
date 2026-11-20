@@ -2,8 +2,9 @@
 
 四层结构(决策 23/24 + 25)中的**插件层**:本目录只留 copilot 一个官方插件
 (`daedalus.copilot`,Deno 源码 + `daedalus.plugin.json`),**留主仓**;
-其余 13 个 Go 能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot)已迁独立插件仓
-`daedalus-plugins/`(见其根 README)。
+其余 14 个 Go 能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot/tx)已迁独立插件仓
+`daedalus-plugins/`(见其根 README)。其中 `daedalus.tx` 是 MCP 侧唯一的写通道,源码在
+`../daedalus-plugins/tx/`,二进制名 `bin/daedalus-tx-mcp`(勿与 core 的事务 CLI `daedalus-tx` 混淆)。
 
 本目录是**源码态与打包输入**;镜像内的权威形态是安装态
 `daedalus-core/files/system/opt/daedalus/plugins/<id>/`(构建产物,经 Pack→Verify 生成,
@@ -14,7 +15,7 @@ manifest 带逐条目 sha256 checksums)。本目录内容绝不直接进镜像 r
 | 层 | 位置 | 内容 |
 |----|------|------|
 | 代码逻辑层 | `daedalus-core/` | Go 模块根(`cmd/` 5 个 core runtime 二进制 + `internal/{controller,tx}` 契约包) |
-| 插件层(源码侧) | `daedalus-core/plugin/`(copilot) + `daedalus-plugins/`(13 能力) | 官方预置插件定义:manifest + 源码/二进制 |
+| 插件层(源码侧) | `daedalus-core/plugin/`(copilot) + `daedalus-plugins/`(14 能力) | 官方预置插件定义:manifest + 源码/二进制 |
 | SDK 层 | `daedalus-sdk/` | 安全核心包 + 3 个 Provider/Slot 占位(独立仓根) |
 | 镜像构建层 | `daedalus-core/files/` | rootfs 落位(构建产物,非源码) |
 
@@ -48,7 +49,7 @@ plugin/
     └── {main,policy,audit,exec,llm}.test.ts   # deno test 单元测试(不打包,住仓库根 tests/deno/)
 ```
 
-13 能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot)的目录布局见
+14 能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot/tx)的目录布局见
 `daedalus-plugins/README.md`。
 
 ## 清单格式(`daedalus.plugin.json`)
@@ -117,6 +118,11 @@ v1 状态记忆按上下文隔离(DynamicUser 命名空间,决策 25 补充条�
 `daedalus-tx` **不在本目录**、无 `daedalus.plugin.json`、无 systemd 单元(v1 执行模型:
 用户态调用的 CLI,`daedalus-core/cmd/daedalus-tx/`;用户作用域由适配器路径守卫无条件强制,装饰性单元是反模式)。
 `just plugin-pack` 把它装到 `daedalus-core/files/system/usr/local/bin/daedalus-tx`(镜像内 `/usr/local/bin/`)。
+
+名字相近的另一个东西:**能力插件 `daedalus.tx`**(源码 `../daedalus-plugins/tx/`,二进制
+`bin/daedalus-tx-mcp`,有 manifest 与 `daedalus-tx.service` 单元)是 MCP 客户端接入的写通道,
+它只构造并调用本节的 CLI;两者不是同一个二进制。本节说的是 CLI(非插件)。
+
 子命令 `begin`/`propose`/`apply`/`rollback`/`status`;只有 begin/apply/rollback 在审计哈希链上
 盖 `TxID`+`TxStep`,propose/status 发空 TxID 条目(链校验语义见 plan 决策 25)。
 
@@ -142,7 +148,7 @@ v1 状态记忆按上下文隔离(DynamicUser 命名空间,决策 25 补充条�
 - **copilot**: `./scripts/pack-copilot-plugin.sh` —— 暂存 5 个 `.ts`(排除 `.test.ts`)+ 清单
   → Pack 注入 checksums → `-verify --keep` 解压安装态(解压即完整校验,摘要不符拒绝安装)。
   命令顾问(command advisor)插件:L0 之外的风险级别仅展示、由用户手动执行。
-- **13 能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot)**: 源码在 `daedalus-plugins/`,
+- **14 能力插件(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot/tx)**: 源码在 `daedalus-plugins/`,
   `just plugin-pack` 构建 Go 二进制拷入各自 `bin/` → 同一 Pack→Verify 流程;
   顺带安装宿主与 copilot 运行期依赖的审计/执行/事务二进制到
   `daedalus-core/files/system/usr/local/bin/daedalus-{host,audit,shell,service,tx}`(task 21 + plan todo 17;

@@ -44,7 +44,7 @@ ssh -p 2222 daedalus@127.0.0.1     # 口令:daedalus
 ## 3. 看它有什么
 
 ```bash
-daedalus-host list        # 14 个插件,status 列应全是 ok
+daedalus-host list        # 插件清单,status 列应全是 ok
 sudo daedalus-smoke       # 镜像自带的端到端自检,最后一行 SMOKE OK
 sudo bootc status         # 原子部署:当前部署 + 可回滚的上一个部署
 ```
