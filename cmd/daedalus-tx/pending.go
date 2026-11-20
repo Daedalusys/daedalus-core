@@ -10,6 +10,10 @@ package main
 // 批准绑定的是**具体 argv**, 不是一类操作: argv_sha256 用 NUL 连接后取 sha256
 // (NUL 不可能出现在 argv 里, 因此 ["a b"] 与 ["a","b"] 不会撞), 消费侧重新计算
 // 并逐字比对, 任何参数变动都算新动作。
+//
+// approve 必须带 --expect-sha256(= 人从 pending show/list 看到的指纹): 待办文件
+// 属主能在审查之后整份改写, 只有把批准钉在人看过的那一份 argv 上, 改写才会表现为
+// 拒绝而不是"批准了另一个动作"。指纹一致之前绝不落批准记录。
 
 import (
 	"crypto/sha256"
@@ -23,6 +27,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Daedalusys/daedalus-sdk/autonomy"
@@ -37,6 +42,9 @@ const (
 	envPendingDir    = "DAEDALUS_PENDING_DIR"
 	envApprovalsDir  = "DAEDALUS_APPROVALS_DIR"
 	approverIdentity = "root"
+	// maxPendingFileBytes 给待办文件设上限: 待办目录属主可写, root 审查时不该被
+	// 一份超大 JSON 拖成内存压力点; 超限的待办一律拒绝而不是截断后猜。
+	maxPendingFileBytes = 64 << 10
 )
 
 // pendingIDPattern 是待办 id 的形状门: p- 前缀 + 安全文件名字符。
@@ -80,7 +88,7 @@ type pendingInvalidEntry struct {
 // pendingListDoc 是 pending list 的 stdout 文档。
 type pendingListDoc struct {
 	Pending []pendingListEntry    `json:"pending"`
-	Invalid []pendingInvalidEntry `json:"invalid,omitempty"`
+	Invalid []pendingInvalidEntry `json:"invalid"`
 }
 
 // approvalDoc 是批准记录的线上形状(消费侧读它并与待办 argv 比对)。
@@ -165,48 +173,106 @@ func cmdPendingShow(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// cmdApprove 由 root 批准一条待办: 校验存在/未过期 → 在批准目录写不可转让的记录。
+// approveOptions 是 approve 的旗标集合。
+type approveOptions struct {
+	id        string
+	expectSHA string
+}
+
+// parseApproveArgs 解析 approve 的 <pending-id> 与 --expect-sha256; 任何形状错都是用法错误。
+// --expect-sha256 必填: 没有"人看过的指纹"这个锚, 批准就只能绑定 approve 那一刻的文件。
+func parseApproveArgs(args []string, stdout, stderr io.Writer) (approveOptions, bool) {
+	var opts approveOptions
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i]; arg {
+		case "--expect-sha256":
+			if i+1 >= len(args) || args[i+1] == "" {
+				failUsage(stdout, stderr, "--expect-sha256 需要跟随非空 <hash> 参数")
+				return opts, false
+			}
+			if opts.expectSHA != "" {
+				failUsage(stdout, stderr, "--expect-sha256 至多出现一次")
+				return opts, false
+			}
+			opts.expectSHA = args[i+1]
+			i++
+		default:
+			if strings.HasPrefix(arg, "--") {
+				failUsage(stdout, stderr, fmt.Sprintf("未知参数: %q", arg))
+				return opts, false
+			}
+			positional = append(positional, arg)
+		}
+	}
+	if len(positional) != 1 {
+		failUsage(stdout, stderr, "approve 需要恰好一个 <pending-id> 参数")
+		return opts, false
+	}
+	opts.id = positional[0]
+	if err := validatePendingID(opts.id); err != nil {
+		failUsage(stdout, stderr, err.Error())
+		return opts, false
+	}
+	if opts.expectSHA == "" {
+		failUsage(stdout, stderr,
+			"approve 必须带 --expect-sha256 <hash>: 从 pending show/list 输出的 argv_sha256 抄过来, 批准才会绑定你看过的那一份 argv")
+		return opts, false
+	}
+	return opts, true
+}
+
+// cmdApprove 由 root 批准一条待办: 校验存在/未过期/指纹一致 → 在批准目录写不可转让的记录。
 func cmdApprove(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		return failUsage(stdout, stderr, "approve 需要恰好一个 <pending-id> 参数")
+	opts, ok := parseApproveArgs(args, stdout, stderr)
+	if !ok {
+		return exitUsage
 	}
-	id := args[0]
-	if err := validatePendingID(id); err != nil {
-		return failUsage(stdout, stderr, err.Error())
-	}
+	id := opts.id
 	// 机制上是批准目录的权限挡住非 root; 这里只做一次显式确认, 让拒绝理由可读。
 	if geteuid() != 0 {
-		auditApproveDenied(id, "非 root 不得批准(批准目录 0755 root:root)")
+		auditApproveDenied(id, opts.expectSHA, "非 root 不得批准(批准目录 0755 root:root)")
 		return failUsage(stdout, stderr, fmt.Sprintf(
-			"批准待办 %q 需要 root(sudo daedalus-tx approve %s); /run/daedalus/approvals 只有 root 能写",
-			id, id))
+			"批准待办 %q 需要 root(sudo daedalus-tx approve %s --expect-sha256 %s); /run/daedalus/approvals 只有 root 能写",
+			id, id, opts.expectSHA))
 	}
 
 	pend, expiresAt, err := readPending(pendingDir(), id)
 	if err != nil {
-		auditApproveDenied(id, err.Error())
+		auditApproveDenied(id, opts.expectSHA, err.Error())
 		return failRuntime(stdout, stderr, err.Error())
 	}
 	now := time.Now().UTC()
 	// 到点即作废(含恰好在 expires_at): 已过期的待办不能靠一次迟到的批准复活。
 	if !now.Before(expiresAt) {
 		msg := fmt.Sprintf("待办 %q 已过期(expires_at=%s), 需要重新申请", id, pend.ExpiresAt)
-		auditApproveDenied(id, msg)
+		auditApproveDenied(id, opts.expectSHA, msg)
+		return failRuntime(stdout, stderr, msg)
+	}
+
+	// 批准必须绑定人看过的那一份 argv: 待办文件属主可在审查后整份改写, 指纹变了
+	// 就说明"你以为批的 A"已不是"现在要执行的 B" —— 拒绝, 且绝不写批准记录。
+	actualSHA := argvSHA256(pend.Argv)
+	if opts.expectSHA != actualSHA {
+		msg := fmt.Sprintf(
+			"待办 %q 的 argv 与你批准的指纹不一致: 你批准的指纹=%s; 当前待办实际 argv=%q 指纹=%s; 已拒绝批准(待办文件可能在审查之后被改写)",
+			id, opts.expectSHA, pend.Argv, actualSHA)
+		auditApproveDenied(id, opts.expectSHA, msg)
 		return failRuntime(stdout, stderr, msg)
 	}
 
 	rec := approvalDoc{
 		ID:         pend.ID,
-		ArgvSHA256: argvSHA256(pend.Argv),
+		ArgvSHA256: actualSHA,
 		ApprovedBy: approverIdentity,
 		ApprovedAt: now.Format(time.RFC3339),
 	}
 	path, err := writeApproval(approvalsDir(), rec)
 	if err != nil {
-		stampGrant("pending_approve", approveAuditArgs(pend, rec, err.Error()), "error")
+		stampGrant("pending_approve", approveAuditArgs(pend, rec, opts.expectSHA, err.Error()), "error")
 		return failRuntime(stdout, stderr, err.Error())
 	}
-	stampGrant("pending_approve", approveAuditArgs(pend, rec, ""), "success")
+	stampGrant("pending_approve", approveAuditArgs(pend, rec, opts.expectSHA, ""), "success")
 	printJSON(stdout, approveDoc{
 		ID:         rec.ID,
 		Path:       path,
@@ -242,6 +308,24 @@ func argvSHA256(argv []string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// readCappedFile 读文件但拒绝超过上限的内容: 待办目录属主可写, 不设上限就等于
+// 让 root 审查时整份读入攻击者指定大小的文件。多读一字节用于判定"超限"。
+func readCappedFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxPendingFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxPendingFileBytes {
+		return nil, fmt.Errorf("文件超过 %d 字节上限, 拒绝解析", maxPendingFileBytes)
+	}
+	return data, nil
+}
+
 // readPending 读并严格解析一条待办: 缺字段、argv 为空、时间不合法、id 与文件名
 // 不一致、scope 形态非法一律拒绝 —— 拿不准的待办不许被批准。
 func readPending(dir, id string) (pendingDoc, time.Time, error) {
@@ -249,7 +333,7 @@ func readPending(dir, id string) (pendingDoc, time.Time, error) {
 	if err != nil {
 		return pendingDoc{}, time.Time{}, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readCappedFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return pendingDoc{}, time.Time{}, fmt.Errorf("待办 %q 不存在(%s)", id, path)
@@ -354,26 +438,60 @@ func pendingFilePath(dir, id string) (string, error) {
 	return path, nil
 }
 
-// ensureApprovalsDir 确认批准目录可用: 不存在则按生产权限建, 存在则要求它不可被
-// 非 root 写 —— 目录一旦组/其他可写, 这道门就等于不存在, 此时宁可拒绝批准。
+// approvalsDirUID 读目录属主 uid; 独立成函数是为了让测试能钉住"非 root 属主"分支
+// (非 root 的测试进程造不出 root 属主目录)。ok=false 表示无法判定 ⇒ fail-closed。
+var approvalsDirUID = statApprovalsUID
+
+// statApprovalsUID 从 Lstat 的 FileInfo 取属主 uid。
+func statApprovalsUID(fi os.FileInfo) (uint32, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, true
+}
+
+// checkApprovalsDir 是批准目录的纯判定: 必须是真实目录(非符号链接)、属主 root、
+// 组/其他不可写。任一条不成立, "只有 root 能写"就只是口号, 此时拒绝批准。
+func checkApprovalsDir(path string, fi os.FileInfo) error {
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("批准路径 %s 是符号链接, 拒绝批准(批准目录必须是真实的 0755 root:root 目录)", path)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("批准路径 %s 不是目录", path)
+	}
+	uid, ok := approvalsDirUID(fi)
+	if !ok {
+		return fmt.Errorf("无法判定批准目录 %s 的属主, 拒绝批准", path)
+	}
+	if uid != 0 {
+		return fmt.Errorf("批准目录 %s 的属主是 uid=%d, 不是 root; 批准目录必须属于 root(否则属主自己能伪造批准记录)", path, uid)
+	}
+	if perm := fi.Mode().Perm(); perm&0o022 != 0 {
+		return fmt.Errorf("批准目录 %s 对其他用户可写(mode=%o), 闸门形同虚设; 请修正为 0755 root:root", path, perm)
+	}
+	return nil
+}
+
+// ensureApprovalsDir 确认批准目录可用: 不存在则按生产权限建, 存在则要求它是
+// 真实的 root 属主目录 —— 目录一旦能被非 root 写/拥有, 这道门就等于不存在。
 func ensureApprovalsDir(dir string) error {
-	fi, err := os.Stat(dir)
+	fi, err := os.Lstat(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("创建批准目录 %s 失败: %v", dir, err)
 		}
-		return nil
+		// MkdirAll 的 mode 会被 umask 削减: umask 077 的 root 会建出 0700, 消费侧
+		// 读不到批准记录, 表现为"批准成功但永远执行不了"。显式 chmod, 失败即拒。
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return fmt.Errorf("设置批准目录 %s 权限失败: %v", dir, err)
+		}
+		fi, err = os.Lstat(dir)
 	}
 	if err != nil {
 		return fmt.Errorf("读取批准目录 %s 失败: %v", dir, err)
 	}
-	if !fi.IsDir() {
-		return fmt.Errorf("批准路径 %s 不是目录", dir)
-	}
-	if perm := fi.Mode().Perm(); perm&0o022 != 0 {
-		return fmt.Errorf("批准目录 %s 对其他用户可写(mode=%o), 闸门形同虚设; 请修正为 0755 root:root", dir, perm)
-	}
-	return nil
+	return checkApprovalsDir(dir, fi)
 }
 
 // writeApproval 原子写入批准记录(临时文件 → fsync → rename): 半份记录永远不会
@@ -420,8 +538,8 @@ func writeApproval(dir string, rec approvalDoc) (string, error) {
 	return final, nil
 }
 
-// approveAuditArgs 是批准审计的 args 最小集: 被批准的动作与指纹必须可回溯。
-func approveAuditArgs(pend pendingDoc, rec approvalDoc, errMsg string) map[string]any {
+// approveAuditArgs 是批准审计的 args 最小集: 被批准的动作、双方指纹必须可回溯。
+func approveAuditArgs(pend pendingDoc, rec approvalDoc, expectSHA, errMsg string) map[string]any {
 	args := map[string]any{
 		"pending_id":    pend.ID,
 		"kind":          pend.Kind,
@@ -429,6 +547,7 @@ func approveAuditArgs(pend pendingDoc, rec approvalDoc, errMsg string) map[strin
 		"desired_state": pend.DesiredState,
 		"scope":         pend.Scope,
 		"argv_sha256":   rec.ArgvSHA256,
+		"expect_sha256": expectSHA,
 		"approved_by":   rec.ApprovedBy,
 	}
 	if errMsg != "" {
@@ -438,10 +557,14 @@ func approveAuditArgs(pend pendingDoc, rec approvalDoc, errMsg string) map[strin
 }
 
 // auditApproveDenied 记一条拒绝证据: 批准被拒也是这道门的运行事实, 必须留痕。
-func auditApproveDenied(id, msg string) {
-	stampGrant("pending_approve", map[string]any{
-		"pending_id":  id,
-		"approved_by": approverIdentity,
-		"error":       msg,
-	}, "denied")
+// 不写 approved_by —— 拒绝不是批准, 写了会让事后审计误判"root 批过"。
+func auditApproveDenied(id, expectSHA, msg string) {
+	args := map[string]any{
+		"pending_id": id,
+		"error":      msg,
+	}
+	if expectSHA != "" {
+		args["expect_sha256"] = expectSHA
+	}
+	stampGrant("pending_approve", args, "denied")
 }

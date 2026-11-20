@@ -14,7 +14,7 @@
 //	daedalus-tx grant revoke <id>
 //	daedalus-tx pending list
 //	daedalus-tx pending show <pending-id>
-//	daedalus-tx approve  <pending-id>
+//	daedalus-tx approve  <pending-id> --expect-sha256 <hash>
 //
 // stdout 契约(每条子命令**恰一份**机器可读 JSON 文档; 上层 copilot 层
 // 解析 CLI stdout, 而非 JSON-RPC):
@@ -23,7 +23,8 @@
 //   - service-observe → {"unit","active_state","unit_file_state","enabled","running","known"}(恰六键)
 //   - grant add/list/revoke → 条子文档 / 条子列表 / {"revoked":"<id>"}
 //   - pending list → {"pending":[...],"invalid":[...]}; pending show → 待办视图
-//   - approve → 批准记录文档(含被批准的 argv 回显); 非 root 一律拒绝(退出码 2)
+//   - approve → 批准记录文档(含被批准的 argv 回显); --expect-sha256 必填且须与当前待办一致;
+//     非 root 一律拒绝(退出码 2)
 //   - 一切错误 → {"error":"..."} 且退出码非零
 //
 // 退出码与 daedalus 家族 CLI 对齐(镜像 cmd/daedalus-host/main.go):
@@ -184,7 +185,7 @@ func usage() string {
 		"  daedalus-tx grant revoke <id>\n" +
 		"  daedalus-tx pending list\n" +
 		"  daedalus-tx pending show <pending-id>\n" +
-		"  daedalus-tx approve  <pending-id>   (仅 root)\n\n" +
+		"  daedalus-tx approve  <pending-id> --expect-sha256 <hash>   (仅 root)\n\n" +
 		"旗标:\n" +
 		"  --unit-dir <path> —— service.set 单元文件解析目录覆写(集成测试逃生舱;\n" +
 		"      不给时按 $HOME/.config/systemd/user 解析; 只影响解析目录, 守卫恒生效)。\n" +
@@ -200,6 +201,8 @@ func usage() string {
 		"  待办目录默认 /run/daedalus/pending(1777 粘滞位), 可用 DAEDALUS_PENDING_DIR 覆盖;\n" +
 		"      批准目录默认 /run/daedalus/approvals(0755 root:root), 可用 DAEDALUS_APPROVALS_DIR 覆盖。\n" +
 		"  approve 只绑定 argv_sha256 = sha256(NUL 连接的 argv), 参数一变就是新动作;\n" +
+		"      --expect-sha256 必填, 从 pending show/list 的 argv_sha256 抄过来;\n" +
+		"      当前待办的指纹与它不一致 ⇒ 拒绝批准(退出码 1)且不写批准记录。\n" +
 		"      待办过期即作废, 非 root 一律拒绝(退出码 2)。\n" +
 		"输出: 每条子命令向 stdout 打印恰一份机器可读 JSON 文档;\n" +
 		"      begin → {\"tx_id\":\"<16hex>\"}; propose/apply/rollback/resolve/status → 事务日志全文;\n" +
