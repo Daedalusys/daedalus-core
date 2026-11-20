@@ -36,3 +36,7 @@ files/system/opt/daedalus/plugins/
 
 # superpowers 设计稿 / 实施计划 / 自检材料(本地协作产物,不入库)
 docs/superpowers/
+
+# Python 字节码(tests/mcp 的摘要器就地运行)
+__pycache__/
+*.pyc
