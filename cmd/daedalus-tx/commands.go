@@ -100,6 +100,12 @@ func cmdApply(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return code
 	}
+	// 零步骤 = propose 从未成功(begin 建出的就是 proposed + 空 steps)。
+	// 此时循环体不执行, 若无此门会直接 MarkApplied, 把空事务伪装成成功施加。
+	if len(t.Steps) == 0 {
+		return failRuntime(stdout, stderr,
+			fmt.Sprintf("事务 %s 无步骤(propose 未成功), 拒绝 apply", id))
+	}
 	tail := scanTxTail(id)
 	prev, nextStep := tail.prevHash, tail.maxStep+1
 
