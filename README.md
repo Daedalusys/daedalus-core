@@ -14,8 +14,8 @@ Daedalus 核心仓：镜像编排（`files/` 构建树 + 根 `Containerfile`）+
 
 | Release 资产 | 是什么 |
 |---|---|
-| `qcow2-<ver>.qcow2` | QEMU/KVM 试用镜像（带文档化的 alpha 试用账号，口令公开） |
-| `iso-<ver>.iso` | **CI 验证夹具，不是安装器**：开机自动装到 `/dev/vda`，见 [#191](https://github.com/Daedalusys/daedalus-core/issues/191) |
+| `qcow2-<ver>.qcow2` | QEMU/KVM 试用镜像（带文档化的 alpha 试用账号，口令公开）。构建期会尝试压缩；**不需要解压**，`qemu-system` 直接引导 |
+| `iso-verify-<ver>.iso` | **CI 验证夹具，不是安装器**：开机自动装到 `/dev/vda`（会清盘），见 [#191](https://github.com/Daedalusys/daedalus-core/issues/191) |
 
 「第一次跑起来」的验收探针是 `tests/real-machine/probe-first-run.sh`；最近一次真机实跑
 的证据（含它抓到的 3 个缺陷）在

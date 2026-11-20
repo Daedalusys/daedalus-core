@@ -59,6 +59,13 @@ RELEASE_TAG=v0.4.0 GITHUB_SHA="$SHA40" \
     run release_asset_name iso "$TMP/bootc-almalinux-10-generic-iso-x86_64.iso"
 st "iso-v0.4.0.iso" "$out" "iso 的 ext 由后缀判定"
 
+# --- 情形 3b:ISO 晋级到 Release 时用 `iso-verify` 这个 kind(#191) ---
+# 资产名必须让人一眼看出「这是 CI 验证夹具、不是安装器」;kind 里的连字符
+# 原样进入名字,版本与扩展名规则与其它 kind 一致。
+RELEASE_TAG=v0.4.0 GITHUB_SHA="$SHA40" \
+    run release_asset_name iso-verify "$TMP/bootc-almalinux-10-generic-iso-x86_64.iso"
+st "iso-verify-v0.4.0.iso" "$out" "iso-verify kind → 资产名带 iso-verify 前缀"
+
 # --- 情形 4:超过 2GiB → 退出码 2 且不打印文件名 ---
 RELEASE_TAG=v0.4.0 GITHUB_SHA="$SHA40" run release_asset_name qcow2 "$TMP/big.qcow2"
 st 2 "$rc" "超 2GiB → 退出码 2"
