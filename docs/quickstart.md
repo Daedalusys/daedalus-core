@@ -14,17 +14,7 @@ curl -fLO "$base/qcow2-v0.1.1.qcow2" "$base/SHA256SUMS"
 sha256sum -c --strict SHA256SUMS
 ```
 
-**直连太慢的话**(2026-11-19 实测:直连 GitHub 约 0.1 MB/s,1.24 GiB 要 6 小时以上),
-走加速站下载,然后**必须**用 Release 上的 `SHA256SUMS` 校验:
-
-```bash
-curl -fL -o qcow2-v0.1.1.qcow2 \
-  "https://ghfast.top/$base/qcow2-v0.1.1.qcow2"
-sha256sum -c --strict SHA256SUMS     # 通过即字节与 Release 一致
-```
-
-同一时刻实测该加速站约 1.3–1.9 MB/s(≈15 分钟)。加速站只是第三方传输通道 ——
-**校验通过才算数**,校验不过就别用。
+`SHA256SUMS` 由构建流水线对即将上传的那份字节现算;`sha256sum -c` 不通过就不要用。
 
 > **这个 Release 里没有 ISO 资产。** ISO 那条腿再一次撞上外部网络(guest 拉 `ghcr.io`
 > 时装不上),按设计只记 `BLOCKED_EXTERNAL`、**不晋级到 Release**。即便将来出现,
