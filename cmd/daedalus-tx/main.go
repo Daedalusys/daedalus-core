@@ -12,6 +12,9 @@
 //	daedalus-tx grant add --scope <scope> [--ttl <dur>] [--count N] [--note <text>]
 //	daedalus-tx grant list
 //	daedalus-tx grant revoke <id>
+//	daedalus-tx pending list
+//	daedalus-tx pending show <pending-id>
+//	daedalus-tx approve  <pending-id>
 //
 // stdout 契约(每条子命令**恰一份**机器可读 JSON 文档; 上层 copilot 层
 // 解析 CLI stdout, 而非 JSON-RPC):
@@ -19,6 +22,8 @@
 //   - propose/apply/rollback/resolve/status → 事务日志全文(id/created_at/status/steps/rollback_plan)
 //   - service-observe → {"unit","active_state","unit_file_state","enabled","running","known"}(恰六键)
 //   - grant add/list/revoke → 条子文档 / 条子列表 / {"revoked":"<id>"}
+//   - pending list → {"pending":[...],"invalid":[...]}; pending show → 待办视图
+//   - approve → 批准记录文档(含被批准的 argv 回显); 非 root 一律拒绝(退出码 2)
 //   - 一切错误 → {"error":"..."} 且退出码非零
 //
 // 退出码与 daedalus 家族 CLI 对齐(镜像 cmd/daedalus-host/main.go):
@@ -97,6 +102,10 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		return cmdServiceObserve(args, stdout, stderr)
 	case "grant":
 		return cmdGrant(args, stdout, stderr)
+	case "pending":
+		return cmdPending(args, stdout, stderr)
+	case "approve":
+		return cmdApprove(args, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "daedalus-tx: 未知子命令: %s\n\n", sub)
 		fmt.Fprint(stderr, usage())
@@ -172,7 +181,10 @@ func usage() string {
 		"  daedalus-tx service-observe --unit <name>\n" +
 		"  daedalus-tx grant add    --scope <scope> [--scope <scope>...] [--ttl <dur>] [--count N] [--note <text>]\n" +
 		"  daedalus-tx grant list\n" +
-		"  daedalus-tx grant revoke <id>\n\n" +
+		"  daedalus-tx grant revoke <id>\n" +
+		"  daedalus-tx pending list\n" +
+		"  daedalus-tx pending show <pending-id>\n" +
+		"  daedalus-tx approve  <pending-id>   (仅 root)\n\n" +
 		"旗标:\n" +
 		"  --unit-dir <path> —— service.set 单元文件解析目录覆写(集成测试逃生舱;\n" +
 		"      不给时按 $HOME/.config/systemd/user 解析; 只影响解析目录, 守卫恒生效)。\n" +
@@ -185,11 +197,16 @@ func usage() string {
 		"  --note <text> —— 条子备注(只作线索, 不参与判定)。\n" +
 		"  grant 条子目录默认 /run/daedalus/grants, 可用 DAEDALUS_GRANTS_DIR 覆盖;\n" +
 		"      签发身份 = 文件属主 uid(SUDO_USER 优先, 否则当前用户), 撤销别人的条子需要 root。\n" +
+		"  待办目录默认 /run/daedalus/pending(1777 粘滞位), 可用 DAEDALUS_PENDING_DIR 覆盖;\n" +
+		"      批准目录默认 /run/daedalus/approvals(0755 root:root), 可用 DAEDALUS_APPROVALS_DIR 覆盖。\n" +
+		"  approve 只绑定 argv_sha256 = sha256(NUL 连接的 argv), 参数一变就是新动作;\n" +
+		"      待办过期即作废, 非 root 一律拒绝(退出码 2)。\n" +
 		"输出: 每条子命令向 stdout 打印恰一份机器可读 JSON 文档;\n" +
 		"      begin → {\"tx_id\":\"<16hex>\"}; propose/apply/rollback/resolve/status → 事务日志全文;\n" +
 		"      service-observe → {\"unit\",\"active_state\",\"unit_file_state\",\"enabled\",\"running\",\"known\"}(恰六键);\n" +
 		"      grant add → 条子文档; grant list → {\"grants\":[...],\"invalid\":[...]}; grant revoke → {\"revoked\":\"<id>\"};\n" +
-		"      错误 → {\"error\":\"...\"}。\n" +
+		"      pending list → {\"pending\":[...],\"invalid\":[...]}; pending show → 待办视图;\n" +
+		"      approve → 批准记录文档(含被批准的 argv 回显); 错误 → {\"error\":\"...\"}。\n" +
 		"可用 adapter: " + strings.Join(registeredAdapterNames(), ", ") + "\n" +
 		"退出码: 0 成功 / 1 运行期 / 2 用法错误。\n" +
 		"      service-observe 细分: 单元级失败(单元不存在/属性取不到)⇒ 0 且 known=false;\n" +
