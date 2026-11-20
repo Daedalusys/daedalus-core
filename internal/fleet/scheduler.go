@@ -282,7 +282,7 @@ func (s *Scheduler) Run(ctx context.Context, plan objectmodel.Plan) (*PlanRun, e
 					Node:    nodes[nodeID],
 					Intent:  intent,
 					Index:   i,
-				})
+				}, all)
 				run.Results = append(run.Results, res)
 				if res.Outcome == OutcomeN3 {
 					dirty = true
@@ -320,7 +320,9 @@ func refusalMessage(n Node, kind objectmodel.Kind) string {
 }
 
 // runOne 下发一条 intent,并按分桶决定重试/暂停;总是返回一条 StepResult。
-func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
+// all 是 Run 在整批开始前读到的身份表快照(可观测侧车尚未折叠):热路径的
+// last_seen 刷新用它,不再每次重放整张身份表。
+func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget, all []Node) StepResult {
 	risk := s.effectiveRisk(t.Intent)
 
 	// 高危 intent 打到没有(或未确证有)回滚点的节点:连 RPC 都不发。
@@ -356,9 +358,9 @@ func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
 	reRegistered := false
 
 	for {
-		_ = s.markSeen(t.Node.NodeID)
+		_ = s.markSeenKnown(t.Node.NodeID, all)
 		res, err := s.Dispatch(ctx, t)
-		_ = s.markSeen(t.Node.NodeID)
+		_ = s.markSeenKnown(t.Node.NodeID, all)
 		if err != nil {
 			return s.fill(t, StepResult{Outcome: OutcomeN3, Message: fmt.Sprintf("fleet: 下发失败: %v", err)})
 		}
@@ -382,6 +384,9 @@ func (s *Scheduler) runOne(ctx context.Context, t DispatchTarget) StepResult {
 				return res
 			}
 			t.Node = fresh
+			// 轮换后的新 id 还没进批首快照:补一份进去,压实才不会把它刚落下的
+			// 观测挤掉(观测值本身会丢,身份不受影响)。
+			all = append(append([]Node(nil), all...), fresh)
 		case OutcomeN2:
 			if retriesLeft > 0 {
 				retriesLeft--
@@ -457,13 +462,17 @@ func intentID(t DispatchTarget) string {
 	return fmt.Sprintf("%s/%s/%d", t.Plan.ID, t.Machine.MachineID, t.Index)
 }
 
-// markSeen 刷新节点的 last_seen。观测是尽力而为的:刷新失败不阻断下发。
-func (s *Scheduler) markSeen(nodeID string) error {
+// markSeenKnown 刷新节点的 last_seen。观测是尽力而为的:刷新失败不阻断下发。
+//
+// 调用方(Run)已在校验阶段读过整张身份表并确认过目标机已注册,所以这里走
+// "已注册"变体:只追加观测,不重放整张表(否则一次 Plan 有 2n 次整表读,
+// 合计二次 —— issue #184)。
+func (s *Scheduler) markSeenKnown(nodeID string, all []Node) error {
 	now := s.Now
 	if now == nil {
 		now = time.Now
 	}
-	return s.Registry.MarkSeen(nodeID, now().Unix())
+	return s.Registry.markSeenKnown(nodeID, now().Unix(), all)
 }
 
 // callContext 给一次 RPC 套上超时。

@@ -176,6 +176,42 @@ func (r *Registry) MarkSeen(nodeID string, unix int64) error {
 	if err := r.appendSeen(nodeID, unix); err != nil {
 		return err
 	}
+	return r.compactSeenIfNeeded(all)
+}
+
+// markSeenKnown 追加一条 last_seen 观测,**不读身份表**。
+//
+// 契约:调用方必须已持有身份表快照(all),并且**已自行校验过** nodeID 已注册。
+// MarkSeen 的"未注册必须报错"是对外的 fail-fast 边界(谁都能调,故自己读表);
+// 热路径上的调用方(Scheduler.Run)已经在整批开始前一次 List() 里对每台机器做过
+// 未注册校验,再重放整张表纯属重复劳动 —— 一次 Plan 有 2n 次 markSeen,每次
+// 重放 n 行身份表,合计是二次曲线(issue #184)。
+//
+// 观测侧的语义一字不减:追加不 fsync(崩溃只丢最近的 last_seen)、行数越过阈值
+// 仍压实成"每个被观测过的节点一行"、压实仍是原子替换。
+func (r *Registry) markSeenKnown(nodeID string, unix int64, all []Node) error {
+	if err := r.appendSeen(nodeID, unix); err != nil {
+		return err
+	}
+	return r.compactSeenIfNeeded(all)
+}
+
+// compactSeenIfNeeded 只在侧车**字节数**够得着压实阈值时才去数行并压实。
+//
+// 每行至少 1 字节 ⇒ 行数 ≤ 字节数,所以 size < 阈值时必然 lines < 阈值,
+// 不可能触发压实。热路径因此只剩一次 Stat,而不是把整个侧车读一遍数行;
+// 真要压实时仍走 compactSeen(同一套阈值口径、同一套原子替换)。
+func (r *Registry) compactSeenIfNeeded(all []Node) error {
+	info, err := os.Stat(r.seenPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("fleet: 读取观测侧车 %s 失败: %w", r.seenPath(), err)
+	}
+	if info.Size() < int64(r.seenCompactThreshold(len(all))) {
+		return nil
+	}
 	return r.compactSeen(all)
 }
 
