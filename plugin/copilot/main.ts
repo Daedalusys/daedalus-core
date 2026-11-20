@@ -16,7 +16,7 @@ import {
   type CommandProposal,
   type RiskAssessment,
 } from "./policy.ts";
-import { recordAudit, type AuditOutcome } from "./audit.ts";
+import { recordAudit, resolveAuditPath, type AuditOutcome } from "./audit.ts";
 import { readConfig, translate, revise, type Config } from "./llm.ts";
 import {
   execAllowlisted,
@@ -73,6 +73,8 @@ export interface CopilotOptions {
   execFn?: typeof execAllowlisted;
   recordAuditFn?: typeof recordAudit;
   readConfigFn?: typeof readConfig;
+  // 审计就绪检查注入缝:默认指向真实实现;返回空串 = 两条路径都不可写(fail-closed)
+  resolveAuditPathFn?: typeof resolveAuditPath;
   // 事务通道注入点:begin 本文件实现,propose/preview/apply 直承 exec.ts execTx*,测试可 mock
   txBeginFn?: typeof defaultTxBegin;
   txProposeFn?: typeof execTxPropose;
@@ -959,7 +961,8 @@ async function runQueryTurn(ctx: TurnContext): Promise<number> {
     const msg = err instanceof Error ? err.message : String(err);
     await io.writeStderr(t("error.config", msg) + "\n");
     await recordAuditFn("copilot_error", { query, error: msg }, "error");
-    return 1;
+    // 配置错误(缺 LLM key 等)属前置不满足:0 成功 / 1 运行期失败 / 2 用法·前置不满足
+    return 2;
   }
 
   // 步骤 1:翻译。stateBlock 作 system prompt 追加段(KNOWN STATE),空块传
@@ -1392,6 +1395,7 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
   const execFn = options?.execFn ?? execAllowlisted;
   const recordAuditFn = options?.recordAuditFn ?? recordAudit;
   const readConfigFn = options?.readConfigFn ?? readConfig;
+  const resolveAuditPathFn = options?.resolveAuditPathFn ?? resolveAuditPath;
   const txBeginFn = options?.txBeginFn ?? defaultTxBegin;
   const txProposeFn = options?.txProposeFn ?? execTxPropose;
   const txPreviewFn = options?.txPreviewFn ?? execTxPreview;
@@ -1406,6 +1410,14 @@ export async function runCopilot(options?: CopilotOptions): Promise<number> {
   if (version) {
     await io.writeStdout(t("version.banner", VERSION) + "\n");
     return 0;
+  }
+
+  // 审计就绪检查必须先于任何查询轮次:两条审计路径都不可写时,任何后续
+  // 决策都会在 recordAudit 里静默失败 —— 违反"所有通道不得绕开哈希链审计"。
+  // 会话级 fail-closed:拒绝启动,rc=2(前置不满足)。
+  if (!resolveAuditPathFn()) {
+    await io.writeStderr(t("error.audit_unavailable") + "\n");
+    return 2;
   }
 
   let query = (options?.query ?? parsed.query).trim();

@@ -14,6 +14,7 @@
   "dryrun.would_execute": "[dry-run] Proposed command (not run): {0}",
   "dryrun.explanation": "  (explanation: {0})",
   "error.config": "Configuration error: {0}",
+  "error.audit_unavailable": "Audit logging is unavailable: neither /var/log/daedalus nor $HOME/.local/share/daedalus is writable, so the tamper-evident hash chain cannot be written. Refusing to run. Fix: set DAEDALUS_AUDIT_LOG_PATH to a writable audit file, or make $HOME/.local/share/daedalus writable.",
   "error.translate": "{0}",
   "error.policy_reject": "Security policy rejection: {0}",
   "error.interactive_non_tty": "Interactive confirmation (-i) needs a terminal. In non-TTY contexts only whitelisted read-only diagnostics run; everything else is shown for manual execution.\n",

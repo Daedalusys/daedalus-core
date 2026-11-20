@@ -88,22 +88,50 @@ Deno.test("Copilot Audit - resolveAuditPath respects DAEDALUS_AUDIT_LOG_PATH env
   }
 });
 
-Deno.test("Copilot Audit - resolveAuditPath returns primary path /var/log/daedalus/audit.jsonl when directory is accessible", () => {
+Deno.test("Copilot Audit - resolveAuditPath returns primary path when the primary directory is writable", () => {
   setup();
+  const root = Deno.makeTempDirSync();
   try {
-    expect(resolveAuditPath()).toBe("/var/log/daedalus/audit.jsonl");
+    // 判据是"能真正落一个探测文件",不是 stat/mode 位(见 #189):直接给可写目录。
+    expect(resolveAuditPath({ primaryDir: root, home: `${root}/home` })).toBe(
+      `${root}/audit.jsonl`,
+    );
   } finally {
+    Deno.removeSync(root, { recursive: true });
     teardown();
   }
 });
 
-Deno.test("Copilot Audit - resolveAuditPath falls back to $HOME/.local/share/daedalus/audit.jsonl when /var/log/daedalus is inaccessible", () => {
+Deno.test("Copilot Audit - resolveAuditPath falls back to $HOME/.local/share/daedalus when primary is not writable", () => {
   setup();
+  const root = Deno.makeTempDirSync();
+  // 把"主目录"指向一个普通文件下的子路径:即使 root 也写不进去(ENOTDIR),
+  // 避免依赖 chmod 0555 在 root 下失效。
+  const blocked = `${root}/not-a-dir`;
+  Deno.writeTextFileSync(blocked, "");
   try {
-    mockStatFailures.add("/var/log/daedalus");
-    mockEnv["HOME"] = "/home/testuser";
-    expect(resolveAuditPath()).toBe("/home/testuser/.local/share/daedalus/audit.jsonl");
+    const home = `${root}/home`;
+    expect(resolveAuditPath({ primaryDir: `${blocked}/primary`, home })).toBe(
+      `${home}/.local/share/daedalus/audit.jsonl`,
+    );
+    // 回退目录必须被 mkdir -p 出来,否则 daedalus-audit 仍会写失败。
+    expect(Deno.statSync(`${home}/.local/share/daedalus`).isDirectory).toBe(true);
   } finally {
+    Deno.removeSync(root, { recursive: true });
+    teardown();
+  }
+});
+
+Deno.test("Copilot Audit - resolveAuditPath returns empty string when neither primary nor fallback is writable", () => {
+  setup();
+  const root = Deno.makeTempDirSync();
+  const blocked = `${root}/not-a-dir`;
+  Deno.writeTextFileSync(blocked, "");
+  try {
+    // 空串是显式"审计不可用"信号,让 runCopilot fail-closed 拒启。
+    expect(resolveAuditPath({ primaryDir: `${blocked}/primary`, home: blocked })).toBe("");
+  } finally {
+    Deno.removeSync(root, { recursive: true });
     teardown();
   }
 });

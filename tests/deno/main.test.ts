@@ -2577,3 +2577,67 @@ Deno.test("Copilot Main - review M-2: package 域判定等价契约 (classifier 
     }
   }
 });
+
+// #190: 配置错误(缺 LLM key)属"前置不满足",按仓库约定 rc=2,不是运行期失败 rc=1。
+Deno.test("Copilot Main - missing LLM key is a precondition failure (rc=2) with config error message", async () => {
+  setup();
+  let translateCalled = false;
+
+  const code = await runCopilot({
+    query: "show os version",
+    isTerminal: false,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    translateFn: async () => {
+      translateCalled = true;
+      return "";
+    },
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => {
+      throw new Error(
+        "missing LLM API key. Set DAEDALUS_LLM_API_KEY or configure ~/.config/daedalus/copilot.json",
+      );
+    },
+    resolveAuditPathFn: () => "/tmp/test-audit.jsonl",
+  });
+
+  expect(code).toBe(2);
+  expect(translateCalled).toBe(false);
+  const stderr = stderrChunks.join("");
+  expect(stderr).toContain("Configuration error:");
+  expect(stderr).toContain("missing LLM API key");
+  expect(auditLogs.some((l) => l.tool === "copilot_error" && l.outcome === "error")).toBe(true);
+});
+
+// #189: 两条审计路径都不可写 → 整个会话 fail-closed 拒启(rc=2),绝不静默丢审计。
+Deno.test("Copilot Main - refuses to run when no audit path is writable (rc=2, fail-closed)", async () => {
+  setup();
+  let translateCalled = false;
+
+  const code = await runCopilot({
+    query: "show os version",
+    isTerminal: false,
+    stdout: mockStdout,
+    stderr: mockStderr,
+    translateFn: async () => {
+      translateCalled = true;
+      return "";
+    },
+    recordAuditFn: mockRecordAudit,
+    readConfigFn: () => ({
+      provider: "openai",
+      apiKey: "test-key",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+    }),
+    resolveAuditPathFn: () => "",
+  });
+
+  expect(code).toBe(2);
+  expect(translateCalled).toBe(false);
+  const stderr = stderrChunks.join("");
+  expect(stderr).toContain("Audit logging is unavailable");
+  expect(stderr).toContain("DAEDALUS_AUDIT_LOG_PATH");
+  // 审计不可用时不应尝试写审计(注入了不可用信号,recordAudit 不应被调用)。
+  expect(auditLogs.length).toBe(0);
+});
