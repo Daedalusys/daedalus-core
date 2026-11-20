@@ -14,11 +14,12 @@
 // 解析 CLI stdout, 而非 JSON-RPC):
 //   - begin   → {"tx_id":"<16hex>"}
 //   - propose/apply/rollback/resolve/status → 事务日志全文(id/created_at/status/steps/rollback_plan)
-//   - service-observe → {"unit","active_state","unit_file_state","enabled","running","known"}
+//   - service-observe → {"unit","active_state","unit_file_state","enabled","running","known"}(恰六键)
 //   - 一切错误 → {"error":"..."} 且退出码非零
 //
 // 退出码与 daedalus 家族 CLI 对齐(镜像 cmd/daedalus-host/main.go):
-// 0 成功, 1 运行期, 2 用法错误。
+// 0 成功, 1 运行期, 2 用法错误。service-observe 的细分见 usage()
+// (单元级"查不到"是观测结果 ⇒ 0 + known=false, 只有进程级故障才是 1)。
 //
 // ★ v1 执行模型: daedalus-tx 是**调用用户自己的进程**, 无 systemd 单元; 用户域
 // 限制由适配器路径守卫无条件强制。本二进制**允许 spawn** 子进程(备份/回滚),
@@ -163,15 +164,20 @@ func usage() string {
 		"  daedalus-tx resolve   <tx-id>\n" +
 		"  daedalus-tx status   <tx-id>\n" +
 		"  daedalus-tx service-observe --unit <name>\n\n" +
-		"旗标: --unit-dir <path> —— service.set 单元文件解析目录覆写(集成测试逃生舱;\n" +
+		"旗标:\n" +
+		"  --unit-dir <path> —— service.set 单元文件解析目录覆写(集成测试逃生舱;\n" +
 		"      不给时按 $HOME/.config/systemd/user 解析; 只影响解析目录, 守卫恒生效)。\n" +
-		"      --unit <name> —— service-observe 观测的 user 域单元名(可省略 .service)。\n" +
+		"  --unit <name> —— service-observe 观测的 user 域单元名; 必须带 .service 后缀\n" +
+		"      (观测侧绝不隐式补后缀或改名: 防「以为观测 A、实际查 B」)。\n" +
 		"输出: 每条子命令向 stdout 打印恰一份机器可读 JSON 文档;\n" +
 		"      begin → {\"tx_id\":\"<16hex>\"}; propose/apply/rollback/resolve/status → 事务日志全文;\n" +
-		"      service-observe → {\"unit\",\"active_state\",\"unit_file_state\",\"enabled\",\"running\",\"known\"};\n" +
+		"      service-observe → {\"unit\",\"active_state\",\"unit_file_state\",\"enabled\",\"running\",\"known\"}(恰六键);\n" +
 		"      错误 → {\"error\":\"...\"}。\n" +
 		"可用 adapter: " + strings.Join(registeredAdapterNames(), ", ") + "\n" +
-		"退出码: 0 成功 / 1 运行期 / 2 用法错误。\n"
+		"退出码: 0 成功 / 1 运行期 / 2 用法错误。\n" +
+		"      service-observe 细分: 单元级失败(单元不存在/属性取不到)⇒ 0 且 known=false;\n" +
+		"      systemctl 进程级故障(起不来 126 / 超时 124)⇒ 1; 用法错(含非 .service 单元)⇒ 2。\n" +
+		"      known=false 时 stderr 会给出原因, 故「stderr 非空」不等于失败。\n"
 }
 
 // registeredAdapterNames 从 registry 动态列出已注册 adapter 名(propose --help 一眼
