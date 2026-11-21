@@ -9,7 +9,7 @@
 //	daedalus-tx resolve  <tx-id>
 //	daedalus-tx status   <tx-id>
 //	daedalus-tx service-observe --unit <name>
-//	daedalus-tx grant add --scope <scope> [--ttl <dur>] [--count N] [--note <text>]
+//	daedalus-tx grant add --scope <scope> [--ttl <dur>] [--count N] [--note <text>] [--for <user>]
 //	daedalus-tx grant list
 //	daedalus-tx grant revoke <id>
 //	daedalus-tx pending list
@@ -180,7 +180,7 @@ func usage() string {
 		"  daedalus-tx resolve   <tx-id>\n" +
 		"  daedalus-tx status   <tx-id>\n" +
 		"  daedalus-tx service-observe --unit <name>\n" +
-		"  daedalus-tx grant add    --scope <scope> [--scope <scope>...] [--ttl <dur>] [--count N] [--note <text>]\n" +
+		"  daedalus-tx grant add    --scope <scope> [--scope <scope>...] [--ttl <dur>] [--count N] [--note <text>] [--for <user>]\n" +
 		"  daedalus-tx grant list\n" +
 		"  daedalus-tx grant revoke <id>\n" +
 		"  daedalus-tx pending list\n" +
@@ -196,6 +196,8 @@ func usage() string {
 		"  --ttl <dur> —— grant add 的有效期(默认 30m), 全局上限 24h。\n" +
 		"  --count N —— grant add 的可用次数(默认 1), 全局上限 10。\n" +
 		"  --note <text> —— 条子备注(只作线索, 不参与判定)。\n" +
+		"  --for <user> —— grant add 把条子绑定给该用户(执行者); 只有 root 能用;\n" +
+		"      root 签发必须写明给谁(未写明的 root 条子谁都用不了)。\n" +
 		"  grant 条子目录默认 /run/daedalus/grants, 可用 DAEDALUS_GRANTS_DIR 覆盖;\n" +
 		"      签发身份 = 文件属主 uid(SUDO_USER 优先, 否则当前用户), 撤销别人的条子需要 root。\n" +
 		"  待办目录默认 /run/daedalus/pending(1777 粘滞位), 可用 DAEDALUS_PENDING_DIR 覆盖;\n" +
