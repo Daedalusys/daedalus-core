@@ -364,10 +364,16 @@ func TestGrantAddWritesAuditEntry(t *testing.T) {
 		if rec.Outcome != "success" {
 			t.Errorf("审计 outcome = %q, want success", rec.Outcome)
 		}
-		for _, key := range []string{"grant_id", "scope", "ttl_seconds", "max_uses", "issued_by"} {
+		for _, key := range []string{"grant_id", "scope", "ttl_seconds", "max_uses", "issued_by", "for_user"} {
 			if _, ok := rec.Args[key]; !ok {
 				t.Errorf("审计 args 缺 %q: %+v", key, rec.Args)
 			}
+		}
+		if rec.Args["for_user"] != "" {
+			t.Errorf("未绑定条子的审计 for_user = %v, want 空串", rec.Args["for_user"])
+		}
+		if _, ok := rec.Args["for_uid"]; ok {
+			t.Errorf("未绑定条子的审计不得写 for_uid: %+v", rec.Args)
 		}
 		if rec.Args["grant_id"] != doc.ID {
 			t.Errorf("审计 grant_id = %v, want %s", rec.Args["grant_id"], doc.ID)
@@ -401,7 +407,16 @@ func TestGrantListShowsGrantsAndUsage(t *testing.T) {
 	writeTestGrant(t, dir, live)
 	writeTestGrant(t, dir, dead)
 
-	usagePath, err := grant.UsageLogPath()
+	me, err := user.Current()
+	if err != nil {
+		t.Fatalf("取当前用户失败: %v", err)
+	}
+	wantUID, err := strconv.Atoi(me.Uid)
+	if err != nil {
+		t.Fatalf("解析当前 uid 失败: %v", err)
+	}
+	// 条子属主是测试进程自己且未绑定执行者 ⇒ 唯一合法执行者就是属主, 账本按该 uid 分文件。
+	usagePath, err := grant.UsageLogPathFor(uint32(wantUID))
 	if err != nil {
 		t.Fatalf("解析用量日志路径失败: %v", err)
 	}
@@ -427,20 +442,21 @@ func TestGrantListShowsGrantsAndUsage(t *testing.T) {
 	if doc.Grants[0].Used != 1 || doc.Grants[0].Expired {
 		t.Errorf("live 条子 used=%d expired=%v, want 1/false", doc.Grants[0].Used, doc.Grants[0].Expired)
 	}
+	if !doc.Grants[0].UsageKnown {
+		t.Errorf("属主自己的账本读得到, usage_known 应为 true: %+v", doc.Grants[0])
+	}
 	if doc.Grants[0].IssuedBy != "alice" || doc.Grants[0].MaxUses != 3 {
 		t.Errorf("live 条子字段异常: %+v", doc.Grants[0])
-	}
-	me, err := user.Current()
-	if err != nil {
-		t.Fatalf("取当前用户失败: %v", err)
-	}
-	wantUID, err := strconv.Atoi(me.Uid)
-	if err != nil {
-		t.Fatalf("解析当前 uid 失败: %v", err)
 	}
 	if doc.Grants[0].OwnerUID != wantUID || doc.Grants[1].OwnerUID != wantUID {
 		t.Errorf("owner_uid = %d/%d, want %d(文件属主是唯一可信身份)",
 			doc.Grants[0].OwnerUID, doc.Grants[1].OwnerUID, wantUID)
+	}
+	if doc.Grants[0].Owner != me.Username {
+		t.Errorf("owner = %q, want %q(由 stat uid 反查, 不用自报 issued_by)", doc.Grants[0].Owner, me.Username)
+	}
+	if doc.Grants[0].ForUID != nil || doc.Grants[0].ForUser != "" {
+		t.Errorf("未绑定条子不得带 for_uid/for_user: %+v", doc.Grants[0])
 	}
 	if !doc.Grants[1].Expired {
 		t.Errorf("dead 条子应标记 expired: %+v", doc.Grants[1])
@@ -622,7 +638,7 @@ func TestGrantUsageMentionsSubcommands(t *testing.T) {
 	var buf bytes.Buffer
 	text := usage()
 	buf.WriteString(text)
-	for _, want := range []string{"grant add", "grant list", "grant revoke", "--scope", "--ttl", "--count"} {
+	for _, want := range []string{"grant add", "grant list", "grant revoke", "--scope", "--ttl", "--count", "--for"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("usage 缺 %q", want)
 		}
@@ -967,4 +983,365 @@ func TestGrantAddDistinguishesBrokenAutonomyConfig(t *testing.T) {
 		t.Errorf("档位表非法时不得误报「没有档位表」: %q", errOut)
 	}
 	oneJSONDoc(t, out)
+}
+
+// fakeGrantLookup 是纯函数测试用的用户表: 既按账号名也按数字 uid 查,
+// 与 lookupNameOrUID 的两种解析形状一致。
+func fakeGrantLookup(users ...*user.User) func(string) (*user.User, error) {
+	return func(key string) (*user.User, error) {
+		for _, u := range users {
+			if u.Username == key || u.Uid == key {
+				return u, nil
+			}
+		}
+		return nil, fmt.Errorf("user: unknown user %s", key)
+	}
+}
+
+// TestPlanGrantIssue 覆盖 root 分支: 测试进程是非 root, 跑不到 euid 0 的入口,
+// 只能把身份解析抽成纯函数后直接喂 euid/SUDO_USER。
+func TestPlanGrantIssue(t *testing.T) {
+	alice := &user.User{Uid: "1001", Username: "alice"}
+	rootUser := &user.User{Uid: "0", Username: "root"}
+	bob := &user.User{Uid: "1000", Username: "bob"}
+	lookup := fakeGrantLookup(alice, rootUser, bob)
+
+	t.Run("非 root + --for ⇒ 用法错", func(t *testing.T) {
+		_, err := planGrantIssue(1000, "", "alice", lookup)
+		if err == nil {
+			t.Fatal("非 root 指定 --for 必须拒绝")
+		}
+		if !strings.Contains(err.Error(), "--for") || !strings.Contains(err.Error(), "root") {
+			t.Errorf("错误应点明只有 root 能用 --for: %v", err)
+		}
+		var usageErr grantIssueUsageError
+		if !errors.As(err, &usageErr) {
+			t.Errorf("这类错应归为用法错(退出码 2): %v", err)
+		}
+	})
+
+	t.Run("root + 无 --for ⇒ 用法错", func(t *testing.T) {
+		_, err := planGrantIssue(0, "", "", lookup)
+		if err == nil {
+			t.Fatal("root 不写明给谁必须拒绝(未绑定 root 条子谁都用不了)")
+		}
+		if !strings.Contains(err.Error(), "必须写明给谁") {
+			t.Errorf("错误应点明 root 必须写明给谁: %v", err)
+		}
+		var usageErr grantIssueUsageError
+		if !errors.As(err, &usageErr) {
+			t.Errorf("这类错应归为用法错(退出码 2): %v", err)
+		}
+	})
+
+	t.Run("root + --for 存在的用户 ⇒ 属主 root 且绑定目标", func(t *testing.T) {
+		plan, err := planGrantIssue(0, "", "alice", lookup)
+		if err != nil {
+			t.Fatalf("planGrantIssue 失败: %v", err)
+		}
+		if plan.issuer.uid != 0 || plan.issuer.name != "root" {
+			t.Errorf("issuer = (%d, %q), want (0, \"root\")", plan.issuer.uid, plan.issuer.name)
+		}
+		if plan.forUID == nil || *plan.forUID != 1001 {
+			t.Errorf("forUID = %v, want 1001", plan.forUID)
+		}
+		if plan.forUser != "alice" {
+			t.Errorf("forUser = %q, want \"alice\"", plan.forUser)
+		}
+	})
+
+	t.Run("root + --for 时忽略 SUDO_USER", func(t *testing.T) {
+		plan, err := planGrantIssue(0, "bob", "alice", lookup)
+		if err != nil {
+			t.Fatalf("planGrantIssue 失败: %v", err)
+		}
+		if plan.issuer.uid != 0 || plan.issuer.name != "root" {
+			t.Errorf("写明给谁时署名必须是 root, 实得 (%d, %q)", plan.issuer.uid, plan.issuer.name)
+		}
+	})
+
+	t.Run("root + --for 不存在的用户 ⇒ 错", func(t *testing.T) {
+		_, err := planGrantIssue(0, "", "no-such-user", lookup)
+		if err == nil {
+			t.Fatal("目标用户不存在必须拒绝")
+		}
+		if !strings.Contains(err.Error(), "不存在") {
+			t.Errorf("错误应点明用户不存在: %v", err)
+		}
+	})
+
+	t.Run("非 root + 无 --for ⇒ 签给自己且不绑定", func(t *testing.T) {
+		plan, err := planGrantIssue(1000, "", "", lookup)
+		if err != nil {
+			t.Fatalf("planGrantIssue 失败: %v", err)
+		}
+		if plan.issuer.uid != 1000 || plan.issuer.name != "bob" {
+			t.Errorf("issuer = (%d, %q), want (1000, \"bob\")", plan.issuer.uid, plan.issuer.name)
+		}
+		if plan.forUID != nil {
+			t.Errorf("非 root 签给自己的条子不得绑定执行者: %v", *plan.forUID)
+		}
+		if plan.forUser != "" {
+			t.Errorf("未绑定时 forUser 必须为空, 实得 %q", plan.forUser)
+		}
+	})
+
+	t.Run("root + SUDO_USER=普通用户 + 无 --for ⇒ 属主是调用者", func(t *testing.T) {
+		plan, err := planGrantIssue(0, "alice", "", lookup)
+		if err != nil {
+			t.Fatalf("planGrantIssue 失败: %v", err)
+		}
+		if plan.issuer.uid != 1001 || plan.issuer.name != "alice" {
+			t.Errorf("issuer = (%d, %q), want (1001, \"alice\")", plan.issuer.uid, plan.issuer.name)
+		}
+		if plan.forUID != nil {
+			t.Errorf("未绑定条子不得带 forUID: %v", *plan.forUID)
+		}
+	})
+
+	t.Run("root + SUDO_USER=root + 无 --for ⇒ 错(不变量兜住)", func(t *testing.T) {
+		_, err := planGrantIssue(0, "root", "", lookup)
+		if err == nil {
+			t.Fatal("SUDO_USER=root 且无 --for 必须拒绝")
+		}
+		if !strings.Contains(err.Error(), "必须写明给谁") {
+			t.Errorf("错误应由 root 未绑定不变量给出: %v", err)
+		}
+	})
+
+	t.Run("root + --for root ⇒ forUID 指向 0 而不是 nil", func(t *testing.T) {
+		plan, err := planGrantIssue(0, "", "root", lookup)
+		if err != nil {
+			t.Fatalf("planGrantIssue 失败: %v", err)
+		}
+		if plan.forUID == nil {
+			t.Fatal("--for root 必须绑定到 uid 0, 不能用 nil 冒充")
+		}
+		if *plan.forUID != 0 {
+			t.Errorf("forUID = %d, want 0", *plan.forUID)
+		}
+		if plan.forUser != "root" {
+			t.Errorf("forUser = %q, want \"root\"", plan.forUser)
+		}
+	})
+}
+
+// TestGrantAddWithoutForLeavesUnbound 钉非 root 不带 --for 的正常签发:
+// 条子属主是自己, 文件里不出现 for_uid 键(未绑定不是「绑定到 0」)。
+func TestGrantAddWithoutForLeavesUnbound(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 不写 --for 按设计被拒, 本用例只测非 root 的未绑定签发")
+	}
+	dir, _, rc := newGrantEnv(t)
+	_, uid := signerContext(t)
+
+	code, out, errOut := rc("grant", "add", "--scope", testGrantScope)
+	if code != exitOK {
+		t.Fatalf("退出码 = %d, want 0; stderr: %s", code, errOut)
+	}
+	var doc grantAddDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 grantAddDoc: %v", err)
+	}
+	if doc.ForUID != nil || doc.ForUser != "" {
+		t.Errorf("未绑定签发的输出不得带 for_uid/for_user: %+v", doc)
+	}
+	path := filepath.Join(dir, doc.ID+".json")
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("条子文件不存在: %v", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("无法读取文件属主: %T", fi.Sys())
+	}
+	if st.Uid != uid {
+		t.Errorf("条子文件属主 uid = %d, want %d", st.Uid, uid)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读条子失败: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("条子不是 JSON 对象: %v", err)
+	}
+	if _, ok := raw["for_uid"]; ok {
+		t.Errorf("未绑定条子的 JSON 不得出现 for_uid 键: %s", data)
+	}
+	if _, ok := raw["for_user"]; ok {
+		t.Errorf("未绑定条子的 JSON 不得出现 for_user 键: %s", data)
+	}
+}
+
+// TestGrantAddWithForRefusedForNonRoot 钉 --for 是 root 专属: 非 root 用它就是用法错(退出码 2)。
+func TestGrantAddWithForRefusedForNonRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 用 --for 是合法路径, 本用例只测非 root 的拒绝")
+	}
+	dir, _, rc := newGrantEnv(t)
+	u, err := user.Current()
+	if err != nil {
+		t.Fatalf("取当前用户失败: %v", err)
+	}
+
+	code, out, errOut := rc("grant", "add", "--scope", testGrantScope, "--for", u.Username)
+	if code != exitUsage {
+		t.Fatalf("退出码 = %d, want %d; stdout: %s", code, exitUsage, out)
+	}
+	if !strings.Contains(errOut, "--for") || !strings.Contains(errOut, "root") {
+		t.Errorf("stderr 应点明只有 root 能用 --for: %q", errOut)
+	}
+	oneJSONDoc(t, out)
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("拒绝后目录应为空: %v", entries)
+	}
+}
+
+// TestGrantListShowsBindingFields 钉 grant list 的 owner / for_uid / for_user / usage_known 形状。
+func TestGrantListShowsBindingFields(t *testing.T) {
+	dir, _, rc := newGrantEnv(t)
+	me, err := user.Current()
+	if err != nil {
+		t.Fatalf("取当前用户失败: %v", err)
+	}
+	now := time.Now().UTC()
+	unbound := &grant.Grant{
+		ID: "g-20261120-11111111", Scope: []string{testGrantScope}, IssuedBy: "self",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour), MaxUses: 1,
+	}
+	boundUID := uint32(1001)
+	declared := &grant.Grant{
+		ID: "g-20261120-22222222", Scope: []string{testGrantScope}, IssuedBy: "self",
+		IssuedAt: now, ExpiresAt: now.Add(time.Hour), MaxUses: 1,
+		ForUID: &boundUID, ForUser: "alice",
+	}
+	writeTestGrant(t, dir, unbound)
+	writeTestGrant(t, dir, declared)
+
+	code, out, errOut := rc("grant", "list")
+	if code != exitOK {
+		t.Fatalf("grant list 退出码 = %d; stderr: %s", code, errOut)
+	}
+	var doc grantListDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 grantListDoc: %v (%q)", err, out)
+	}
+	if len(doc.Grants) != 2 {
+		t.Fatalf("条子数 = %d, want 2: %+v", len(doc.Grants), doc.Grants)
+	}
+	var raw struct {
+		Grants []map[string]json.RawMessage `json:"grants"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &raw); err != nil {
+		t.Fatalf("stdout 非 grantListDoc: %v", err)
+	}
+	for _, key := range []string{"owner", "usage_known"} {
+		if _, ok := raw.Grants[0][key]; !ok {
+			t.Errorf("grant list 缺 %q 键: %s", key, out)
+		}
+	}
+	if _, ok := raw.Grants[0]["for_uid"]; ok {
+		t.Errorf("未绑定条子不得出现 for_uid 键: %s", out)
+	}
+	if _, ok := raw.Grants[1]["for_uid"]; !ok {
+		t.Errorf("绑定条子必须出现 for_uid 键: %s", out)
+	}
+	if doc.Grants[0].Owner != me.Username {
+		t.Errorf("owner = %q, want %q(由 stat uid 反查, 不用自报 issued_by)", doc.Grants[0].Owner, me.Username)
+	}
+	if doc.Grants[0].ForUID != nil || doc.Grants[0].ForUser != "" {
+		t.Errorf("未绑定条子不得带 for_uid/for_user: %+v", doc.Grants[0])
+	}
+	if doc.Grants[1].ForUID == nil || *doc.Grants[1].ForUID != boundUID || doc.Grants[1].ForUser != "alice" {
+		t.Errorf("绑定条子字段异常: %+v", doc.Grants[1])
+	}
+	// 非 root 属主却声明了 for_uid ⇒ 这张条子没有合法执行者, used 只是占位。
+	if doc.Grants[1].UsageKnown {
+		t.Errorf("非 root 属主声明 for_uid 时 usage_known 必须为 false: %+v", doc.Grants[1])
+	}
+	// 属主自己的未绑定条子: 账本不存在 ⇒ 真实 0 次。
+	if !doc.Grants[0].UsageKnown || doc.Grants[0].Used != 0 {
+		t.Errorf("空账本应给出 used=0 且 usage_known=true: %+v", doc.Grants[0])
+	}
+}
+
+// TestGrantListUsageFromBoundExecutorLedger 钉用量从**唯一合法执行者**的账本读:
+// 测试进程签的条子属主是自己, 账本落在 usage-<自己 uid>.jsonl。
+func TestGrantListUsageFromBoundExecutorLedger(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 未绑定条子按设计被拒, 本用例依赖非 root 自签")
+	}
+	_, _, rc := newGrantEnv(t)
+	_, uid := signerContext(t)
+
+	code, out, errOut := rc("grant", "add", "--scope", testGrantScope)
+	if code != exitOK {
+		t.Fatalf("grant add 退出码 = %d; stderr: %s", code, errOut)
+	}
+	var added grantAddDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &added); err != nil {
+		t.Fatalf("stdout 非 grantAddDoc: %v", err)
+	}
+	usagePath, err := grant.UsageLogPathFor(uid)
+	if err != nil {
+		t.Fatalf("解析用量日志路径失败: %v", err)
+	}
+	if err := grant.RecordUse(usagePath, added.ID, time.Now().UTC()); err != nil {
+		t.Fatalf("写用量记账失败: %v", err)
+	}
+
+	code, out, errOut = rc("grant", "list")
+	if code != exitOK {
+		t.Fatalf("grant list 退出码 = %d; stderr: %s", code, errOut)
+	}
+	var doc grantListDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 grantListDoc: %v", err)
+	}
+	if len(doc.Grants) != 1 {
+		t.Fatalf("条子数 = %d, want 1: %+v", len(doc.Grants), doc.Grants)
+	}
+	if doc.Grants[0].Used != 1 {
+		t.Errorf("used = %d, want 1(账本按执行者分文件)", doc.Grants[0].Used)
+	}
+	if !doc.Grants[0].UsageKnown {
+		t.Errorf("账本读得到时 usage_known 必须为 true: %+v", doc.Grants[0])
+	}
+}
+
+// TestGrantListMissingLedgerIsKnownZero 钉「账本不存在」是真实的 0 次, 不是不可信计数。
+func TestGrantListMissingLedgerIsKnownZero(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 未绑定条子按设计被拒, 本用例依赖非 root 自签")
+	}
+	_, _, rc := newGrantEnv(t)
+	signerContext(t)
+
+	code, out, errOut := rc("grant", "add", "--scope", testGrantScope)
+	if code != exitOK {
+		t.Fatalf("grant add 退出码 = %d; stderr: %s", code, errOut)
+	}
+	var added grantAddDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &added); err != nil {
+		t.Fatalf("stdout 非 grantAddDoc: %v", err)
+	}
+
+	code, out, errOut = rc("grant", "list")
+	if code != exitOK {
+		t.Fatalf("grant list 退出码 = %d; stderr: %s", code, errOut)
+	}
+	var doc grantListDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 grantListDoc: %v", err)
+	}
+	if len(doc.Grants) != 1 {
+		t.Fatalf("条子数 = %d, want 1: %+v", len(doc.Grants), doc.Grants)
+	}
+	if doc.Grants[0].Used != 0 {
+		t.Errorf("空账本 used = %d, want 0", doc.Grants[0].Used)
+	}
+	if !doc.Grants[0].UsageKnown {
+		t.Errorf("账本不存在是真实的 0 次, usage_known 应为 true: %+v", doc.Grants[0])
+	}
 }

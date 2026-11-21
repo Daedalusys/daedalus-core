@@ -47,6 +47,10 @@ type grantAddDoc struct {
 	ExpiresAt string   `json:"expires_at"`
 	MaxUses   int      `json:"max_uses"`
 	Note      string   `json:"note,omitempty"`
+	// for_uid / for_user 回显「这张条子给谁用」: 人签完当场就能核对绑定有没有写错,
+	// 而不是等到 agent 用不了才回头翻 grant list。
+	ForUID  *uint32 `json:"for_uid,omitempty"`
+	ForUser string  `json:"for_user,omitempty"`
 }
 
 // grantListEntry 是 grant list 里一张条子的只读视图(used 来自用量记账)。
@@ -56,12 +60,20 @@ type grantListEntry struct {
 	// issued_by 是条子文件里的自报字段, 不可信, 只作线索; 身份以 owner_uid 为准。
 	IssuedBy string `json:"issued_by"`
 	// owner_uid 是文件属主, 唯一可信的身份来源; -1 表示取不到属主。
-	OwnerUID  int    `json:"owner_uid"`
-	IssuedAt  string `json:"issued_at"`
-	ExpiresAt string `json:"expires_at"`
-	MaxUses   int    `json:"max_uses"`
-	Used      int    `json:"used"`
-	Expired   bool   `json:"expired"`
+	OwnerUID int `json:"owner_uid"`
+	// owner 是 owner_uid 反查出的账号名, 只为人读方便; 反查失败时留空。
+	// 不能用 issued_by 顶替: 那是 JSON 自报字段, 谁都能写成任意名字。
+	Owner     string  `json:"owner"`
+	ForUID    *uint32 `json:"for_uid,omitempty"`
+	ForUser   string  `json:"for_user,omitempty"`
+	IssuedAt  string  `json:"issued_at"`
+	ExpiresAt string  `json:"expires_at"`
+	MaxUses   int     `json:"max_uses"`
+	Used      int     `json:"used"`
+	Expired   bool    `json:"expired"`
+	// usage_known 说明 used 是不是可信计数: 读不到账本(无权看)或这张条子没有
+	// 合法执行者时 used 只是 0 的占位, 不代表真的没用过。
+	UsageKnown bool `json:"usage_known"`
 }
 
 // grantInvalidEntry 是目录里过不了严格解析的文件: 列出来比整条命令失败更有用,
@@ -77,9 +89,32 @@ type grantListDoc struct {
 	Invalid []grantInvalidEntry `json:"invalid,omitempty"`
 }
 
+// grantUsageLedger 是一次账本读取的结果; 同一 uid 在一条 list 命令里只读一次,
+// 避免为每张条子重读同一个文件。
+type grantUsageLedger struct {
+	counts map[string]int
+	// known=false 表示 counts 不可信(无权读别人的账本), 此时 used 只能是占位 0。
+	known bool
+	// err 是「账本存在但读坏了」: 这类错误必须整条命令失败, 与无权读区分开。
+	err error
+}
+
 // grantRevokeDoc 是 grant revoke 的 stdout 文档。
 type grantRevokeDoc struct {
 	Revoked string `json:"revoked"`
+}
+
+// grantOwnerName 由 stat 的 uid 反查账号名, 只为人读方便; 反查失败留空。
+// 身份判定仍以 uid 为准: 账号名会改、会被复用。
+func grantOwnerName(uid int) string {
+	if uid < 0 {
+		return ""
+	}
+	u, err := user.LookupId(strconv.Itoa(uid))
+	if err != nil {
+		return ""
+	}
+	return u.Username
 }
 
 // cmdGrant 分派 grant 子命令。
@@ -124,10 +159,17 @@ func cmdGrantAdd(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitUsage
 	}
-	iss, err := resolveIssuer()
+	plan, err := planGrantIssue(os.Geteuid(), os.Getenv("SUDO_USER"), opts.forUser, lookupNameOrUID)
 	if err != nil {
+		// 用法错与运行时故障要分开: 前者是这次调用本身不成立(退出码 2),
+		// 后者是环境/身份解析失败(退出码 1), 混成一种会让人修错方向。
+		var usageErr grantIssueUsageError
+		if errors.As(err, &usageErr) {
+			return failUsage(stdout, stderr, err.Error())
+		}
 		return failRuntime(stdout, stderr, err.Error())
 	}
+	iss := plan.issuer
 	cfg, err := autonomy.LoadConfigured()
 	if err != nil {
 		// 档位表「不存在」与「存在但不合法」是两种处境: 前者只是还没配置(除 root 外
@@ -178,6 +220,8 @@ func cmdGrantAdd(args []string, stdout, stderr io.Writer) int {
 		ExpiresAt: now.Add(opts.ttl),
 		MaxUses:   opts.count,
 		Note:      opts.note,
+		ForUID:    plan.forUID,
+		ForUser:   plan.forUser,
 	}
 	// 签发侧自检与消费侧同一函数: 范围/时长/次数/危险对象在签发当场就拒。
 	if err := grant.Authorize(cfg, g, iss.uid, iss.name, now); err != nil {
@@ -204,6 +248,8 @@ func cmdGrantAdd(args []string, stdout, stderr io.Writer) int {
 		ExpiresAt: g.ExpiresAt.Format(time.RFC3339),
 		MaxUses:   g.MaxUses,
 		Note:      g.Note,
+		ForUID:    g.ForUID,
+		ForUser:   g.ForUser,
 	})
 	return exitOK
 }
@@ -218,16 +264,33 @@ func cmdGrantList(stdout, stderr io.Writer) int {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return failRuntime(stdout, stderr, fmt.Sprintf("读条子目录 %s 失败: %v", dir, err))
 	}
-	// 只读命令经 grant.UsageLogPath → dirs.TxRoot 探测目录, 可能建出
+	// 用量账本按执行者分文件, 每张条子的用量只记在它唯一合法执行者的账本里。
+	// 读账本经 grant.UsageLogPathFor → dirs.TxRoot 探测目录, 可能建出
 	// $HOME/.local/share/daedalus/tx。这点副作用换的是「已用次数不许撒谎」:
 	// 要做到零写需 SDK 提供「只解析不探测」的入口, 不值得为它放宽用量判定。
-	usagePath, err := grant.UsageLogPath()
-	if err != nil {
-		return failRuntime(stdout, stderr, err.Error())
-	}
-	used, err := grant.UsedCounts(usagePath)
-	if err != nil {
-		return failRuntime(stdout, stderr, fmt.Sprintf("读用量记账失败(坏行不得静默少计): %v", err))
+	ledgers := make(map[uint32]grantUsageLedger)
+	readLedger := func(uid uint32) (grantUsageLedger, error) {
+		if l, ok := ledgers[uid]; ok {
+			return l, nil
+		}
+		path, err := grant.UsageLogPathFor(uid)
+		if err != nil {
+			return grantUsageLedger{}, err
+		}
+		counts, err := grant.UsedCounts(path)
+		l := grantUsageLedger{counts: counts, known: true}
+		if err != nil {
+			// 别人的账本打不开不是账本损坏, 是「你无权看」: 整条 list 失败会把
+			// 一次普通的列举变成需要 root 的操作, 而 used=0 也不该被当成真的 0 次。
+			if errors.Is(err, fs.ErrPermission) {
+				l = grantUsageLedger{known: false}
+			} else {
+				// 坏行仍要整条失败: 少计等于悄悄放宽上限。
+				l = grantUsageLedger{err: err}
+			}
+		}
+		ledgers[uid] = l
+		return l, nil
 	}
 
 	doc := grantListDoc{Grants: []grantListEntry{}, Invalid: []grantInvalidEntry{}}
@@ -262,17 +325,38 @@ func cmdGrantList(stdout, stderr io.Writer) int {
 				ownerUID = int(st.Uid)
 			}
 		}
-		doc.Grants = append(doc.Grants, grantListEntry{
+		row := grantListEntry{
 			ID:        g.ID,
 			Scope:     g.Scope,
 			IssuedBy:  g.IssuedBy,
 			OwnerUID:  ownerUID,
+			Owner:     grantOwnerName(ownerUID),
+			ForUID:    g.ForUID,
+			ForUser:   g.ForUser,
 			IssuedAt:  g.IssuedAt.Format(time.RFC3339),
 			ExpiresAt: g.ExpiresAt.Format(time.RFC3339),
 			MaxUses:   g.MaxUses,
-			Used:      used[g.ID],
 			Expired:   g.Expired(now),
-		})
+		}
+		// 只有存在唯一合法执行者时才有账本可读; 没有执行者(root 没写明给谁,
+		// 或非 root 属主却声明了 for_uid)意味着这张条子不可能再产生新用量,
+		// used=0 是事实而不是「没读到」, 但仍标 usage_known=false 以示未核对账本。
+		if ownerUID >= 0 {
+			if boundUID, bound := grant.BoundExecutorUID(g, uint32(ownerUID)); bound {
+				l, err := readLedger(boundUID)
+				if err != nil {
+					return failRuntime(stdout, stderr, err.Error())
+				}
+				if l.err != nil {
+					return failRuntime(stdout, stderr, fmt.Sprintf("读用量记账失败(坏行不得静默少计): %v", l.err))
+				}
+				if l.known {
+					row.Used = l.counts[g.ID]
+					row.UsageKnown = true
+				}
+			}
+		}
+		doc.Grants = append(doc.Grants, row)
 	}
 	sort.Slice(doc.Grants, func(i, j int) bool { return doc.Grants[i].ID < doc.Grants[j].ID })
 	sort.Slice(doc.Invalid, func(i, j int) bool { return doc.Invalid[i].File < doc.Invalid[j].File })
@@ -375,10 +459,11 @@ func canRevoke(fileUID, issuerUID, euid int) error {
 
 // grantAddOptions 是 grant add 的旗标集合。
 type grantAddOptions struct {
-	scopes []string
-	ttl    time.Duration
-	count  int
-	note   string
+	scopes  []string
+	ttl     time.Duration
+	count   int
+	note    string
+	forUser string
 }
 
 // parseGrantAddArgs 解析 add 的旗标并复核全局硬上限; 任何形状错都是用法错误(exit 2)。
@@ -388,7 +473,7 @@ func parseGrantAddArgs(args []string, stdout, stderr io.Writer) (grantAddOptions
 	for i := 0; i < len(args); i++ {
 		name := args[i]
 		switch name {
-		case "--scope", "--ttl", "--count", "--note":
+		case "--scope", "--ttl", "--count", "--note", "--for":
 		default:
 			failUsage(stdout, stderr, fmt.Sprintf("未知参数: %q", name))
 			return opts, false
@@ -435,6 +520,8 @@ func parseGrantAddArgs(args []string, stdout, stderr io.Writer) (grantAddOptions
 			opts.count = n
 		case "--note":
 			opts.note = value
+		case "--for":
+			opts.forUser = value
 		}
 	}
 	if len(opts.scopes) == 0 {
@@ -487,6 +574,62 @@ func issuerIdentity(euid int, sudoUser string, lookup func(string) (*user.User, 
 	}
 	// 查不到名字也照签: 名字只作线索, 权威是 uid。
 	return euid, fmt.Sprintf("uid-%d", euid), nil
+}
+
+// grantIssuePlan 是一次签发的三方身份: 文件属主(签发者)与绑定的执行者。
+type grantIssuePlan struct {
+	issuer issuer
+	// forUID 为 nil 表示不绑定执行者(非 root 用户签给自己的条子)。
+	forUID  *uint32
+	forUser string
+}
+
+// grantIssueUsageError 标记「这次调用本身不成立」的错误(非 root 用 --for、
+// root 没写明给谁、目标用户不存在): 它们该回用法错(退出码 2), 而不是运行期故障。
+type grantIssueUsageError struct{ msg string }
+
+func (e grantIssueUsageError) Error() string { return e.msg }
+
+func grantIssueUsagef(format string, args ...any) error {
+	return grantIssueUsageError{msg: fmt.Sprintf(format, args...)}
+}
+
+// planGrantIssue 决定这次签发是谁签的、文件属主是谁、for_uid/for_user 写什么。
+//
+// 写明给谁时署名必须是 root 本身, 且**忽略 SUDO_USER**: 它只说明「谁请求 root
+// 签的」, 不是署名者。若拿它顶替 root, chown 会把文件属主改成非 root, 而
+// for_uid 只在 root 拥有的文件上可信, 于是这张条子的绑定立刻作废。
+func planGrantIssue(euid int, sudoUser, forUser string, lookup func(string) (*user.User, error)) (grantIssuePlan, error) {
+	if forUser != "" {
+		if euid != 0 {
+			return grantIssuePlan{}, grantIssueUsagef("只有 root 能指定给谁(--for <user>)")
+		}
+		u, err := lookup(forUser)
+		if err != nil {
+			return grantIssuePlan{}, grantIssueUsagef("用户 %q 不存在: %v", forUser, err)
+		}
+		uid, err := parseUserUID(u)
+		if err != nil {
+			return grantIssuePlan{}, err
+		}
+		// 文件属主保持 root: root 拥有的文件别人改不动, for_uid 才可信。
+		return grantIssuePlan{
+			issuer:  issuer{name: "root", uid: 0},
+			forUID:  &uid,
+			forUser: u.Username,
+		}, nil
+	}
+	uid, name, err := issuerIdentity(euid, sudoUser, lookup)
+	if err != nil {
+		return grantIssuePlan{}, err
+	}
+	plan := grantIssuePlan{issuer: issuer{name: name, uid: uint32(uid)}}
+	// 属主是 root 的未绑定条子谁都用不了(SDK 对 root 自己也不放行), 签出来只是垃圾。
+	// 这一条同时兜住 euid==0 且无 SUDO_USER 与 SUDO_USER=root 两种入口。
+	if plan.issuer.uid == 0 {
+		return grantIssuePlan{}, grantIssueUsagef("root 签发必须写明给谁(--for <user>)")
+	}
+	return plan, nil
 }
 
 // lookupNameOrUID 让 issuerIdentity 的单一 lookup 缝同时覆盖两种解析:
@@ -617,14 +760,21 @@ func writeGrantFile(dir string, g *grant.Grant, ownerUID uint32) (string, error)
 }
 
 // grantAuditArgs 是签发/撤销审计的 args 最小集(与设计约定的键一致)。
+// for_user 恒写(未绑定为空串), for_uid 只在有绑定时写: 审计链要能回答
+// 「这张条子是给谁的」, 只记 issued_by 回答不了。
 func grantAuditArgs(g *grant.Grant) map[string]any {
-	return map[string]any{
+	args := map[string]any{
 		"grant_id":    g.ID,
 		"scope":       g.Scope,
 		"ttl_seconds": int64(g.ExpiresAt.Sub(g.IssuedAt) / time.Second),
 		"max_uses":    g.MaxUses,
 		"issued_by":   g.IssuedBy,
+		"for_user":    g.ForUser,
 	}
+	if g.ForUID != nil {
+		args["for_uid"] = *g.ForUID
+	}
+	return args
 }
 
 // stampGrant 发一条条子审计(尽力而为: 写失败静默, 与事务审计同纪律)。
