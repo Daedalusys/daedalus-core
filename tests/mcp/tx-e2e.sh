@@ -35,6 +35,10 @@ AUTONOMY_PATH="${E2E_AUTONOMY_PATH:-/etc/daedalus/agent-autonomy.toml}"
 GRANTS_DIR="${E2E_GRANTS_DIR:-/run/daedalus/grants}"
 PENDING_DIR="${E2E_PENDING_DIR:-/run/daedalus/pending}"
 APPROVALS_DIR="${E2E_APPROVALS_DIR:-/run/daedalus/approvals}"
+# 第二个用户用来验「绑定到别人的条子用不了」「两个用户的待办 id 不撞」
+# 「每人一本账」。默认临时建一个 nologin 系统用户,用完删掉。
+SECOND_USER="${E2E_SECOND_USER:-daedalus-e2e-other}"
+SECOND_CREATED=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -95,6 +99,17 @@ mcp_call() { # mcp_call <工具> <参数 JSON> —— 输出 JSON 文本
   local extra=()
   [ -n "$POLICY" ] && extra+=(--env "DAEDALUS_POLICY_PATH=$POLICY")
   python3 "$CLIENT" --bin "$MCP_BIN" "${extra[@]}" --call "$1" --args "$2" 2>/dev/null
+}
+
+# mcp_call_as 以另一个用户身份问同一台服务器:执行者身份来自进程 euid,
+# 所以换用户 = 换执行者。客户端与二进制要放在家目录之外的世界可读路径:
+# 目标用户通常连调用者的家目录都进不去(0700)。
+mcp_call_as() { # mcp_call_as <用户> <工具> <参数 JSON>
+  local extra=()
+  [ -n "$POLICY" ] && extra+=(--env "DAEDALUS_POLICY_PATH=$SECOND_STAGE/policy.toml")
+  sudo -u "$1" env HOME="$SECOND_HOME" \
+    python3 "$SECOND_STAGE/tx-e2e-client.py" --bin "$SECOND_STAGE/daedalus-tx-mcp" \
+    "${extra[@]}" --call "$2" --args "$3" 2>/dev/null
 }
 
 json_get() { # json_get <json> <表达式: result.content[0].text 里 JSON 的键路径>
@@ -160,6 +175,27 @@ sudo install -d -m 1777 -o root -g root "$PENDING_DIR"
 sudo install -d -m 0755 -o root -g root "$APPROVALS_DIR"
 sudo getent group daedalus-signers >/dev/null 2>&1 || sudo groupadd -f daedalus-signers
 sudo usermod -aG daedalus-signers "$(id -un)" 2>/dev/null || true
+# 第二个用户:不需要登录会话(绑定判定只看 uid),nologin + 无家目录就够。
+if ! getent passwd "$SECOND_USER" >/dev/null 2>&1; then
+  sudo useradd -M -r -s /usr/sbin/nologin "$SECOND_USER" && SECOND_CREATED=1
+fi
+# 目标用户进不了调用者的家目录(0700),所以客户端与二进制要另放一份世界可读的;
+# HOME 单独给一个可写目录,免得账本/审计路径解析落在别人的家目录。
+SECOND_STAGE="${TMPDIR:-/tmp}/daedalus-e2e-second-stage"
+SECOND_HOME="${TMPDIR:-/tmp}/daedalus-e2e-second-home"
+rm -rf "$SECOND_STAGE" "$SECOND_HOME"
+mkdir -p "$SECOND_STAGE" "$SECOND_HOME"
+cp "$CLIENT" "$SECOND_STAGE/tx-e2e-client.py"
+cp "$MCP_BIN" "$SECOND_STAGE/daedalus-tx-mcp"
+chmod 0644 "$SECOND_STAGE/tx-e2e-client.py"
+chmod 0755 "$SECOND_STAGE/daedalus-tx-mcp" "$SECOND_STAGE" "$SECOND_HOME"
+# 策略文件也要放到世界可读的位置:目标用户连调用者家目录都进不去,
+# 给它原路径等于让它读不到策略、直接拒启。
+if [ -n "$POLICY" ]; then
+  cp "$POLICY" "$SECOND_STAGE/policy.toml"
+  chmod 0644 "$SECOND_STAGE/policy.toml"
+fi
+note "第二用户: $SECOND_USER(uid=$(id -u "$SECOND_USER" 2>/dev/null || echo missing))"
 # 上一次跑留下的待办/批准/条子会污染本次判定(批准在有效期内仍会被认)——先清干净。
 sudo rm -f "$PENDING_DIR"/*.json "$APPROVALS_DIR"/*.json "$GRANTS_DIR"/*.json 2>/dev/null || true
 ls -ld /run/daedalus "$GRANTS_DIR" "$PENDING_DIR" "$APPROVALS_DIR" >> "$EV"
@@ -267,6 +303,9 @@ else
 fi
 
 # 2a: 系统路径还没有账本目录 ⇒ 账本会落到用户 HOME ⇒ 必须 fail-closed 拒绝
+# 账本目录必须真的不存在,否则上一次跑留下的 1777 目录会让账本直接落在系统路径,
+# 这条断言就永远绿、什么也没验到。
+sudo rm -rf /var/lib/daedalus/tx
 R2B="$(mcp_call tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_CONFIRM\",\"desired_state\":\"restarted\",\"grant_id\":\"$GRANT_ID\"}")"
 say "R2B 原始: $R2B"
 note "账本落 HOME 时 apply → error=$(json_get "$R2B" error)"
@@ -284,14 +323,87 @@ say "R2C 原始: $R2C"
 note "账本在系统路径 apply → outcome=$(json_get "$R2C" outcome) grant_id=$(json_get "$R2C" grant_id)"
 check "场景2b:有匹配条子放行" applied "$(json_get "$R2C" outcome)"
 
-# root 签的条子:属主=root,消费侧按 root 恒可判
-run "再签一张(root 身份,root 恒可)" \
-  sudo env -u SUDO_USER "$TX_BIN" grant add --scope "systemd:user:restart:$UNIT_CONFIRM" --ttl 10m --count 1
-ROOT_GRANT="$(ls -1 "$GRANTS_DIR"/*.json 2>/dev/null | while read -r f; do [ "$(stat -c %U "$f")" = root ] && echo "$f"; done | head -1)"
-if [ -n "$ROOT_GRANT" ]; then
-  check "root 签的条子属主=root" root "$(stat -c %U "$ROOT_GRANT")"
+# root 签的条子:属主=root,但「给谁用」必须写明 —— 没写明的 root 条子谁都用不了。
+ROOT_FOR_US_RAW="$(sudo env -u SUDO_USER "$TX_BIN" grant add --for "$(id -un)" \
+  --scope "systemd:user:restart:$UNIT_CONFIRM" --ttl 10m --count 1 2>&1)"
+ROOT_FOR_US_RC=$?
+say ""; say '```'; say "$ROOT_FOR_US_RAW"; say '```'; say "退出码: $ROOT_FOR_US_RC"
+check "场景2c:root 签 --for 成功" 0 "$ROOT_FOR_US_RC"
+ROOT_FOR_US_ID="$(printf '%s' "$ROOT_FOR_US_RAW" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)"
+ROOT_GRANT="$GRANTS_DIR/$ROOT_FOR_US_ID.json"
+if [ -f "$ROOT_GRANT" ]; then
+  check "场景2c:root 签的条子属主=root" root "$(stat -c %U "$ROOT_GRANT")"
+  check "场景2c:for_uid 指向本用户" "$(id -u)" "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['for_uid'])" "$ROOT_GRANT")"
 else
-  check "root 签的条子属主=root" root none
+  check "场景2c:root 签的条子属主=root" root none
+  check "场景2c:for_uid 指向本用户" "$(id -u)" none
+fi
+
+# root 不写 --for:签出来的就是节点级通行证,必须当场拒(退出码 2)。
+NOFOR_RC=0
+run "root 不带 --for(应被拒)" sudo env -u SUDO_USER "$TX_BIN" grant add \
+  --scope "systemd:user:restart:$UNIT_CONFIRM" --ttl 10m --count 1 || NOFOR_RC=$?
+check "场景2c:root 不写 --for 被拒(退出码 2)" 2 "$NOFOR_RC"
+
+# 给本用户签的那张 root 条子必须真能用:这是生产上最常见的签发形态。
+R2Y="$(mcp_call tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_CONFIRM\",\"desired_state\":\"restarted\",\"grant_id\":\"$ROOT_FOR_US_ID\"}")"
+say "R2Y 原始: $R2Y"
+check "场景2c:root 给本用户签的条子放行" applied "$(json_get "$R2Y" outcome)"
+
+# ---------------------------------------------------------------- 场景 2d
+step "场景 2d(绑定):给别人签的条子本用户用不了 —— 真机越权的那条路径"
+SECOND_UID="$(id -u "$SECOND_USER" 2>/dev/null || true)"
+FOREIGN_ID=""
+if [ -n "$SECOND_UID" ]; then
+  FOREIGN_RAW="$(sudo env -u SUDO_USER "$TX_BIN" grant add --for "$SECOND_USER" \
+    --scope "systemd:user:restart:$UNIT_CONFIRM" --ttl 10m --count 1 2>&1)"
+  FOREIGN_ID="$(printf '%s' "$FOREIGN_RAW" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)"
+  note "给 $SECOND_USER(uid=$SECOND_UID)签的条子 id = $FOREIGN_ID"
+  # 先把单元停下:它刚被 2c 重启过,不停下来就验不出「被拒之后没动」。
+  systemctl --user stop "$UNIT_CONFIRM" >/dev/null 2>&1
+  R2X="$(mcp_call tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_CONFIRM\",\"desired_state\":\"restarted\",\"grant_id\":\"$FOREIGN_ID\"}")"
+  say "R2X 原始: $R2X"
+  check "场景2d:借用别人的条子被拒" grant_for_other_user "$(json_get "$R2X" error)"
+  if systemctl --user is-active --quiet "$UNIT_CONFIRM"; then
+    check "场景2d:被拒后单元没动" stopped moved
+  else
+    check "场景2d:被拒后单元没动" stopped stopped
+  fi
+else
+  check "场景2d:第二用户就位" yes no
+fi
+
+# ---------------------------------------------------------------- 场景 2e
+step "场景 2e(可发现):agent 能自己列出「手上能用哪些条子」"
+G_SELF="$(mcp_call tx_grants '{}')"
+say "tx_grants(本用户) 原始: $G_SELF"
+check "场景2e:清单里的执行者=本用户" "$(id -u)" "$(json_get "$G_SELF" executor.uid)"
+SELF_IDS="$(json_get "$G_SELF" grants)"
+case "$SELF_IDS" in
+  *"\"$ROOT_FOR_US_ID\""*) check "场景2e:本用户可用的条子在清单里" yes yes ;;
+  *) check "场景2e:本用户可用的条子在清单里" yes no ;;
+esac
+if [ -n "$FOREIGN_ID" ]; then
+  case "$SELF_IDS" in
+    *"\"$FOREIGN_ID\""*) check "场景2e:别人的条子不出现在清单里" yes no ;;
+    *) check "场景2e:别人的条子不出现在清单里" yes yes ;;
+  esac
+fi
+
+# 每人一本账:第二个用户以自己身份问同一台服务器,看到的是他自己的账与绑定。
+if [ -n "$SECOND_UID" ] && [ -n "$FOREIGN_ID" ]; then
+  G_OTHER="$(mcp_call_as "$SECOND_USER" tx_grants '{}')"
+  say "tx_grants($SECOND_USER) 原始: $G_OTHER"
+  check "场景2f:第二个用户的执行者身份=自己" "$SECOND_UID" "$(json_get "$G_OTHER" executor.uid)"
+  OTHER_IDS="$(json_get "$G_OTHER" grants)"
+  case "$OTHER_IDS" in
+    *"\"$ROOT_FOR_US_ID\""*) check "场景2f:第二个用户看不到本用户的条子" yes no ;;
+    *) check "场景2f:第二个用户看不到本用户的条子" yes yes ;;
+  esac
+  case "$OTHER_IDS" in
+    *"\"$FOREIGN_ID\""*) check "场景2f:第二个用户能看到给他签的条子" yes yes ;;
+    *) check "场景2f:第二个用户能看到给他签的条子" yes no ;;
+  esac
 fi
 
 # ---------------------------------------------------------------- 场景 3
@@ -328,6 +440,22 @@ else
   check "场景3:待办已落盘" yes no
 fi
 
+# ---------------------------------------------------------------- 场景 3b
+step "场景 3b(待办带人):两个用户对同一意图不得撞同一个待办 id"
+if [ -n "${SECOND_UID:-}" ] && [ -n "${PENDING_ID:-}" ]; then
+  R3_OTHER="$(mcp_call_as "$SECOND_USER" tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_HUMAN\",\"desired_state\":\"restarted\"}")"
+  say "tx_apply($SECOND_USER, human 档) 原始: $R3_OTHER"
+  OTHER_PENDING="$(json_get "$R3_OTHER" pending_id)"
+  note "第二用户的待办 id = $OTHER_PENDING;本用户的待办 id = $PENDING_ID"
+  if [ -n "$OTHER_PENDING" ] && [ "$OTHER_PENDING" != "$PENDING_ID" ]; then
+    check "场景3b:两个用户的待办 id 不撞" yes yes
+  else
+    check "场景3b:两个用户的待办 id 不撞" yes no
+  fi
+else
+  check "场景3b:前置条件(第二用户/本用户待办)" yes no
+fi
+
 # ---------------------------------------------------------------- 场景 4
 step "场景 4(危险名单):命中 policy.toml 的 high_risk_services ⇒ 至少第三档"
 R4="$(mcp_call tx_preview "{\"kind\":\"service\",\"name\":\"$UNIT_DANGER\",\"desired_state\":\"started\"}")"
@@ -348,6 +476,12 @@ systemctl --user disable --now "$UNIT_AUTO" "$UNIT_CONFIRM" "$UNIT_HUMAN" >/dev/
 rm -f "$UNIT_DIR/$UNIT_AUTO" "$UNIT_DIR/$UNIT_CONFIRM" "$UNIT_DIR/$UNIT_HUMAN"
 systemctl --user daemon-reload
 sudo rm -f "$AUTONOMY_PATH" 2>/dev/null || true
+# 临时用户只在本次新建时才删:调用方用 E2E_SECOND_USER 指向既有用户时不许动它。
+if [ "${SECOND_CREATED:-0}" = 1 ]; then
+  sudo userdel "$SECOND_USER" 2>/dev/null || true
+fi
+sudo rm -rf /tmp/daedalus-e2e-second-home 2>/dev/null || true
+rm -rf "${SECOND_STAGE:-}" "${SECOND_HOME:-}" 2>/dev/null || true
 
 say ""
 say "## 汇总"

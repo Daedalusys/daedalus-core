@@ -23,9 +23,45 @@ sg daedalus-signers -c "E2E_CLIENT=$PWD/tx-e2e-client.py \
 1. **三档都真跑通了**:auto 档单元真的起来;confirm 档无条子被拒、有条子放行;human 档未批准不执行、批准后按同一 argv 执行。
 2. **`max_uses` 的账本路径是真门**:账本落到 `$HOME/.local/share/daedalus/tx` 时,插件按 fail-closed **拒绝执行**(`grant_usage_failed`) —— 这条防线有效,但也暴露了 `/var/lib/daedalus/tx` 此前没人建,现已在 tmpfiles 里补上。
 3. **`sudo` 签不出 root 条子**:`sudo -i daedalus-tx grant add` 的属主仍是调用者(`SUDO_USER` 优先)。root 条子必须来自**没有 `SUDO_USER` 的 root 进程**(实测用 `sudo env -u SUDO_USER …` 等价复现)。
-4. **条子按 `grant_id` 显式引用**:第二档的 `tx_apply` 需要把 `grant_id` 传进来(不是自动扫目录挑一张)。人签完条子后要把 id 告诉 agent —— 这一条目前没有工具能"列出可用条子",是已知缺口。
+4. **条子按 `grant_id` 显式引用**:第二档的 `tx_apply` 需要把 `grant_id` 传进来(不是自动扫目录挑一张)。人签完条子后要把 id 告诉 agent —— 这一条当时没有工具能"列出可用条子",是已知缺口。
+
+## 第二轮(v2):越权修复后的复跑(32/32 通过)
+
+证据:`EVIDENCE-v2.md`(同一台机器、同一套脚本,新增 13 条断言)。
+
+这一轮修的是第一轮暴露的越权:**普通用户拿 root 签的条子重启了自己域里的单元**
+(当时唯一挡住它的是账本打不开这件无关故障)。修法 = 条子绑定使用者 + 账本按人分文件
++ 待办 id 带执行者 + 新增只读工具 `tx_grants`。
+
+复现命令(与第一轮相同,二进制换成 v2 构建):
+
+```bash
+# 目标机上
+scp -r tx-e2e-v2 udefine-dev@Masterwet_Server:~/
+sudo install -m 0755 ~/tx-e2e-v2/bin/daedalus-tx /usr/local/bin/daedalus-tx
+bash ~/tx-e2e-v2/run.sh          # 内部: sg daedalus-signers -c "bash tx-e2e.sh --bin-dir … --policy …"
+```
+
+新增断言与实测结果:
+
+| 断言 | 结果 |
+| --- | --- |
+| root `grant add --for <本用户>` 成功,文件属主仍是 root,`for_uid` = 本用户 uid | ✅ |
+| root **不写** `--for` ⇒ 退出码 2,错误串「root 签发必须写明给谁」 | ✅ |
+| root 给本用户签的条子真能用(`outcome=applied`) | ✅ |
+| root 给**另一个用户**(uid 967)签的条子,本用户拿去用 ⇒ `grant_for_other_user`,detail 点明两个 uid,单元没动 | ✅ |
+| `tx_grants` 列出本用户可用条子、**不列**别人的;`executor.uid` = 本用户 | ✅ |
+| 第二个用户以自己身份跑 `tx_grants`:执行者是自己,看得到给他签的那张,看不到本用户的 | ✅ |
+| 两个用户对同一意图的待办 id 不同(`p-0e693a34e02f8589` vs `p-5087acfd07aad07f`) | ✅ |
+
+第一轮记的两条缺口现状:
+- **缺口 1(没有「列出可用条子」的工具)**:已修 —— `tx_grants` + 拒绝体回带 `available_grants`。
+- **缺口 3(多用户共用同一账本文件)**:已修 —— 账本改为 `usage-<uid>.jsonl`,每人一本;
+  真机上两个用户各自可用,谁也不会因为打不开别人的账本而永久 fail-closed。
 
 ## 已知未覆盖
 
 - 真 guest(QEMU/ISO)内的同一套验收 —— 本轮是在真机上做的,不是镜像启动的 guest。
-- 多用户同机共用一个账本文件的情形(第一个创建者拥有 0644 账本,别人只能读)。
+- 第二用户用 `sudo -u` 临时造(nologin、无家目录):它验证的是**绑定判定与账本分文件**,
+  不是「第二个用户真有一条 user bus 去跑 systemctl --user」。后者要 `loginctl enable-linger`
+  + `user@<uid>.service`,属部署面,不在本脚本内。
