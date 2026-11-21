@@ -18,7 +18,7 @@ Daedalus 由三个平级仓库组成，本地开发必须以**平级目录**形�
 ~/work/daedalusys/
 ├── daedalus-core/      # 镜像编排 + 5 core runtime + copilot 源码
 ├── daedalus-sdk/       # 11 个安全核心包 + Provider/Slot 契约
-└── daedalus-plugins/   # 9 个 Go 能力插件 monorepo
+└── daedalus-plugins/   # 14 个 Go 能力插件 monorepo
 ```
 
 **仓名必须为 `daedalus-core` / `daedalus-sdk` / `daedalus-plugins`**（与 `go.work` 路径对应）。

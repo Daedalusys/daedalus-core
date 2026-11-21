@@ -1,0 +1,26 @@
+[Unit]
+Description=Daedalus Transaction MCP Sandbox Profile
+
+[Service]
+Type=simple
+# ExecStart 内容由插件 manifest(daedalus.tx)派生:构建期 76-daedalus-plugin-gen.sh
+# 调 daedalus-host render-unit 渲染并自校验一致性;手工漂移将导致构建失败。
+# 策略消费约定:不注入 Environment=ALLOW_COMMANDS —— 白名单唯一来源是 policy.toml,
+# 且该覆盖只对 daedalus-shell 有意义。/run/daedalus 的只读放行在 landlock.conf。
+ExecStart=/opt/daedalus/plugins/daedalus.tx/bin/daedalus-tx-mcp
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=read-only
+StateDirectory=daedalus
+NoNewPrivileges=yes
+CPUQuota=50%
+MemoryMax=256M
+IOWeight=100
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

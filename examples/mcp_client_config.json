@@ -38,6 +38,11 @@
       "command": "/opt/daedalus/plugins/daedalus.organize/bin/daedalus-organize",
       "args": [],
       "description": "Daedalus File Organizer (Go binary; plan by_type/by_date/by_size/by_ext + conflict preview (rename/skip/abort) + confirm_token-gated os.Rename via daedalus-tx organize.move adapter)"
+    },
+    "daedalus-tx": {
+      "command": "/opt/daedalus/plugins/daedalus.tx/bin/daedalus-tx-mcp",
+      "args": [],
+      "description": "Daedalus Transaction Capability Server (Go binary daedalus-tx-mcp; the single MCP write channel: tx_preview/tx_apply/tx_status/tx_list/tx_pending/tx_rollback, gated by /etc/daedalus/agent-autonomy.toml auto/confirm/human tiers; not the daedalus-tx CLI)"
     }
   }
 }

@@ -34,7 +34,7 @@
 
 `entrypoint` 在实践中已是 Deno 专属:`buildStartTokens` 的 `native` 分支把它当作
 `executable` 之后的普通参数(`return append([]string{absExec}, entry...)`),
-而 13 个能力插件(`daedalus-plugins` 的 `origin/main`)全部 `runtime=native` 且 `entrypoint` 为空 —— 这条路径从未被走过。
+而 14 个能力插件(`daedalus-plugins` 的 `origin/main`)全部 `runtime=native` 且 `entrypoint` 为空 —— 这条路径从未被走过。
 也就是说,**这套旗标抽象只在 1 个插件上有实际内容**。
 
 ## 参照:Kubernetes 的扩展点
@@ -133,10 +133,10 @@ CLI,不是 system 单元。`systemd.exec(5)` 明确说明文件系统命名空�
 | 阶段 | 内容 | 判据 |
 |---|---|---|
 | 1 | 沙箱下沉到 OS 层(#117),manifest 不动 | 删掉 `--allow-*` 后 copilot 仍启动、探针仍 `DENIED` |
-| 2 | schema 换形:删 `runtime` / `entrypoint`,`type` 生效,`api_version` 协商 | 14 个 manifest(13 能力 + copilot)通过新校验;`buildStartTokens` 的 `switch` 消失 |
+| 2 | schema 换形:删 `runtime` / `entrypoint`,`type` 生效,`api_version` 协商 | 15 个 manifest(14 能力 + copilot)通过新校验;`buildStartTokens` 的 `switch` 消失 |
 | 3 | 运行时迁移(视生命周期决定) | 只改插件包内部,宿主零改动 |
 
-阶段 2 是破坏性 schema 变更,`api_version` 从 `0.1.0` 升到 `0.2.0`。13 个能力插件
+阶段 2 是破坏性 schema 变更,`api_version` 从 `0.1.0` 升到 `0.2.0`。14 个能力插件
 (`daedalus-plugins`)本来就是 `native` 且不写 `entrypoint`,删字段对它们是空操作;
 只有 copilot 需要新增入口脚本。
 

@@ -158,7 +158,7 @@ Spec(资源声明) → Tx(事务五步) → Observe(state 缓存) → Audit(哈�
 | --- | --- | --- |
 | 拉插件 | `just fetch-plugins` | 从 plugins 仓 release 拉 `*.plugin.zip`,`-verify` 解压即校验(fail-closed) |
 | 再生 copilot 安装态 | `just copilot-plugin` | 从 `plugin/copilot/` 源码重打安装态,防入库产物与源码漂移 |
-| 打包 | `just plugin-pack` | 构建 5 个 core runtime 与 9 个能力二进制 → zip 注入 checksums → 校验解压到镜像树 |
+| 打包 | `just plugin-pack` | 构建 5 个 core runtime 与 14 个能力二进制 → zip 注入 checksums → 校验解压到镜像树 |
 | 布局守门 | `just verify-dev-layout` | 校验三仓平级就位与各仓 `go.mod` module 路径匹配 |
 | 同步 vendor | `just sync` | `scripts/sync-daedalus.sh` 把 `files/` 与 `plugin/` 落位到 `base_image/` vendor 树 |
 | 构建镜像 | `just build` | 依赖前三步,`podman build` 按 `Containerfile` 分 stage 跑编号脚本,末段 `bootc container lint` |
