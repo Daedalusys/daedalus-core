@@ -25,7 +25,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CLIENT="$REPO_ROOT/tests/mcp/tx-e2e-client.py"
+CLIENT="${E2E_CLIENT:-$REPO_ROOT/tests/mcp/tx-e2e-client.py}"
 
 BIN_DIR=""
 POLICY=""
@@ -89,7 +89,7 @@ run() { # run <说明> <命令...> —— 记录命令与退出码,返回值即�
 UNIT_AUTO="$UNIT_PREFIX-auto.service"
 UNIT_CONFIRM="$UNIT_PREFIX-confirm.service"
 UNIT_HUMAN="$UNIT_PREFIX-human.service"
-UNIT_DANGER="$UNIT_PREFIX-danger.service"
+UNIT_DANGER="sshd-e2e.service"
 
 mcp_call() { # mcp_call <工具> <参数 JSON> —— 输出 JSON 文本
   local extra=()
@@ -155,11 +155,13 @@ fi
 # ---------------------------------------------------------------- 目录与身份
 step "准备:/run/daedalus 目录与签发者组"
 sudo install -d -m 0755 -o root -g root /run/daedalus
-sudo install -d -m 1775 -o root -g root "$GRANTS_DIR"
+sudo install -d -m 1775 -o root -g daedalus-signers "$GRANTS_DIR"
 sudo install -d -m 1777 -o root -g root "$PENDING_DIR"
 sudo install -d -m 0755 -o root -g root "$APPROVALS_DIR"
 sudo getent group daedalus-signers >/dev/null 2>&1 || sudo groupadd -f daedalus-signers
 sudo usermod -aG daedalus-signers "$(id -un)" 2>/dev/null || true
+# 上一次跑留下的待办/批准/条子会污染本次判定(批准在有效期内仍会被认)——先清干净。
+sudo rm -f "$PENDING_DIR"/*.json "$APPROVALS_DIR"/*.json "$GRANTS_DIR"/*.json 2>/dev/null || true
 ls -ld /run/daedalus "$GRANTS_DIR" "$PENDING_DIR" "$APPROVALS_DIR" >> "$EV"
 
 # ---------------------------------------------------------------- 档位表
@@ -179,6 +181,13 @@ tier = "confirm"
 [[rule]]
 scope = "systemd:user:restart:$UNIT_HUMAN"
 tier = "human"
+
+# 非 root 签发者:范围/时长/次数都有上限(超出即拒)。
+[[signer]]
+user = "$(id -un)"
+max_scope = ["systemd:user:restart:$UNIT_CONFIRM"]
+max_ttl = "1h"
+max_uses = 5
 EOF
 sudo install -m 0644 -o root -g root "$TMP_AUTO" "$AUTONOMY_PATH"
 rm -f "$TMP_AUTO"
@@ -196,10 +205,16 @@ Description=Daedalus tx E2E 测试单元
 [Service]
 Type=simple
 ExecStart=/usr/bin/sleep infinity
+
+[Install]
+WantedBy=default.target
 EOF
 done
 systemctl --user daemon-reload
-for u in "$UNIT_AUTO" "$UNIT_CONFIRM" "$UNIT_HUMAN"; do systemctl --user enable "$u" >/dev/null 2>&1; done
+for u in "$UNIT_AUTO" "$UNIT_CONFIRM" "$UNIT_HUMAN"; do
+  systemctl --user enable "$u" >/dev/null 2>&1
+  systemctl --user stop "$u" >/dev/null 2>&1
+done
 systemctl --user list-unit-files "$UNIT_PREFIX*" --no-pager >> "$EV" 2>&1
 
 # ---------------------------------------------------------------- 场景 1
@@ -219,8 +234,9 @@ fi
 # ---------------------------------------------------------------- 场景 2
 step "场景 2(第二档 confirm):无条子被拒 → 补条子 → 放行"
 R2="$(mcp_call tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_CONFIRM\",\"desired_state\":\"restarted\"}")"
-note "无条子 apply → code=$(json_get "$R2" code) required_scope=$(json_get "$R2" required_scope)"
-check "场景2:无条子被拒" grant_required "$(json_get "$R2" code)"
+say "R2 原始: $R2"
+note "无条子 apply → error=$(json_get "$R2" error) required_scope=$(json_get "$R2" required_scope)"
+check "场景2:无条子被拒" grant_required "$(json_get "$R2" error)"
 if [ -n "$(json_get "$R2" required_scope)" ]; then
   check "场景2:给出所需范围" yes yes
 else
@@ -232,9 +248,14 @@ else
   check "场景2:被拒后单元没动" untouched untouched
 fi
 
-# 条子由**签发者**签:真实发起人 = 当前用户(非 sudo 时)或 root(走 sudo 时)。
-run "签发条子(sudo 形态:属主=调用者,按调用者上限判)" \
-  sudo "$TX_BIN" grant add --scope "systemd:user:restart:$UNIT_CONFIRM" --ttl 10m --count 1
+# 条子由**签发者**签。两种形态都要验:
+#   用户签(不 sudo):属主 = 用户,按该用户的 [[signer]] 上限判(所以上表必须有他的条目);
+#   root 签(sudo -i):属主 = root(root 恒可签,不受 [[signer]] 约束)。
+GRANT_RAW="$("$TX_BIN" grant add --scope "systemd:user:restart:$UNIT_CONFIRM" --ttl 10m --count 1 2>&1)"
+GRANT_RC=$?
+say ""; say '```'; say "$GRANT_RAW"; say '```'; say "退出码: $GRANT_RC"
+GRANT_ID="$(printf '%s' "$GRANT_RAW" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)"
+note "条子 id = $GRANT_ID"
 GRANT_FILE="$(ls -1 "$GRANTS_DIR"/*.json 2>/dev/null | head -1)"
 if [ -n "$GRANT_FILE" ]; then
   note "条子文件: $GRANT_FILE"
@@ -245,15 +266,40 @@ else
   check "条子签发成功" yes no
 fi
 
-R2B="$(mcp_call tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_CONFIRM\",\"desired_state\":\"restarted\"}")"
-note "有匹配条子 apply → outcome=$(json_get "$R2B" outcome) grant_id=$(json_get "$R2B" grant_id)"
-check "场景2:有匹配条子放行" applied "$(json_get "$R2B" outcome)"
+# 2a: 系统路径还没有账本目录 ⇒ 账本会落到用户 HOME ⇒ 必须 fail-closed 拒绝
+R2B="$(mcp_call tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_CONFIRM\",\"desired_state\":\"restarted\",\"grant_id\":\"$GRANT_ID\"}")"
+say "R2B 原始: $R2B"
+note "账本落 HOME 时 apply → error=$(json_get "$R2B" error)"
+check "场景2a:账本落 HOME ⇒ 拒绝执行" grant_usage_failed "$(json_get "$R2B" error)"
+if systemctl --user is-active --quiet "$UNIT_CONFIRM"; then
+  check "场景2a:被拒后单元没动" untouched moved
+else
+  check "场景2a:被拒后单元没动" untouched untouched
+fi
+
+# 2b: 按 tmpfiles 建好系统路径账本目录 ⇒ 放行
+sudo install -d -m 1777 -o root -g root /var/lib/daedalus/tx
+R2C="$(mcp_call tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_CONFIRM\",\"desired_state\":\"restarted\",\"grant_id\":\"$GRANT_ID\"}")"
+say "R2C 原始: $R2C"
+note "账本在系统路径 apply → outcome=$(json_get "$R2C" outcome) grant_id=$(json_get "$R2C" grant_id)"
+check "场景2b:有匹配条子放行" applied "$(json_get "$R2C" outcome)"
+
+# root 签的条子:属主=root,消费侧按 root 恒可判
+run "再签一张(root 身份,root 恒可)" \
+  sudo env -u SUDO_USER "$TX_BIN" grant add --scope "systemd:user:restart:$UNIT_CONFIRM" --ttl 10m --count 1
+ROOT_GRANT="$(ls -1 "$GRANTS_DIR"/*.json 2>/dev/null | while read -r f; do [ "$(stat -c %U "$f")" = root ] && echo "$f"; done | head -1)"
+if [ -n "$ROOT_GRANT" ]; then
+  check "root 签的条子属主=root" root "$(stat -c %U "$ROOT_GRANT")"
+else
+  check "root 签的条子属主=root" root none
+fi
 
 # ---------------------------------------------------------------- 场景 3
 step "场景 3(第三档 human):出待办 → 无批准不执行 → 人批准 → 执行"
 R3="$(mcp_call tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_HUMAN\",\"desired_state\":\"restarted\"}")"
-note "human 档 apply → code=$(json_get "$R3" code) pending_id=$(json_get "$R3" pending_id)"
-check "场景3:判为需要人批准" human_approval_required "$(json_get "$R3" code)"
+say "R3 原始: $R3"
+note "human 档 apply → error=$(json_get "$R3" error) tier=$(json_get "$R3" tier) pending_id=$(json_get "$R3" pending_id)"
+check "场景3:判为需要人批准" human_approval_required "$(json_get "$R3" error)"
 PENDING_ID="$(json_get "$R3" pending_id)"
 if systemctl --user is-active --quiet "$UNIT_HUMAN"; then
   check "场景3:未批准不执行" untouched moved
@@ -262,9 +308,12 @@ else
 fi
 if [ -n "$PENDING_ID" ] && [ -f "$PENDING_DIR/$PENDING_ID.json" ]; then
   check "场景3:待办已落盘" yes yes
-  PENDING_SHA="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['argv_sha256'])" "$PENDING_DIR/$PENDING_ID.json")"
+  PENDING_SHA="$(json_get "$R3" argv_sha256)"
+  if [ -z "$PENDING_SHA" ]; then
+    PENDING_SHA="$(python3 -c "import json,sys,hashlib;d=json.load(open(sys.argv[1]));print(hashlib.sha256(b'\x00'.join(a.encode() for a in d['argv'])).hexdigest())" "$PENDING_DIR/$PENDING_ID.json")"
+  fi
   note "待办 argv 指纹: $PENDING_SHA"
-  run "人批准(带 --expect-sha256)" sudo "$TX_BIN" approve "$PENDING_ID" --expect-sha256 "$PENDING_SHA"
+  run "人批准(带 --expect-sha256)" sudo -i "$TX_BIN" approve "$PENDING_ID" --expect-sha256 "$PENDING_SHA"
   if [ -f "$APPROVALS_DIR/$PENDING_ID.json" ]; then
     check "场景3:批准记录已落盘" yes yes
     ls -l "$APPROVALS_DIR/$PENDING_ID.json" >> "$EV"
@@ -284,18 +333,14 @@ step "场景 4(危险名单):命中 policy.toml 的 high_risk_services ⇒ 至�
 R4="$(mcp_call tx_preview "{\"kind\":\"service\",\"name\":\"$UNIT_DANGER\",\"desired_state\":\"started\"}")"
 note "危险单元 preview → tier=$(json_get "$R4" tier)"
 TIER_DANGER="$(json_get "$R4" tier)"
-if [ "$TIER_DANGER" = "auto" ]; then
-  check "场景4:危险名单降档" human_or_confirm auto
-else
-  check "场景4:危险名单降档" human_or_confirm "$TIER_DANGER"
-fi
+check "场景4:危险名单降档(至少第三档)" human "$TIER_DANGER"
 
 # ---------------------------------------------------------------- 场景 5
 step "场景 5(拒绝信息可区分):四类拒绝各给不同理由"
 for probe in "缺条子|$UNIT_CONFIRM|restarted" ; do :; done
 R5="$(mcp_call tx_apply "{\"kind\":\"service\",\"name\":\"$UNIT_DANGER\",\"desired_state\":\"stopped\"}")"
-note "危险单元 apply → code=$(json_get "$R5" code)"
-if [ -n "$(json_get "$R5" code)" ]; then check "场景5:拒绝带可区分码" yes yes; else check "场景5:拒绝带可区分码" yes no; fi
+note "危险单元 apply → error=$(json_get "$R5" error)"
+if [ -n "$(json_get "$R5" error)" ]; then check "场景5:拒绝带可区分码" yes yes; else check "场景5:拒绝带可区分码" yes no; fi
 
 # ---------------------------------------------------------------- 清理
 step "清理"
