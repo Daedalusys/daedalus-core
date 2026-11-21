@@ -1143,6 +1143,9 @@ func TestGrantAddWithoutForLeavesUnbound(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
 		t.Fatalf("stdout 非 grantAddDoc: %v", err)
 	}
+	if doc.ForUID != nil || doc.ForUser != "" {
+		t.Errorf("未绑定签发的输出不得带 for_uid/for_user: %+v", doc)
+	}
 	path := filepath.Join(dir, doc.ID+".json")
 	fi, err := os.Stat(path)
 	if err != nil {

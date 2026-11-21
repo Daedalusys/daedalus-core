@@ -47,6 +47,10 @@ type grantAddDoc struct {
 	ExpiresAt string   `json:"expires_at"`
 	MaxUses   int      `json:"max_uses"`
 	Note      string   `json:"note,omitempty"`
+	// for_uid / for_user 回显「这张条子给谁用」: 人签完当场就能核对绑定有没有写错,
+	// 而不是等到 agent 用不了才回头翻 grant list。
+	ForUID  *uint32 `json:"for_uid,omitempty"`
+	ForUser string  `json:"for_user,omitempty"`
 }
 
 // grantListEntry 是 grant list 里一张条子的只读视图(used 来自用量记账)。
@@ -244,6 +248,8 @@ func cmdGrantAdd(args []string, stdout, stderr io.Writer) int {
 		ExpiresAt: g.ExpiresAt.Format(time.RFC3339),
 		MaxUses:   g.MaxUses,
 		Note:      g.Note,
+		ForUID:    g.ForUID,
+		ForUser:   g.ForUser,
 	})
 	return exitOK
 }
