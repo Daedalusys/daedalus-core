@@ -23,6 +23,7 @@
 //   - service-observe → {"unit","active_state","unit_file_state","enabled","running","known"}(恰六键)
 //   - grant add/list/revoke → 条子文档 / 条子列表 / {"revoked":"<id>"}
 //   - pending list → {"pending":[...],"invalid":[...]}; pending show → 待办视图
+//     (两者都带 requested_by / requested_by_uid, 归属取自待办文件的 stat 属主)
 //   - approve → 批准记录文档(含被批准的 argv 回显); --expect-sha256 必填且须与当前待办一致;
 //     非 root 一律拒绝(退出码 2)
 //   - 一切错误 → {"error":"..."} 且退出码非零
@@ -200,7 +201,9 @@ func usage() string {
 		"      root 签发必须写明给谁(未写明的 root 条子谁都用不了)。\n" +
 		"  grant 条子目录默认 /run/daedalus/grants, 可用 DAEDALUS_GRANTS_DIR 覆盖;\n" +
 		"      签发身份 = 文件属主 uid(SUDO_USER 优先, 否则当前用户), 撤销别人的条子需要 root。\n" +
-		"  待办目录默认 /run/daedalus/pending(1777 粘滞位), 可用 DAEDALUS_PENDING_DIR 覆盖;\n" +
+		"  待办根目录默认 /run/daedalus/pending(1777 粘滞位), 可用 DAEDALUS_PENDING_DIR 覆盖;\n" +
+		"      每个用户的待办落在 <根目录>/<uid>/(0700), 请求者归属按文件属主判定;\n" +
+		"      pending list 列出所有用户的待办(按请求者归属显示), pending show 跨所有用户目录查找。\n" +
 		"      批准目录默认 /run/daedalus/approvals(0755 root:root), 可用 DAEDALUS_APPROVALS_DIR 覆盖。\n" +
 		"  approve 只绑定 argv_sha256 = sha256(NUL 连接的 argv), 参数一变就是新动作;\n" +
 		"      --expect-sha256 必填, 从 pending show/list 的 argv_sha256 抄过来;\n" +

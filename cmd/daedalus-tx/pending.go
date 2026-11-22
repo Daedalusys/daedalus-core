@@ -40,7 +40,7 @@ const (
 	maxPendingFileBytes = 64 << 10
 )
 
-// pendingListEntry 是待办的人类可读视图(附过期判定与 argv 指纹)。
+// pendingListEntry 是待办的人类可读视图(附过期判定、请求者归属与 argv 指纹)。
 type pendingListEntry struct {
 	ID           string   `json:"id"`
 	Kind         string   `json:"kind"`
@@ -53,6 +53,22 @@ type pendingListEntry struct {
 	CreatedAt    string   `json:"created_at"`
 	ExpiresAt    string   `json:"expires_at"`
 	Expired      bool     `json:"expired"`
+	// RequestedByUID 是请求者(待办文件的 stat 属主);RequestedBy 只是账号名, 只作展示。
+	// -1 表示属主不可采信(条目本该进 invalid[]), 0 才是「root 自己请求的」。
+	RequestedByUID int    `json:"requested_by_uid"`
+	RequestedBy    string `json:"requested_by"`
+}
+
+// pendingOwner 是一条待办的请求者归属。权威是文件的 stat 属主: 待办 JSON 里的字段
+// 都是自报, 谁都能写, 只有文件系统属性不可伪造。
+type pendingOwner struct {
+	// known=false 表示属主不可采信。视图里给 -1 而不是 0: 0 是「root 自己请求的」
+	// 这种确切归属, 不能兼任「不知道」。读侧失败一律进 invalid[], 所以正常路径恒为真。
+	known bool
+	uid   uint32
+	name  string
+	// path 只是报错线索(哪个用户的哪一份), 不参与任何判定。
+	path string
 }
 
 // pendingInvalidEntry 是过不了严格解析的待办文件: 列出来比整条命令失败更有用。
@@ -97,26 +113,33 @@ func cmdPending(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// cmdPendingList 列出全部待办; 坏文件单列, 不让一条坏文件挡住人看其他待办。
+// cmdPendingList 列出所有用户的待办(按请求者归属显示); 坏文件单列, 不让一条坏文件
+// 挡住人看其他待办。
 func cmdPendingList(stdout, stderr io.Writer) int {
-	dir := pendingDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return failRuntime(stdout, stderr, fmt.Sprintf("读待办目录 %s 失败: %v", dir, err))
+	root := pendingRoot()
+	dirs, err := pendingUserDirs(root)
+	if err != nil {
+		return failRuntime(stdout, stderr, fmt.Sprintf("读待办根目录 %s 失败: %v", root, err))
 	}
 	doc := pendingListDoc{Pending: []pendingListEntry{}, Invalid: []pendingInvalidEntry{}}
 	now := time.Now().UTC()
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		pend, _, err := readPending(dir, id)
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			doc.Invalid = append(doc.Invalid, pendingInvalidEntry{File: entry.Name(), Error: err.Error()})
-			continue
+			return failRuntime(stdout, stderr, fmt.Sprintf("读待办目录 %s 失败: %v", dir, err))
 		}
-		doc.Pending = append(doc.Pending, pendingEntry(pend, now))
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			id := strings.TrimSuffix(entry.Name(), ".json")
+			pend, owner, err := readPendingWithOwner(dir, id)
+			if err != nil {
+				doc.Invalid = append(doc.Invalid, pendingInvalidEntry{File: entry.Name(), Error: err.Error()})
+				continue
+			}
+			doc.Pending = append(doc.Pending, pendingEntry(pend, owner, now))
+		}
 	}
 	sort.Slice(doc.Pending, func(i, j int) bool { return doc.Pending[i].ID < doc.Pending[j].ID })
 	sort.Slice(doc.Invalid, func(i, j int) bool { return doc.Invalid[i].File < doc.Invalid[j].File })
@@ -124,7 +147,7 @@ func cmdPendingList(stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// cmdPendingShow 显示某条待办的 argv 与待批准的指纹。
+// cmdPendingShow 显示某条待办的 argv、请求者与待批准的指纹。
 func cmdPendingShow(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		return failUsage(stdout, stderr, "pending show 需要恰好一个 <id> 参数")
@@ -133,11 +156,11 @@ func cmdPendingShow(args []string, stdout, stderr io.Writer) int {
 	if err := pending.ValidateID(id); err != nil {
 		return failUsage(stdout, stderr, err.Error())
 	}
-	pend, _, err := readPending(pendingDir(), id)
+	pend, owner, err := readPendingByID(id)
 	if err != nil {
 		return failRuntime(stdout, stderr, err.Error())
 	}
-	printJSON(stdout, pendingEntry(pend, time.Now().UTC()))
+	printJSON(stdout, pendingEntry(pend, owner, time.Now().UTC()))
 	return exitOK
 }
 
@@ -205,7 +228,7 @@ func cmdApprove(args []string, stdout, stderr io.Writer) int {
 			id, id, opts.expectSHA))
 	}
 
-	pend, ownerUID, err := readPending(pendingDir(), id)
+	pend, owner, err := readPendingByID(id)
 	if err != nil {
 		auditApproveDenied(id, opts.expectSHA, err.Error())
 		return failRuntime(stdout, stderr, err.Error())
@@ -232,11 +255,12 @@ func cmdApprove(args []string, stdout, stderr io.Writer) int {
 
 	// 请求者取自待办文件的 stat 属主, 不取待办内容里的任何字段: 内容可被写者捏造。
 	// uid 0 时也必须显式写成 0 —— 缺字段与"root 自己请求的"是两种相反的判定。
+	ownerUID := owner.uid
 	rec := pending.Approval{
 		ID:             pend.ID,
 		ArgvSHA256:     actualSHA,
 		RequestedByUID: &ownerUID,
-		RequestedBy:    grantOwnerName(int(ownerUID)),
+		RequestedBy:    owner.name,
 		ApprovedBy:     approverIdentity,
 		ApprovedAt:     now,
 	}
@@ -258,20 +282,27 @@ func cmdApprove(args []string, stdout, stderr io.Writer) int {
 }
 
 // pendingEntry 把待办投影成视图; 时间按线上的 RFC3339 输出, 视图与文件读写同一口径。
-func pendingEntry(pend *pending.Pending, now time.Time) pendingListEntry {
-	return pendingListEntry{
-		ID:           pend.ID,
-		Kind:         pend.Kind,
-		Name:         pend.Name,
-		DesiredState: pend.DesiredState,
-		Argv:         pend.Argv,
-		ArgvSHA256:   pending.ArgvSHA256(pend.Argv),
-		Scope:        pend.Scope,
-		Reason:       pend.Reason,
-		CreatedAt:    pend.CreatedAt.UTC().Format(time.RFC3339),
-		ExpiresAt:    pend.ExpiresAt.UTC().Format(time.RFC3339),
-		Expired:      !now.Before(pend.ExpiresAt),
+// 归属取 stat 属主: known=false 时给 -1 而不是 0, 因为 0 是「root 自己请求的」。
+func pendingEntry(pend *pending.Pending, owner pendingOwner, now time.Time) pendingListEntry {
+	entry := pendingListEntry{
+		ID:             pend.ID,
+		Kind:           pend.Kind,
+		Name:           pend.Name,
+		DesiredState:   pend.DesiredState,
+		Argv:           pend.Argv,
+		ArgvSHA256:     pending.ArgvSHA256(pend.Argv),
+		Scope:          pend.Scope,
+		Reason:         pend.Reason,
+		CreatedAt:      pend.CreatedAt.UTC().Format(time.RFC3339),
+		ExpiresAt:      pend.ExpiresAt.UTC().Format(time.RFC3339),
+		Expired:        !now.Before(pend.ExpiresAt),
+		RequestedByUID: -1,
 	}
+	if owner.known {
+		entry.RequestedByUID = int(owner.uid)
+		entry.RequestedBy = owner.name
+	}
+	return entry
 }
 
 // readCappedFile 读文件但拒绝超过上限的内容: 待办目录属主可写, 不设上限就等于
@@ -312,42 +343,106 @@ func fileOwnerUID(path string) (uint32, error) {
 	return uid, nil
 }
 
-// readPending 读并严格解析一条待办, 同时给出文件的 stat 属主(= 请求者 uid)。
+// errPendingNotFound 让跨目录查找能把「这个目录里没有」与「这份文件坏了」分开:
+// 前者继续找下一个用户, 后者立即失败(坏文件不许被跳过)。
+var errPendingNotFound = errors.New("待办不存在")
+
+// readPendingWithOwner 读并严格解析一条待办, 同时给出文件的 stat 属主(= 请求者)。
 // 文件名与内容 id 必须一致: 路径决定这份文件代表哪条待办, 内容只是它的自述。
-func readPending(dir, id string) (*pending.Pending, uint32, error) {
+func readPendingWithOwner(dir, id string) (*pending.Pending, pendingOwner, error) {
 	path, err := pendingFilePath(dir, id)
 	if err != nil {
-		return nil, 0, err
+		return nil, pendingOwner{}, err
 	}
 	data, err := readCappedFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, 0, fmt.Errorf("待办 %q 不存在(%s)", id, path)
+			return nil, pendingOwner{}, fmt.Errorf("%w: 待办 %q 不存在(%s)", errPendingNotFound, id, path)
 		}
-		return nil, 0, fmt.Errorf("读取待办 %q 失败: %v", id, err)
+		return nil, pendingOwner{}, fmt.Errorf("读取待办 %q 失败: %v", id, err)
 	}
 	pend, err := pending.ParsePending(data)
 	if err != nil {
-		return nil, 0, fmt.Errorf("待办 %q 非法: %v", id, err)
+		return nil, pendingOwner{}, fmt.Errorf("待办 %q 非法: %v", id, err)
 	}
 	if pend.ID != id {
-		return nil, 0, fmt.Errorf("待办 %q 的文件内容 id=%q 与文件名不一致", id, pend.ID)
+		return nil, pendingOwner{}, fmt.Errorf("待办 %q 的文件内容 id=%q 与文件名不一致", id, pend.ID)
 	}
 	ownerUID, err := fileOwnerUID(path)
 	if err != nil {
-		return nil, 0, fmt.Errorf("待办 %q 的属主无法采信: %v", id, err)
+		return nil, pendingOwner{}, fmt.Errorf("待办 %q 的属主无法采信: %v", id, err)
 	}
-	return pend, ownerUID, nil
+	return pend, pendingOwner{
+		known: true, uid: ownerUID, name: grantOwnerName(int(ownerUID)), path: path,
+	}, nil
 }
 
-// pendingDir / approvalsDir 解析目录: env 覆盖优先, 否则生产位置。
-func pendingDir() string {
+// readPendingByID 跨所有用户目录找一份待办: 从 id 反推 uid 等于把归属的解释权交给
+// id 的写法, 所以只能遍历。id 里带执行者 uid ⇒ 它全局唯一, 同一个 id 出现在两个
+// 用户目录里只可能是伪造: 两份都不采信, 而不是挑一份接着用。
+func readPendingByID(id string) (*pending.Pending, pendingOwner, error) {
+	if err := pending.ValidateID(id); err != nil {
+		return nil, pendingOwner{}, err
+	}
+	root := pendingRoot()
+	dirs, err := pendingUserDirs(root)
+	if err != nil {
+		return nil, pendingOwner{}, fmt.Errorf("读待办根目录 %s 失败: %v", root, err)
+	}
+	var (
+		foundPending *pending.Pending
+		foundOwner   pendingOwner
+	)
+	for _, dir := range dirs {
+		pend, owner, err := readPendingWithOwner(dir, id)
+		if errors.Is(err, errPendingNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, pendingOwner{}, err
+		}
+		if foundPending != nil {
+			return nil, pendingOwner{}, fmt.Errorf(
+				"待办 %q 同时出现在 %s 与 %s: id 含执行者 uid 因而全局唯一, 重复即伪造, 两份都不采信",
+				id, foundOwner.path, owner.path)
+		}
+		foundPending, foundOwner = pend, owner
+	}
+	if foundPending == nil {
+		return nil, pendingOwner{}, fmt.Errorf("%w: 待办 %q 不存在(已遍历 %s 下所有用户目录)", errPendingNotFound, id, root)
+	}
+	return foundPending, foundOwner, nil
+}
+
+// pendingRoot 解析待办**根目录**: 每个用户的待办在 <root>/<uid>/(0700) 里,
+// 跨用户读在文件系统层就不可能。env 覆盖优先, 否则生产位置。
+func pendingRoot() string {
 	if v := os.Getenv(envPendingDir); v != "" {
 		return v
 	}
 	return defaultPendingDir
 }
 
+// pendingUserDirs 列出根目录下的用户子目录。根目录不存在等价于「还没有人提过待办」,
+// 不是错误; 非目录项(有人往根目录里丢文件)一律跳过。
+func pendingUserDirs(root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	dirs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirs = append(dirs, filepath.Join(root, entry.Name()))
+		}
+	}
+	return dirs, nil
+}
+
+// approvalsDir 解析批准目录: env 覆盖优先, 否则生产位置(0755 root:root, 只有 root 能写)。
 func approvalsDir() string {
 	if v := os.Getenv(envApprovalsDir); v != "" {
 		return v
