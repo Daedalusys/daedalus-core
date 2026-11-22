@@ -28,8 +28,25 @@ const (
 	testPendingID         = "p-20261120-abcdef01"
 )
 
-// testOtherUID 是「另一个用户」的 uid: 跨用户目录的用例需要两个不同的分片。
-const testOtherUID uint32 = 1001
+// otherTestUID 返回一个与测试进程 uid **不同**的分片 id。
+// 不能用固定常量: CI 的 runner 恰好是 uid 1001, 写死 1001 会让「两个不同的用户」
+// 落进同一个 <root>/1001/ 目录 —— 后写覆盖先写, 跨目录的用例就退化成单目录
+// (「同一 id 出现在两个目录」那条更是直接红)。
+func otherTestUID(t *testing.T) uint32 {
+	t.Helper()
+	if uid := testPendingUID(t); uid == 1001 {
+		return 1000
+	}
+	return 1001
+}
+
+// TestOtherTestUIDDiffers 钉住上一条的**不变量**本身: 两个分片必须不同。
+// 少了它, otherTestUID 哪天被改回常量也没人拦, 跨目录用例会静默退化成单目录。
+func TestOtherTestUIDDiffers(t *testing.T) {
+	if otherTestUID(t) == testPendingUID(t) {
+		t.Fatalf("otherTestUID=%d 与测试进程 uid 相同, 跨目录用例会退化成单目录", otherTestUID(t))
+	}
+}
 
 // testPendingUID 是跑测试的用户的 uid。测试进程写的待办文件自然属于它,
 // 而请求者的归属只认文件属主, 所以这个值就是断言的期望。
@@ -801,12 +818,12 @@ func TestPendingListSpansUserDirs(t *testing.T) {
 	otherID := "p-20261120-other001"
 
 	ownPath := writePendingFile(t, root, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
-	otherDir := pendingDirForUser(t, root, testOtherUID)
+	otherDir := pendingDirForUser(t, root, otherTestUID(t))
 	otherPath := writePendingFileIn(t, otherDir, otherID, []string{"systemctl", "--user", "restart", "web.service"}, time.Now().UTC().Add(time.Hour))
-	// 归属的权威是文件属主, 不是目录名: 文件落在 <root>/1001/ 里, 报的仍是它真实的
+	// 归属的权威是文件属主, 不是目录名: 文件落在 <root>/<另一个 uid>/ 里, 报的仍是它真实的
 	// stat 属主(root 跑测试时能把属主改成 1001, 普通用户改不动, 两种都钉这条)。
-	if err := os.Chown(otherPath, int(testOtherUID), int(testOtherUID)); err != nil {
-		t.Logf("无法把夹具改成 uid=%d(非 root 测试进程的正常情况): %v", testOtherUID, err)
+	if err := os.Chown(otherPath, int(otherTestUID(t)), int(otherTestUID(t))); err != nil {
+		t.Logf("无法把夹具改成 uid=%d(非 root 测试进程的正常情况): %v", otherTestUID(t), err)
 	}
 
 	code, out, errOut := rc("pending", "list")
@@ -882,7 +899,7 @@ func TestPendingListShowsRequesterName(t *testing.T) {
 func TestPendingShowFindsAcrossUserDirs(t *testing.T) {
 	root, _, _, rc := newPendingEnv(t)
 	id := "p-20261120-othershow"
-	writePendingFileIn(t, pendingDirForUser(t, root, testOtherUID), id,
+	otherPath := writePendingFileIn(t, pendingDirForUser(t, root, otherTestUID(t)), id,
 		[]string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
 
 	code, out, errOut := rc("pending", "show", id)
@@ -899,8 +916,10 @@ func TestPendingShowFindsAcrossUserDirs(t *testing.T) {
 	if entry.ArgvSHA256 != testPendingArgvSHA256 {
 		t.Errorf("argv_sha256 = %q, want %q", entry.ArgvSHA256, testPendingArgvSHA256)
 	}
-	if entry.RequestedByUID != int(testPendingUID(t)) {
-		t.Errorf("requested_by_uid = %d, want %d(属主不是目录名)", entry.RequestedByUID, testPendingUID(t))
+	// 期望值从文件系统独立读出, 不从被测实现推 —— 文件落在 <root>/<另一个 uid>/ 里,
+	// 报的必须是它真实的 stat 属主, 谁写的才是关键, 目录叫什么不是。
+	if got, want := entry.RequestedByUID, int(statOwnerUID(t, otherPath)); got != want {
+		t.Errorf("requested_by_uid = %d, want %d(属主不是目录名)", got, want)
 	}
 }
 
@@ -909,7 +928,7 @@ func TestPendingShowFindsAcrossUserDirs(t *testing.T) {
 func TestPendingShowRejectsSameIDInTwoUserDirs(t *testing.T) {
 	root, _, _, rc := newPendingEnv(t)
 	writePendingFile(t, root, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
-	writePendingFileIn(t, pendingDirForUser(t, root, testOtherUID), testPendingID,
+	writePendingFileIn(t, pendingDirForUser(t, root, otherTestUID(t)), testPendingID,
 		[]string{"systemctl", "--user", "start", "evil.service"}, time.Now().UTC().Add(time.Hour))
 
 	code, _, errOut := rc("pending", "show", testPendingID)
