@@ -10,11 +10,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/Daedalusys/daedalus-sdk/pending"
 )
 
 // 固定 argv 的规范哈希(sha256(NUL 连接))。这里是**手算值**而不是调用实现:
@@ -24,18 +28,59 @@ const (
 	testPendingID         = "p-20261120-abcdef01"
 )
 
-// newPendingEnv 建隔离环境: 审计/事务目录(harness)+ 待办目录(1777 语义)+
+// otherTestUID 返回一个与测试进程 uid **不同**的分片 id。
+// 不能用固定常量: CI 的 runner 恰好是 uid 1001, 写死 1001 会让「两个不同的用户」
+// 落进同一个 <root>/1001/ 目录 —— 后写覆盖先写, 跨目录的用例就退化成单目录
+// (「同一 id 出现在两个目录」那条更是直接红)。
+func otherTestUID(t *testing.T) uint32 {
+	t.Helper()
+	if uid := testPendingUID(t); uid == 1001 {
+		return 1000
+	}
+	return 1001
+}
+
+// TestOtherTestUIDDiffers 钉住上一条的**不变量**本身: 两个分片必须不同。
+// 少了它, otherTestUID 哪天被改回常量也没人拦, 跨目录用例会静默退化成单目录。
+func TestOtherTestUIDDiffers(t *testing.T) {
+	if otherTestUID(t) == testPendingUID(t) {
+		t.Fatalf("otherTestUID=%d 与测试进程 uid 相同, 跨目录用例会退化成单目录", otherTestUID(t))
+	}
+}
+
+// testPendingUID 是跑测试的用户的 uid。测试进程写的待办文件自然属于它,
+// 而请求者的归属只认文件属主, 所以这个值就是断言的期望。
+func testPendingUID(t *testing.T) uint32 {
+	t.Helper()
+	return uint32(os.Getuid())
+}
+
+// pendingDirForUser 建出 <root>/<uid> 这个用户的待办目录(生产语义 0700)。
+func pendingDirForUser(t *testing.T, root string, uid uint32) string {
+	t.Helper()
+	dir := filepath.Join(root, strconv.FormatUint(uint64(uid), 10))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("建用户待办目录 %s 失败: %v", dir, err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatalf("设置用户待办目录 %s 权限失败: %v", dir, err)
+	}
+	return dir
+}
+
+// newPendingEnv 建隔离环境: 审计/事务目录(harness)+ 待办**根目录**(1777 语义)+
 // 批准目录(生产是 0755 root:root; 测试里属主是跑测试的用户, 权限位与生产一致)。
-func newPendingEnv(t *testing.T) (pendingDir, approvalsDir, logPath string, rc func(...string) (int, string, string)) {
+// 每个用户的待办落在 <root>/<uid> 子目录里, 测试进程自己那份一并建好。
+func newPendingEnv(t *testing.T) (pendingRoot, approvalsDir, logPath string, rc func(...string) (int, string, string)) {
 	t.Helper()
 	logPath, rc = harness(t)
 	base := t.TempDir()
-	pendingDir = filepath.Join(base, "pending")
+	pendingRoot = filepath.Join(base, "pending")
 	approvalsDir = filepath.Join(base, "approvals")
 	for _, d := range []struct {
 		path string
 		mode os.FileMode
-	}{{pendingDir, 0o1777}, {approvalsDir, 0o755}} {
+	}{{pendingRoot, 0o1777}, {approvalsDir, 0o755}} {
 		if err := os.MkdirAll(d.path, d.mode); err != nil {
 			t.Fatalf("创建目录 %s 失败: %v", d.path, err)
 		}
@@ -44,17 +89,24 @@ func newPendingEnv(t *testing.T) (pendingDir, approvalsDir, logPath string, rc f
 			t.Fatalf("设置目录 %s 权限失败: %v", d.path, err)
 		}
 	}
-	t.Setenv(envPendingDir, pendingDir)
+	pendingDirForUser(t, pendingRoot, testPendingUID(t))
+	t.Setenv(envPendingDir, pendingRoot)
 	t.Setenv(envApprovalsDir, approvalsDir)
 	// 生产批准目录属主是 root; 非 root 的测试进程造不出这种目录, 把属主判定钉成
 	// root(uid 判定本身由 TestCheckApprovalsDir 用构造的 FileInfo 钉住)。
 	stubApprovalsOwner(t, 0)
-	return pendingDir, approvalsDir, logPath, rc
+	return pendingRoot, approvalsDir, logPath, rc
 }
 
-// writePendingFile 直写一份待办文件, 模拟 AI 侧(消费侧)产出。
+// writePendingFile 在当前测试用户的待办目录里直写一份待办, 模拟 AI 侧(消费侧)产出。
+func writePendingFile(t *testing.T, root, id string, argv []string, expiresAt time.Time) string {
+	t.Helper()
+	return writePendingFileIn(t, pendingDirForUser(t, root, testPendingUID(t)), id, argv, expiresAt)
+}
+
+// writePendingFileIn 在指定目录里直写一份待办文件。
 // 用 map 而不是实现里的结构体: 测试要钉的是线上 JSON 键, 不是内部类型。
-func writePendingFile(t *testing.T, dir, id string, argv []string, expiresAt time.Time) string {
+func writePendingFileIn(t *testing.T, dir, id string, argv []string, expiresAt time.Time) string {
 	t.Helper()
 	doc := map[string]any{
 		"id":            id,
@@ -108,14 +160,29 @@ func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (f fakeFileInfo) IsDir() bool        { return f.mode.IsDir() }
 func (f fakeFileInfo) Sys() any           { return f.sys }
 
-// readApproval 读批准记录, 顺带断言它是合法 JSON。
-func readApproval(t *testing.T, dir, id string) approvalDoc {
+// approvalOnDisk 是批准记录的读取视图: 字段声明与线上 JSON 逐字对齐, 因为测试要钉的是
+// 写出去的字节形态(键名、时间格式), 不是 SDK 的内部类型。
+type approvalOnDisk struct {
+	ID             string  `json:"id"`
+	ArgvSHA256     string  `json:"argv_sha256"`
+	RequestedByUID *uint32 `json:"requested_by_uid"`
+	RequestedBy    string  `json:"requested_by"`
+	ApprovedBy     string  `json:"approved_by"`
+	ApprovedAt     string  `json:"approved_at"`
+}
+
+// readApproval 读批准记录: 先过生产同款严格解析(写出去就读不回来是不可接受的),
+// 再按线上 JSON 形态取字段供断言。
+func readApproval(t *testing.T, dir, id string) approvalOnDisk {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, id+".json"))
 	if err != nil {
 		t.Fatalf("批准记录不存在: %v", err)
 	}
-	var rec approvalDoc
+	if _, err := pending.ParseApproval(data); err != nil {
+		t.Fatalf("批准记录过不了生产侧严格解析: %v (%q)", err, data)
+	}
+	var rec approvalOnDisk
 	if err := json.Unmarshal(data, &rec); err != nil {
 		t.Fatalf("批准记录不是合法 JSON: %v (%q)", err, data)
 	}
@@ -169,8 +236,9 @@ func TestPendingListMissingDirIsEmpty(t *testing.T) {
 
 func TestPendingListToleratesInvalidFiles(t *testing.T) {
 	dir, _, _, rc := newPendingEnv(t)
+	userDir := pendingDirForUser(t, dir, testPendingUID(t))
 	writePendingFile(t, dir, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
-	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{not json"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(userDir, "broken.json"), []byte("{not json"), 0o644); err != nil {
 		t.Fatalf("写坏文件失败: %v", err)
 	}
 
@@ -187,6 +255,49 @@ func TestPendingListToleratesInvalidFiles(t *testing.T) {
 	}
 	if doc.Invalid[0].File != "broken.json" || doc.Invalid[0].Error == "" {
 		t.Errorf("invalid 条目应点名文件与原因: %+v", doc.Invalid[0])
+	}
+}
+
+func TestPendingListRejectsUnknownFields(t *testing.T) {
+	dir, _, _, rc := newPendingEnv(t)
+	writePendingFile(t, dir, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
+	// 手写一份带未知键的待办: 待办目录对本地用户可写, 宽松解析等于给伪造留门。
+	rogueID := "p-20261120-unknown1"
+	roguePath := writePendingFile(t, dir, rogueID, []string{"systemctl", "--user", "start", "evil.service"}, time.Now().UTC().Add(time.Hour))
+	data, err := os.ReadFile(roguePath)
+	if err != nil {
+		t.Fatalf("读待办失败: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("待办不是合法 JSON: %v", err)
+	}
+	// requested_by 不在待办的线上形状里: 归属是文件属主, 不是自报字段。
+	raw["requested_by"] = "root"
+	patched, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("序列化待办失败: %v", err)
+	}
+	if err := os.WriteFile(roguePath, patched, 0o644); err != nil {
+		t.Fatalf("写待办失败: %v", err)
+	}
+
+	code, out, errOut := rc("pending", "list")
+	if code != exitOK {
+		t.Fatalf("pending list 退出码 = %d, want 0; stderr: %s", code, errOut)
+	}
+	var doc pendingListDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 pendingListDoc: %v (%q)", err, out)
+	}
+	if len(doc.Pending) != 1 || len(doc.Invalid) != 1 {
+		t.Fatalf("未知键的待办必须进 invalid 且不挡其他条目, 实得 pending=%d invalid=%d", len(doc.Pending), len(doc.Invalid))
+	}
+	if doc.Pending[0].ID != testPendingID {
+		t.Errorf("合法的待办应仍在清单里: %+v", doc.Pending[0])
+	}
+	if doc.Invalid[0].File != rogueID+".json" || doc.Invalid[0].Error == "" {
+		t.Errorf("invalid 条目应点名未知键的文件与原因: %+v", doc.Invalid[0])
 	}
 }
 
@@ -454,7 +565,8 @@ func TestApproveRejectsMalformedPending(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, approvalsDir, _, rc := newPendingEnv(t)
-			if err := os.WriteFile(filepath.Join(dir, testPendingID+".json"), []byte(tc.body), 0o644); err != nil {
+			userDir := pendingDirForUser(t, dir, testPendingUID(t))
+			if err := os.WriteFile(filepath.Join(userDir, testPendingID+".json"), []byte(tc.body), 0o644); err != nil {
 				t.Fatalf("写待办失败: %v", err)
 			}
 			stubEuid(t, 0)
@@ -476,7 +588,14 @@ func TestApproveReplacesStaleApproval(t *testing.T) {
 	stubEuid(t, 0)
 
 	// 旧批准记录对应另一条 argv: 重新批准必须整份替换, 绝不残留旧哈希。
-	stale := approvalDoc{ID: testPendingID, ArgvSHA256: "deadbeef", ApprovedBy: "root", ApprovedAt: "2026-01-01T00:00:00Z"}
+	staleUID := uint32(0)
+	stale := approvalOnDisk{
+		ID:             testPendingID,
+		ArgvSHA256:     strings.Repeat("0", 64),
+		RequestedByUID: &staleUID,
+		ApprovedBy:     "root",
+		ApprovedAt:     "2026-01-01T00:00:00Z",
+	}
 	data, err := json.Marshal(stale)
 	if err != nil {
 		t.Fatalf("序列化旧批准失败: %v", err)
@@ -500,12 +619,12 @@ func TestApproveReplacesStaleApproval(t *testing.T) {
 // TestPendingArgvHashIsInjective 钉住规范哈希必须先消歧再连接:
 // 空格拼接会让 ["a b","c"] 与 ["a","b c"] 撞成同一个哈希。
 func TestPendingArgvHashIsInjective(t *testing.T) {
-	a := argvSHA256([]string{"a b", "c"})
-	b := argvSHA256([]string{"a", "b c"})
+	a := pending.ArgvSHA256([]string{"a b", "c"})
+	b := pending.ArgvSHA256([]string{"a", "b c"})
 	if a == b {
 		t.Fatalf("规范哈希发生碰撞: %q", a)
 	}
-	if argvSHA256([]string{"systemctl", "--user", "stop", "nginx.service"}) != testPendingArgvSHA256 {
+	if pending.ArgvSHA256([]string{"systemctl", "--user", "stop", "nginx.service"}) != testPendingArgvSHA256 {
 		t.Errorf("规范哈希实现与手算值不一致")
 	}
 }
@@ -539,7 +658,7 @@ func TestApproveRejectsFingerprintMismatch(t *testing.T) {
 
 	// 人批准的是审查时看到的另一条 argv(known hash), 与当前待办必然不同。
 	approvedFingerprint := strings.Repeat("0", 64)
-	actualFingerprint := argvSHA256([]string{"systemctl", "--user", "start", "evil.service"})
+	actualFingerprint := pending.ArgvSHA256([]string{"systemctl", "--user", "start", "evil.service"})
 	code, out, errOut := rc("approve", testPendingID, "--expect-sha256", approvedFingerprint)
 	if code != exitRuntime {
 		t.Fatalf("指纹不一致退出码 = %d, want %d; stdout: %s", code, exitRuntime, out)
@@ -575,7 +694,7 @@ func TestApproveRejectsFingerprintMismatch(t *testing.T) {
 func TestCheckApprovalsDir(t *testing.T) {
 	orig := approvalsDirUID
 	t.Cleanup(func() { approvalsDirUID = orig })
-	approvalsDirUID = statApprovalsUID
+	approvalsDirUID = statFileUID
 
 	tests := []struct {
 		name    string
@@ -663,7 +782,7 @@ func TestPendingRejectsOversizedFile(t *testing.T) {
 	dir, approvalsDir, _, rc := newPendingEnv(t)
 	big := fmt.Sprintf(`{"id":%q,"kind":"service","name":"nginx.service","desired_state":"stopped","argv":["systemctl"],"scope":"systemd:user:stop:nginx.service","reason":%q,"created_at":"2026-11-20T00:00:00Z","expires_at":"2099-01-01T00:00:00Z"}`,
 		testPendingID, strings.Repeat("x", maxPendingFileBytes))
-	if err := os.WriteFile(filepath.Join(dir, testPendingID+".json"), []byte(big), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(pendingDirForUser(t, dir, testPendingUID(t)), testPendingID+".json"), []byte(big), 0o644); err != nil {
 		t.Fatalf("写超大待办失败: %v", err)
 	}
 	stubEuid(t, 0)
@@ -689,5 +808,202 @@ func TestPendingRejectsOversizedFile(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(approvalsDir); err != nil || len(entries) != 0 {
 		t.Fatalf("超大待办不得产出批准记录: %v (err=%v)", entries, err)
+	}
+}
+
+// TestPendingListSpansUserDirs 钉住分目录之后的可见性: 待办按执行者散在
+// <root>/<uid>/ 里, root 的 list 必须跨所有用户目录都看得到。
+func TestPendingListSpansUserDirs(t *testing.T) {
+	root, _, _, rc := newPendingEnv(t)
+	otherID := "p-20261120-other001"
+
+	ownPath := writePendingFile(t, root, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
+	otherDir := pendingDirForUser(t, root, otherTestUID(t))
+	otherPath := writePendingFileIn(t, otherDir, otherID, []string{"systemctl", "--user", "restart", "web.service"}, time.Now().UTC().Add(time.Hour))
+	// 归属的权威是文件属主, 不是目录名: 文件落在 <root>/<另一个 uid>/ 里, 报的仍是它真实的
+	// stat 属主(root 跑测试时能把属主改成 1001, 普通用户改不动, 两种都钉这条)。
+	if err := os.Chown(otherPath, int(otherTestUID(t)), int(otherTestUID(t))); err != nil {
+		t.Logf("无法把夹具改成 uid=%d(非 root 测试进程的正常情况): %v", otherTestUID(t), err)
+	}
+
+	code, out, errOut := rc("pending", "list")
+	if code != exitOK {
+		t.Fatalf("pending list 退出码 = %d, want 0; stderr: %s", code, errOut)
+	}
+	var doc pendingListDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 pendingListDoc: %v (%q)", err, out)
+	}
+	if len(doc.Pending) != 2 || len(doc.Invalid) != 0 {
+		t.Fatalf("跨用户目录应列出 2 条, 实得 pending=%d invalid=%d: %s", len(doc.Pending), len(doc.Invalid), out)
+	}
+	byID := map[string]pendingListEntry{}
+	for _, entry := range doc.Pending {
+		byID[entry.ID] = entry
+	}
+	// 期望值从文件系统独立读出, 不从被测实现推。
+	if got, want := byID[testPendingID].RequestedByUID, int(statOwnerUID(t, ownPath)); got != want {
+		t.Errorf("自己那份的 requested_by_uid = %d, want %d", got, want)
+	}
+	if got, want := byID[otherID].RequestedByUID, int(statOwnerUID(t, otherPath)); got != want {
+		t.Errorf("另一份的 requested_by_uid = %d, want %d(归属看 stat 属主, 不看目录名)", got, want)
+	}
+}
+
+// statOwnerUID 从文件系统独立读出属主 uid: 断言的期望值不能来自被测实现。
+func statOwnerUID(t *testing.T, path string) uint32 {
+	t.Helper()
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("stat %s 失败: %v", path, err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("%s 的 FileInfo 不含 Stat_t", path)
+	}
+	return st.Uid
+}
+
+// TestPendingListShowsRequesterName 钉住审批的人能看到「这是谁要的」: 账号名由
+// stat 属主反查, 反查不到时留空串(uid 才是判定依据)。
+func TestPendingListShowsRequesterName(t *testing.T) {
+	root, _, _, rc := newPendingEnv(t)
+	writePendingFile(t, root, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
+	uid := testPendingUID(t)
+	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
+	if err != nil {
+		t.Skipf("本机无法由 uid=%d 反查账号名: %v", uid, err)
+	}
+
+	code, out, errOut := rc("pending", "list")
+	if code != exitOK {
+		t.Fatalf("pending list 退出码 = %d, want 0; stderr: %s", code, errOut)
+	}
+	var doc pendingListDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 pendingListDoc: %v (%q)", err, out)
+	}
+	if len(doc.Pending) != 1 {
+		t.Fatalf("应列出 1 条待办, 实得 %d: %s", len(doc.Pending), out)
+	}
+	if doc.Pending[0].RequestedBy != u.Username {
+		t.Errorf("requested_by = %q, want %q", doc.Pending[0].RequestedBy, u.Username)
+	}
+	if doc.Pending[0].RequestedByUID != int(uid) {
+		t.Errorf("requested_by_uid = %d, want %d", doc.Pending[0].RequestedByUID, uid)
+	}
+}
+
+// TestPendingShowFindsAcrossUserDirs 钉住 show 的跨目录查找: id 反推不出 uid,
+// 只能遍历; 找到之后归属仍按真实属主报。
+func TestPendingShowFindsAcrossUserDirs(t *testing.T) {
+	root, _, _, rc := newPendingEnv(t)
+	id := "p-20261120-othershow"
+	otherPath := writePendingFileIn(t, pendingDirForUser(t, root, otherTestUID(t)), id,
+		[]string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
+
+	code, out, errOut := rc("pending", "show", id)
+	if code != exitOK {
+		t.Fatalf("pending show 退出码 = %d, want 0; stderr: %s", code, errOut)
+	}
+	var entry pendingListEntry
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &entry); err != nil {
+		t.Fatalf("stdout 非待办视图: %v (%q)", err, out)
+	}
+	if entry.ID != id {
+		t.Errorf("show 找到的 id = %q, want %q", entry.ID, id)
+	}
+	if entry.ArgvSHA256 != testPendingArgvSHA256 {
+		t.Errorf("argv_sha256 = %q, want %q", entry.ArgvSHA256, testPendingArgvSHA256)
+	}
+	// 期望值从文件系统独立读出, 不从被测实现推 —— 文件落在 <root>/<另一个 uid>/ 里,
+	// 报的必须是它真实的 stat 属主, 谁写的才是关键, 目录叫什么不是。
+	if got, want := entry.RequestedByUID, int(statOwnerUID(t, otherPath)); got != want {
+		t.Errorf("requested_by_uid = %d, want %d(属主不是目录名)", got, want)
+	}
+}
+
+// TestPendingShowRejectsSameIDInTwoUserDirs 钉住「id 全局唯一」这条前提: id 里带执行者
+// uid, 同一个 id 出现在两个用户目录里只可能是伪造 —— 两份都不采信, 而不是挑一份当真的。
+func TestPendingShowRejectsSameIDInTwoUserDirs(t *testing.T) {
+	root, _, _, rc := newPendingEnv(t)
+	writePendingFile(t, root, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
+	writePendingFileIn(t, pendingDirForUser(t, root, otherTestUID(t)), testPendingID,
+		[]string{"systemctl", "--user", "start", "evil.service"}, time.Now().UTC().Add(time.Hour))
+
+	code, _, errOut := rc("pending", "show", testPendingID)
+	if code != exitRuntime {
+		t.Fatalf("同一 id 出现在两个用户目录时 show 退出码 = %d, want %d; stderr: %s", code, exitRuntime, errOut)
+	}
+	if !strings.Contains(errOut, "重复即伪造") {
+		t.Errorf("stderr 应点明 id 重复即伪造: %q", errOut)
+	}
+}
+
+// TestApproveRecordsRequesterFromFileOwner 钉住批准记录的请求者来源: 权威是待办文件的
+// stat 属主, 不是待办 JSON 里的任何字段(那种字段谁都能写)。
+func TestApproveRecordsRequesterFromFileOwner(t *testing.T) {
+	root, approvalsDir, _, rc := newPendingEnv(t)
+	pendingPath := writePendingFile(t, root, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
+	stubEuid(t, 0)
+
+	code, out, errOut := rc("approve", testPendingID, "--expect-sha256", testPendingArgvSHA256)
+	if code != exitOK {
+		t.Fatalf("approve 退出码 = %d, want 0; stderr: %s", code, errOut)
+	}
+	oneJSONDoc(t, out)
+
+	rec := readApproval(t, approvalsDir, testPendingID)
+	uid := statOwnerUID(t, pendingPath)
+	if rec.RequestedByUID == nil {
+		t.Fatal("批准记录必须写 requested_by_uid: 省略等于没写请求者")
+	}
+	if *rec.RequestedByUID != uid {
+		t.Errorf("requested_by_uid = %d, want %d(待办文件的 stat 属主)", *rec.RequestedByUID, uid)
+	}
+	if u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10)); err == nil {
+		if rec.RequestedBy != u.Username {
+			t.Errorf("requested_by = %q, want %q", rec.RequestedBy, u.Username)
+		}
+	}
+}
+
+// TestPendingListKeepsNineFieldPendings 钉住兼容性: 加请求者归属时不许改待办的线上形状,
+// 上一轮发出去的 9 字段待办必须原样读得出来。
+func TestPendingListKeepsNineFieldPendings(t *testing.T) {
+	root, _, _, rc := newPendingEnv(t)
+	path := writePendingFile(t, root, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读待办失败: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("待办不是合法 JSON: %v", err)
+	}
+	wantKeys := []string{"id", "kind", "name", "desired_state", "argv", "scope", "reason", "created_at", "expires_at"}
+	if len(raw) != len(wantKeys) {
+		t.Fatalf("待办的线上形状应仍是 %d 个键, 实得 %d: %s", len(wantKeys), len(raw), data)
+	}
+	for _, key := range wantKeys {
+		if _, ok := raw[key]; !ok {
+			t.Fatalf("待办缺少线上键 %q: %s", key, data)
+		}
+	}
+
+	code, out, errOut := rc("pending", "list")
+	if code != exitOK {
+		t.Fatalf("pending list 退出码 = %d, want 0; stderr: %s", code, errOut)
+	}
+	var doc pendingListDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 pendingListDoc: %v (%q)", err, out)
+	}
+	if len(doc.Pending) != 1 || len(doc.Invalid) != 0 {
+		t.Fatalf("9 字段待办必须读得出来, 实得 pending=%d invalid=%d: %s", len(doc.Pending), len(doc.Invalid), out)
+	}
+	if doc.Pending[0].Kind != "service" || doc.Pending[0].Scope != "systemd:user:stop:nginx.service" {
+		t.Errorf("待办声明字段丢失: %+v", doc.Pending[0])
 	}
 }
