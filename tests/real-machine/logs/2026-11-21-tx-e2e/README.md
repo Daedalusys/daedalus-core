@@ -65,3 +65,18 @@ bash ~/tx-e2e-v2/run.sh          # 内部: sg daedalus-signers -c "bash tx-e2e.s
 - 第二用户用 `sudo -u` 临时造(nologin、无家目录):它验证的是**绑定判定与账本分文件**,
   不是「第二个用户真有一条 user bus 去跑 systemctl --user」。后者要 `loginctl enable-linger`
   + `user@<uid>.service`,属部署面,不在本脚本内。
+
+## 第三轮(v3):第三档归属 + 第二个真用户会话(76/76 通过)
+
+后续这一轮把上面最后一条的缺口补上了:**第二个用户改成有家目录、有 login shell、
+由 linger 起 user manager 的真用户**,两个用户各自在自己的 user 域里起同名单元并各自
+执行。同时验了第三档的三处收紧:待办按人分目录、批准记录写请求者(权威 = 待办文件的
+stat 属主)、一份批准只能用一次。
+
+- 证据与复现命令:[`../2026-11-22-tx-e2e/README.md`](../2026-11-22-tx-e2e/README.md)、
+  [`EVIDENCE-v3.md`](../2026-11-22-tx-e2e/EVIDENCE-v3.md)
+- 结果:通过 76,失败 0 —— 本文件记的 32 条一条没少,本轮新增 44 条(9 条断言 + 归属/
+  一次性/伪造归属的额外断言)
+- 复现入口不变:同一个 `tests/mcp/tx-e2e.sh`,只是脚本现在自己建/删第二个真用户与
+  `/run/daedalus/consumed`
+
