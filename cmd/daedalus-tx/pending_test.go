@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/Daedalusys/daedalus-sdk/pending"
 )
 
 // 固定 argv 的规范哈希(sha256(NUL 连接))。这里是**手算值**而不是调用实现:
@@ -108,14 +110,29 @@ func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (f fakeFileInfo) IsDir() bool        { return f.mode.IsDir() }
 func (f fakeFileInfo) Sys() any           { return f.sys }
 
-// readApproval 读批准记录, 顺带断言它是合法 JSON。
-func readApproval(t *testing.T, dir, id string) approvalDoc {
+// approvalOnDisk 是批准记录的读取视图: 字段声明与线上 JSON 逐字对齐, 因为测试要钉的是
+// 写出去的字节形态(键名、时间格式), 不是 SDK 的内部类型。
+type approvalOnDisk struct {
+	ID             string  `json:"id"`
+	ArgvSHA256     string  `json:"argv_sha256"`
+	RequestedByUID *uint32 `json:"requested_by_uid"`
+	RequestedBy    string  `json:"requested_by"`
+	ApprovedBy     string  `json:"approved_by"`
+	ApprovedAt     string  `json:"approved_at"`
+}
+
+// readApproval 读批准记录: 先过生产同款严格解析(写出去就读不回来是不可接受的),
+// 再按线上 JSON 形态取字段供断言。
+func readApproval(t *testing.T, dir, id string) approvalOnDisk {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, id+".json"))
 	if err != nil {
 		t.Fatalf("批准记录不存在: %v", err)
 	}
-	var rec approvalDoc
+	if _, err := pending.ParseApproval(data); err != nil {
+		t.Fatalf("批准记录过不了生产侧严格解析: %v (%q)", err, data)
+	}
+	var rec approvalOnDisk
 	if err := json.Unmarshal(data, &rec); err != nil {
 		t.Fatalf("批准记录不是合法 JSON: %v (%q)", err, data)
 	}
@@ -187,6 +204,49 @@ func TestPendingListToleratesInvalidFiles(t *testing.T) {
 	}
 	if doc.Invalid[0].File != "broken.json" || doc.Invalid[0].Error == "" {
 		t.Errorf("invalid 条目应点名文件与原因: %+v", doc.Invalid[0])
+	}
+}
+
+func TestPendingListRejectsUnknownFields(t *testing.T) {
+	dir, _, _, rc := newPendingEnv(t)
+	writePendingFile(t, dir, testPendingID, []string{"systemctl", "--user", "stop", "nginx.service"}, time.Now().UTC().Add(time.Hour))
+	// 手写一份带未知键的待办: 待办目录对本地用户可写, 宽松解析等于给伪造留门。
+	rogueID := "p-20261120-unknown1"
+	roguePath := writePendingFile(t, dir, rogueID, []string{"systemctl", "--user", "start", "evil.service"}, time.Now().UTC().Add(time.Hour))
+	data, err := os.ReadFile(roguePath)
+	if err != nil {
+		t.Fatalf("读待办失败: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("待办不是合法 JSON: %v", err)
+	}
+	// requested_by 不在待办的线上形状里: 归属是文件属主, 不是自报字段。
+	raw["requested_by"] = "root"
+	patched, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("序列化待办失败: %v", err)
+	}
+	if err := os.WriteFile(roguePath, patched, 0o644); err != nil {
+		t.Fatalf("写待办失败: %v", err)
+	}
+
+	code, out, errOut := rc("pending", "list")
+	if code != exitOK {
+		t.Fatalf("pending list 退出码 = %d, want 0; stderr: %s", code, errOut)
+	}
+	var doc pendingListDoc
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &doc); err != nil {
+		t.Fatalf("stdout 非 pendingListDoc: %v (%q)", err, out)
+	}
+	if len(doc.Pending) != 1 || len(doc.Invalid) != 1 {
+		t.Fatalf("未知键的待办必须进 invalid 且不挡其他条目, 实得 pending=%d invalid=%d", len(doc.Pending), len(doc.Invalid))
+	}
+	if doc.Pending[0].ID != testPendingID {
+		t.Errorf("合法的待办应仍在清单里: %+v", doc.Pending[0])
+	}
+	if doc.Invalid[0].File != rogueID+".json" || doc.Invalid[0].Error == "" {
+		t.Errorf("invalid 条目应点名未知键的文件与原因: %+v", doc.Invalid[0])
 	}
 }
 
@@ -476,7 +536,14 @@ func TestApproveReplacesStaleApproval(t *testing.T) {
 	stubEuid(t, 0)
 
 	// 旧批准记录对应另一条 argv: 重新批准必须整份替换, 绝不残留旧哈希。
-	stale := approvalDoc{ID: testPendingID, ArgvSHA256: "deadbeef", ApprovedBy: "root", ApprovedAt: "2026-01-01T00:00:00Z"}
+	staleUID := uint32(0)
+	stale := approvalOnDisk{
+		ID:             testPendingID,
+		ArgvSHA256:     strings.Repeat("0", 64),
+		RequestedByUID: &staleUID,
+		ApprovedBy:     "root",
+		ApprovedAt:     "2026-01-01T00:00:00Z",
+	}
 	data, err := json.Marshal(stale)
 	if err != nil {
 		t.Fatalf("序列化旧批准失败: %v", err)
@@ -500,12 +567,12 @@ func TestApproveReplacesStaleApproval(t *testing.T) {
 // TestPendingArgvHashIsInjective 钉住规范哈希必须先消歧再连接:
 // 空格拼接会让 ["a b","c"] 与 ["a","b c"] 撞成同一个哈希。
 func TestPendingArgvHashIsInjective(t *testing.T) {
-	a := argvSHA256([]string{"a b", "c"})
-	b := argvSHA256([]string{"a", "b c"})
+	a := pending.ArgvSHA256([]string{"a b", "c"})
+	b := pending.ArgvSHA256([]string{"a", "b c"})
 	if a == b {
 		t.Fatalf("规范哈希发生碰撞: %q", a)
 	}
-	if argvSHA256([]string{"systemctl", "--user", "stop", "nginx.service"}) != testPendingArgvSHA256 {
+	if pending.ArgvSHA256([]string{"systemctl", "--user", "stop", "nginx.service"}) != testPendingArgvSHA256 {
 		t.Errorf("规范哈希实现与手算值不一致")
 	}
 }
@@ -539,7 +606,7 @@ func TestApproveRejectsFingerprintMismatch(t *testing.T) {
 
 	// 人批准的是审查时看到的另一条 argv(known hash), 与当前待办必然不同。
 	approvedFingerprint := strings.Repeat("0", 64)
-	actualFingerprint := argvSHA256([]string{"systemctl", "--user", "start", "evil.service"})
+	actualFingerprint := pending.ArgvSHA256([]string{"systemctl", "--user", "start", "evil.service"})
 	code, out, errOut := rc("approve", testPendingID, "--expect-sha256", approvedFingerprint)
 	if code != exitRuntime {
 		t.Fatalf("指纹不一致退出码 = %d, want %d; stdout: %s", code, exitRuntime, out)
@@ -575,7 +642,7 @@ func TestApproveRejectsFingerprintMismatch(t *testing.T) {
 func TestCheckApprovalsDir(t *testing.T) {
 	orig := approvalsDirUID
 	t.Cleanup(func() { approvalsDirUID = orig })
-	approvalsDirUID = statApprovalsUID
+	approvalsDirUID = statFileUID
 
 	tests := []struct {
 		name    string
