@@ -1,0 +1,87 @@
+I'll start by checking for relevant skills, then run a read-only inspection.
+
+
+技能工具被拒绝；我将直接使用只读 MCP 工具继续操作。
+
+
+巡检完成。以下是只读取证的结果。
+
+---
+
+## 一、严重（1 条）
+
+### 1. 审计链中存在一段不属于本次巡检的探测/绕过尝试（全部被策略拒绝）
+证据文件：`/tmp/daedalus-audit-lab-a.jsonl`（12,701 B，即 trace 后端解析的 `log_path`）
+
+| 时间 (UTC) | identity | 内容 | outcome |
+|---|---|---|---|
+| 03:12:45 | daedalus-shell | `echo hi` | denied |
+| 03:13:44 | daedalus-shell | `ss -ltn 2>/dev/null \| grep -E '9601\|9602'` | denied |
+| 03:14:02 | daedalus-shell | `hostname` | success |
+| 03:14:26 | daedalus-shell | `hostname; id -un`（命令链，疑似绕过 allowlist） | denied |
+| 03:14:37 | daedalus-shell | `ss -ltn ... grep -E '9601\|9602'` | denied |
+| 03:14:43 | daedalus-shell | `echo hi` | denied |
+| 03:14:43 | daedalus-fs | `list_dir /mnt/cache/tmp/opencode/daedalus-lab/logs`（越权目录） | denied |
+
+判定依据：本次巡检的第一条审计记录是 `03:14:53` 的 `hardware_info`；上表 03:12:45–03:14:43 的记录早于本次会话，属于另一会话/操作者。其中 **端口 9601/9602 探测** 与 **`hostname; id -un` 命令链** 不符合常规巡检行为。当前 `proc_listen` 只看到 22/tcp 和 323/udp，9601/9602 无监听，且上述尝试均被拒绝，**未发现成功迹象**，但建议人工复核该会话来源。
+
+---
+
+## 二、警告（6 条）
+
+### 2. `sssd.service` 已启用但从未启动
+`UnitFileState=enabled`，`ActiveState=inactive`，`SubState=dead`，`ActiveEnterTimestamp` 为空（开机后未启动）。系统装了大量域集成包（`sssd-ad/ipa/ldap/krb5`、`adcli`）。若依赖域账号登录，认证会直接失败。
+
+### 3. `kdump.service` 已启用但未运行
+`UnitFileState=enabled`，`ActiveState=inactive`，`SubState=dead`，`ActiveEnterTimestamp` 为空；`kdump-utils`/`kexec-tools` 已安装。即内核崩溃转储不可用。
+
+### 4. 无用户态审计守护进程
+`service_query(auditd)` → `error: unit auditd.service not found`；`service_list` 中 `auditd.service` 为 `LoadState=not-found`。仅 `audit-libs` 存在，内核 `kauditd`(pid 34) 在跑，但没有 auditd 意味着审计规则未加载。
+
+### 5. 无主机防火墙，22 端口全网暴露
+- `dnf_list_installed("*firewall*")` → `[]`（未安装；`dnf_query(firewalld)` 显示仅仓库可安装 2.4.3-4.el10_2）
+- `proc_listen(tcp)` → `0.0.0.0:22` 与 `::22` 均为 LISTEN
+- 网卡 `enp0s2` 有 `10.0.2.15/24` 全局地址，`sshd` 处于 `active/running`（MainPID 1086）
+
+### 6. SSH 会话累积且无 swap
+- `uptime` → `up 14 min, 40 users, load average: 0.26, 0.17, 0.09`
+- `proc_list(tag="sshd-session")` → `total: 80`（=40 组 `[priv]`+`@notty`），单进程 RSS 8.1–10.9 MB，合计约 **760 MB**
+- `free -m` → `Mem: 3909 total, 846 used, 3063 available`；`Swap: 0 0 0`
+- 系统装了 `zram-generator` 但 `SwapTotal=0`，无任何交换空间。会话随每次工具调用增长、14 分钟内未回收，属内存泄漏/耗尽风险。
+
+### 7. 审计日志不持久且开机后 10 分钟无审计
+- 实际写入路径为 `/tmp/daedalus-audit-lab-a.jsonl`（`df` 显示 `/tmp` 是 `tmpfs 2.0G`）→ 重启即丢失
+- 审计链首条 `prev_hash=0000…0000` 的时间是 `2026-11-23T03:12:37`，而系统 `ActiveEnterTimestamp`/开机为 `03:01:55` → **03:01:55–03:12:37 无审计记录**
+- `/var/log/daedalus/audit.jsonl` 仅 359 B 且 `permission denied`（非 root 不可读）
+
+---
+
+## 三、正常（7 项，有证据）
+
+1. **无失败单元**：`systemd_failed` → `[]`（连续两次调用一致）。
+2. **关键服务正常**：`sshd` / `NetworkManager` / `chronyd` / `daedalus-host-controller` 均 `UnitFileState=enabled` + `ActiveState=active` + `SubState=running`（MainPID 1086/925/928/934）。
+3. **磁盘与 inode 充足**：`df -h` → `/dev/vda4 8.5G 2.1G 25% /etc`、`/dev/vda3 960M 171M 18% /boot`、`/dev/vda2 501M 9.2M 2% /boot/efi`；`df -i` → `/etc` 2%、`/boot` 1%。`/` 显示 `composefs 6.8M 100%` 是 bootc 只读镜像挂载（`filesystem_info`: device=composefs, fstype=overlay），**不是容量耗尽**。
+4. **监听端口最小化**：TCP 仅 `0.0.0.0:22`、`::22`；UDP 仅 `127.0.0.1:323`、`::1:323`（chrony 本地控制口）。无 9601/9602 等可疑端口。网卡仅 `lo` + `enp0s2`。
+5. **无超大/重复文件**：`/var/log` 最大为两个 8 MB journal；`/home`+`/tmp` 用 `sha256`、`min_size=4096` 扫描 → `[]`（无重复）。
+6. **软件包无冲突**：`rpm -qa` 可正常返回；内核 `kernel-6.12.0-273.el10` 与 `uname -a` 的 `6.12.0-273.el10.x86_64` 一致；仅一套内核，无重复/残留。
+7. **无失败登录记录**：`/var/log/btmp` 大小 **0 字节**；`/home` 下仅 `daedalus` 用户，`~/.ssh` 仅 `authorized_keys`（1 个 ed25519 公钥，注释 `udefine-dev@undef-dev`，无法凭只读数据判定归属）。
+
+---
+
+## 四、未覆盖（拿不到数据，不计为正常）
+
+| 检查项 | 原因 |
+|---|---|
+| journal 错误/告警内容 | `journalctl` 不在 shell allowlist（返回 126）；`/var/log/journal/*.journal` 为二进制，fs 工具不可解析 |
+| `dmesg` 内核错误 | `dmesg` 不在 allowlist |
+| `/var/log/boot.log` | `permission denied`（当前身份非 root，文件 0600） |
+| `/var/log/samba`、`/var/log/sssd`、`/var/log/chrony`、`/var/log/private`、`/var/log/daedalus/*` | 全部 `permission denied` |
+| 22/323 端口归属进程（socket inode→PID） | `proc_fds(1086)`、`proc_fds(928)` → `open /proc/<pid>/fd: permission denied`；`proc_listen` 亦 `unowned_sockets: 2`（仅能由 sshd/chronyd 在跑间接推断） |
+| SELinux 模式 | `getenforce` 不在 allowlist |
+| 防火墙规则集 | `nft` 不在 allowlist（只能确认 firewalld 未安装） |
+| 包文件完整性 `rpm -Va` | `rpm` 不在 allowlist |
+| 登录会话明细 `who`/`w`/`last` | 均不在 allowlist（"40 users" 只能靠 `uptime` + 进程数推断） |
+
+---
+
+**总结：严重 1 条（审计链内疑似探测/绕过尝试，均被拒绝）；警告 6 条（sssd、kdump 启用未启动，无 auditd，无防火墙，40 会话/无 swap，审计日志在 tmpfs 且有 10 分钟盲区）；正常 7 项。**

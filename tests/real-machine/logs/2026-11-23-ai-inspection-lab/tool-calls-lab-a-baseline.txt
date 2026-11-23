@@ -1,0 +1,58 @@
+[error] skill {"id": "systematic-debugging"}  ERR=Permission denied: skill
+[completed] lab-a-osstate_filesystem_info {"mountpoints": ["/", "/home", "/tmp", "/var/log", "/boot"]}
+[completed] lab-a-osstate_os_state {}
+[completed] lab-a-service_systemd_failed {}
+[completed] lab-a-sysinfo_hardware_info {}
+[completed] lab-a-proc_proc_listen {}
+[completed] lab-a-osstate_filesystem_info {"mountpoints": ["/"]}
+[completed] lab-a-shell_shell_exec {"command": "df", "args": ["-h"]}
+[completed] lab-a-service_service_list {"filter": "*"}
+[completed] lab-a-pkg_dnf_list_installed {}
+[error] lab-a-shell_shell_exec {"command": "journalctl", "args": ["-p", "err", "--since", "-24h", "-n", "50", "--no-pager"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'journalctl' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "
+[completed] lab-a-fs_list_dir {"path": "/var/log"}
+[completed] lab-a-proc_proc_listen {"proto": "udp"}
+[completed] lab-a-proc_proc_list {}
+[completed] lab-a-fs_list_dir {"path": "/var/log/daedalus"}
+[error] lab-a-fs_read_file {"path": "/var/log/boot.log"}  ERR=Error: open /var/log/boot.log: permission denied
+[completed] lab-a-dupe_scan_large {"dir": "/var/log", "top_n": 15}
+[completed] lab-a-dupe_scan_large {"dir": "/home", "top_n": 15}
+[completed] lab-a-dupe_scan_large {"dir": "/tmp", "top_n": 15}
+[error] lab-a-fs_read_file {"path": "/var/log/daedalus/audit.jsonl"}  ERR=Error: open /var/log/daedalus/audit.jsonl: permission denied
+[error] lab-a-fs_list_dir {"path": "/var/log/daedalus/archive"}  ERR=Error: open /var/log/daedalus/archive: permission denied
+[completed] lab-a-trace_trace_summary {}
+[completed] lab-a-service_service_query {"name": "sshd"}
+[completed] lab-a-service_service_query {"name": "chronyd"}
+[completed] lab-a-service_service_query {"name": "daedalus-host-controller"}
+[error] lab-a-fs_list_dir {"path": "/var/log/samba"}  ERR=Error: open /var/log/samba: permission denied
+[error] lab-a-fs_list_dir {"path": "/var/log/sssd"}  ERR=Error: open /var/log/sssd: permission denied
+[completed] lab-a-shell_shell_exec {"command": "uname", "args": ["-a"]}
+[completed] lab-a-dupe_scan_dupes {"dirs": ["/home", "/tmp"], "algo": "sha256", "min_size": 4096}
+[completed] lab-a-sysinfo_network_status {}
+[error] lab-a-proc_proc_fds {"pid": 1086, "kinds": ["socket"]}  ERR=Error executing tool proc_fds: proc: 读取 /proc/1086/fd 失败: open /proc/1086/fd: permission denied
+[error] lab-a-proc_proc_fds {"pid": 928, "kinds": ["socket"]}  ERR=Error executing tool proc_fds: proc: 读取 /proc/928/fd 失败: open /proc/928/fd: permission denied
+[error] lab-a-fs_list_dir {"path": "/var/log/chrony"}  ERR=Error: open /var/log/chrony: permission denied
+[error] lab-a-fs_list_dir {"path": "/var/log/private"}  ERR=Error: open /var/log/private: permission denied
+[completed] lab-a-shell_shell_exec {"command": "free", "args": ["-m"]}
+[error] lab-a-shell_shell_exec {"command": "last", "args": ["-x", "-n", "20"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'last' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Comman
+[completed] lab-a-shell_shell_exec {"command": "df", "args": ["-i"]}
+[completed] lab-a-shell_shell_exec {"command": "uptime"}
+[completed] lab-a-service_systemd_timer_next {"name": "daedalus-audit-rotate"}
+[completed] lab-a-service_service_query {"name": "NetworkManager"}
+[error] lab-a-shell_shell_exec {"command": "who", "args": ["-a"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'who' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Command
+[error] lab-a-shell_shell_exec {"command": "w"}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'w' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Command '
+[error] lab-a-shell_shell_exec {"command": "rpm", "args": ["-Va"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'rpm' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Command
+[error] lab-a-shell_shell_exec {"command": "dmesg", "args": ["--level=err,warn", "--time-format=iso"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'dmesg' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Comma
+[completed] lab-a-proc_proc_list {"filter": "sshd-session"}
+[error] lab-a-shell_shell_exec {"command": "getenforce"}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'getenforce' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "
+[completed] lab-a-fs_list_dir {"path": "/var/log/journal/36324e3f418a4645a4b6b975d7795422"}
+[completed] lab-a-service_service_query {"name": "daedalus-audit"}
+[completed] lab-a-pkg_dnf_list_installed {"pattern": "*firewall*"}
+[completed] lab-a-pkg_dnf_query {"name": "firewalld"}
+[error] lab-a-shell_shell_exec {"command": "nft", "args": ["list", "ruleset"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'nft' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Command
+[error] lab-a-service_service_query {"name": "auditd"}  ERR=error: unit auditd.service not found
+[completed] lab-a-service_service_query {"name": "sssd"}
+[completed] lab-a-service_service_query {"name": "kdump"}
+[completed] lab-a-fs_read_file {"path": "/tmp/daedalus-audit-lab-a.jsonl"}
+[completed] lab-a-fs_list_dir {"path": "/home"}
+[completed] lab-a-fs_read_file {"path": "/var/home/daedalus/.ssh/authorized_keys"}
+[completed] lab-a-fs_list_dir {"path": "/var/home/daedalus/.ssh"}

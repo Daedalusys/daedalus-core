@@ -1,0 +1,56 @@
+[completed] lab-a-sysinfo_hardware_info {}
+[completed] lab-a-fs_list_dir {"path": "/var/log"}
+[completed] lab-a-osstate_os_state {}
+[completed] lab-a-service_systemd_failed {}
+[completed] lab-a-proc_proc_listen {}
+[completed] lab-a-sysinfo_network_status {}
+[completed] lab-a-osstate_filesystem_info {"mountpoints": ["/", "/var", "/var/log", "/tmp", "/home"]}
+[error] lab-a-fs_read_file {"path": "/var/log/boot.log"}  ERR=Error: open /var/log/boot.log: permission denied
+[completed] lab-a-fs_read_file {"path": "/var/log/lab-fault-app.log"}
+[completed] lab-a-service_service_list {}
+[completed] lab-a-proc_proc_list {}
+[completed] lab-a-dupe_scan_large {"dir": "/var/log", "top_n": 25}
+[completed] lab-a-osstate_filesystem_info {"mountpoints": ["/"]}
+[completed] lab-a-osstate_filesystem_info {"mountpoints": ["/var"]}
+[completed] lab-a-service_service_query {"name": "lab-fault-listen"}
+[completed] lab-a-service_service_query {"name": "lab-fault-fail"}
+[completed] lab-a-pkg_dnf_list_installed {"pattern": "*"}
+[error] lab-a-shell_shell_exec {"command": "journalctl", "args": ["-p", "err", "-n", "50", "--no-pager"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'journalctl' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "
+[completed] lab-a-shell_shell_exec {"command": "df", "args": ["-i"]}
+[completed] lab-a-shell_shell_exec {"command": "df", "args": ["-h"]}
+[completed] lab-a-dupe_scan_large {"dir": "/home", "top_n": 20}
+[error] lab-a-fs_list_dir {"path": "/var/log/samba"}  ERR=Error: open /var/log/samba: permission denied
+[error] lab-a-fs_list_dir {"path": "/var/log/sssd"}  ERR=Error: open /var/log/sssd: permission denied
+[error] lab-a-fs_list_dir {"path": "/var/log/chrony"}  ERR=Error: open /var/log/chrony: permission denied
+[error] lab-a-proc_proc_fds {"pid": 3083}  ERR=Error executing tool proc_fds: proc: 读取 /proc/3083/fd 失败: open /proc/3083/fd: permission denied
+[completed] lab-a-proc_proc_cgroup {"pid": 3083}
+[completed] lab-a-dupe_scan_dupes {"algo": "first_1mb", "dirs": ["/home", "/tmp", "/var/log"], "min_size": 1048576}
+[error] lab-a-shell_shell_exec {"command": "rpm", "args": ["-Va"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'rpm' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Command
+[completed] lab-a-dupe_scan_large {"dir": "/tmp", "min_size": 1048576, "top_n": 30}
+[completed] lab-a-fs_list_dir {"path": "/tmp"}
+[error] lab-a-fs_read_file {"path": "/var/log/daedalus/audit.jsonl"}  ERR=Error: open /var/log/daedalus/audit.jsonl: permission denied
+[completed] lab-a-proc_proc_listen {"proto": "udp"}
+[completed] lab-a-proc_proc_list {"filter": "lab-fault"}
+[completed] lab-a-fs_read_file {"path": "/tmp/mcp.err"}
+[completed] lab-a-fs_list_dir {"path": "/var/log/journal/36324e3f418a4645a4b6b975d7795422"}
+[error] lab-a-fs_list_dir {"path": "/var/log/private"}  ERR=Error: open /var/log/private: permission denied
+[completed] lab-a-trace_trace_summary {}
+[completed] lab-a-proc_proc_tree {"root_pid": 3083}
+[completed] lab-a-dupe_scan_dupes {"algo": "sha256", "dirs": ["/home", "/tmp", "/var/log"], "min_size": 4096}
+[completed] lab-a-fs_list_dir {"path": "/var/log/daedalus"}
+[error] lab-a-shell_shell_exec {"command": "systemctl", "args": ["status", "lab-fault-fail.service", "--no-pager", "--lines=20"]}  ERR={   "stdout": "× lab-fault-fail.service - lab fault: always fails\n     Loaded: loaded (/etc/systemd/system/lab-fault-fail.service; enabled; preset: d
+[completed] lab-a-proc_proc_list {"filter": "python3"}
+[error] lab-a-fs_read_file {"path": "/var/log/journal/36324e3f418a4645a4b6b975d7795422/system.journal"}  ERR=MCP tool "read_file" on server "lab-a-fs" failed: Connection closed: MCP server lab-a-fs wrote more than 16 MiB to stdout without a message boundary
+[error] lab-a-shell_shell_exec {"command": "systemctl", "args": ["status", "auditd.service", "--no-pager", "--lines=15"]}  ERR={   "stdout": "",   "stderr": "Unit auditd.service could not be found.\n",   "returncode": 4 }
+[error] lab-a-shell_shell_exec {"command": "systemctl", "args": ["status", "chronyd.service", "--no-pager", "--lines=15"]}  ERR={   "stdout": "○ chronyd.service - NTP client/server\n     Loaded: loaded (/usr/lib/systemd/system/chronyd.service; enabled; preset: enabled)\n     Ac
+[error] lab-a-shell_shell_exec {"command": "dnf", "args": ["check"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'dnf' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Command
+[error] lab-a-shell_shell_exec {"command": "systemctl", "args": ["status", "sssd.service", "--no-pager", "--lines=15"]}  ERR={   "stdout": "○ sssd.service - System Security Services Daemon\n     Loaded: loaded (/usr/lib/systemd/system/sssd.service; enabled; preset: enabled)\
+[error] lab-a-shell_shell_exec {"command": "systemctl", "args": ["status", "firewalld.service", "--no-pager", "--lines=10"]}  ERR={   "stdout": "",   "stderr": "Unit firewalld.service could not be found.\n",   "returncode": 4 }
+[completed] lab-a-shell_shell_exec {"command": "systemctl", "args": ["list-timers", "--all", "--no-pager"]}
+[error] lab-a-shell_shell_exec {"command": "grep", "args": ["-c", "ERROR", "/var/log/lab-fault-app.log"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'grep' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Comman
+[error] lab-a-shell_shell_exec {"command": "grep", "args": ["-c", "FATAL", "/var/log/lab-fault-app.log"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'grep' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Comman
+[completed] lab-a-shell_shell_exec {"command": "ps", "args": ["-eo", "pid,comm,rss,stat", "--sort=-rss"]}
+[completed] lab-a-shell_shell_exec {"command": "systemctl", "args": ["status", "lab-fault-listen.service", "--no-pager", "--lines=12"]}
+[completed] lab-a-shell_shell_exec {"command": "systemctl", "args": ["is-active", "sshd", "NetworkManager", "systemd-journald", "dbus-broker"]}
+[error] lab-a-shell_shell_exec {"command": "systemctl", "args": ["is-system-running"]}  ERR={   "stdout": "degraded\n",   "stderr": "",   "returncode": 1 }
+[completed] lab-a-shell_shell_exec {"command": "systemctl", "args": ["list-units", "--type=service", "--state=failed", "--no-pager", "--no-legend"]}

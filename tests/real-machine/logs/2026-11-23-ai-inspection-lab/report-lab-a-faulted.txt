@@ -1,0 +1,69 @@
+# 只读巡检报告
+
+主机：AlmaLinux Kitten 10，内核 6.12.0-273，systemd 状态 `degraded`（`systemctl is-system-running` 返回 `degraded`）。巡检时间约 2026-11-23 03:36Z。
+
+## 严重
+
+**1. 未授权外部监听端口 18080（HTTP 目录服务）**
+- `proc_listen`：`0.0.0.0:18080` LISTEN，inode 26996；同批 3 个 socket 的 `pids` 均为空（`unowned_sockets: 3`，受 /proc 权限限制）。
+- 归属确认链：`proc_cgroup(3083)` → `unit: lab-fault-listen.service`；`proc_list` 显示 `pid 3083 /usr/bin/python3 -m http.server 18080 --bind 0.0.0.0`。
+- `systemctl status`：`lab-fault-listen.service - lab fault: rogue listener 18080`，`active (running)`、`enabled`、`MainPID 3083`。
+- 影响：该服务绑定所有网卡，`http.server` 会暴露其工作目录的目录列表/文件下载，等同于对网络开放匿名文件服务。
+
+**2. systemd 失败单元：`lab-fault-fail.service`**
+- `lab-a-service_systemd_failed`：`unit=lab-fault-fail.service, active_state=failed, sub_state=failed, load_state=loaded`。
+- `systemctl status`：`Failed to start ... lab fault: always fails`，`Main PID 2895 (code=exited, status=1/FAILURE)`，`Result: exit-code`；`UnitFileState=enabled`。
+- 该失败是系统 `degraded` 的直接原因（`list-units --state=failed` 仅此一条）。
+
+**3. 应用日志持续报错并以 FATAL 退出**
+- 路径：`/var/log/lab-fault-app.log`，22,383 字节，mtime `2026-11-23T03:35:33Z`。
+- 内容（逐行读取）几乎全部为：
+  - `ERROR app-worker[N] failed to commit transaction: connection reset by peer`
+  - `FATAL app-worker[N] crater: exiting`
+- 时间覆盖 03:21–03:29Z 且按 worker 编号循环，显示事务持续失败并伴随进程退出，不是单次偶发错误。
+
+## 警告
+
+**4. NTP 时间同步已停止**
+- `chronyd.service`：`enabled`，原运行 33m39s，于 `2026-11-23 03:35:34` 被正常 `Stopping`，当前 `inactive (dead)`；日志无报错，属被主动停止。
+- 替代服务不存在：`systemd-timesyncd`、`ntpd`、`sntp` 均 `LoadState=not-found`。当前无任何时间同步守护进程运行，存在时钟漂移风险。
+
+**5. /tmp 被单个超大文件占用 1.17 GiB**
+- `scan_large /tmp`：`/tmp/lab-fault-big.bin` = `1,258,291,200` 字节，mtime 03:35:32Z。
+- `df -h`：`tmpfs 2.0G，已用 1.2G，可用 755M，62%`，全部集中在 /tmp；tmpfs 重启即失，但当前剩余空间仅约 38%。
+
+**6. 安全基线服务缺失**
+- `auditd.service`：`systemctl status` 返回 `Unit auditd.service could not be found`；服务列表中 `LoadState=not-found`，已安装包只有 `audit-libs`，无 `audit` 包 → 审计守护进程未部署。
+- `firewalld.service`：同样 `could not be found`；已安装包列表中无 `firewalld`。主机当前无主机级防火墙服务可管理（nftables 包在，但无对应服务）。
+- 这两项属于“拿不到/不存在即不算正常”的项，故按警告列示。
+
+**7. 大量残留 SSH 会话 / 插件进程（疑似未回收）**
+- `ps -eo pid,comm,rss` 显示数十个 `sshd-session`（各约 8–10 MB RSS）与约 30 个 `daedalus-*` 插件进程（各约 15–18 MB RSS），PID 范围约 1820–3288，父进程链均为 `sshd → sshd-session → daedalus-*`。
+- 粗算常驻内存合计约 0.8 GB。它们与本次巡检的每次工具调用时间吻合，可能是该环境“每次调用起一个 SSH 插件进程”的正常架构；但未见回收，需确认是否存在会话/进程泄漏。
+
+## 正常
+
+- **文件系统容量**：`/` 显示 `composefs 6.8M/6.8M 100%`，但 fstype 为 `overlay`、device 为 `composefs`，是只读镜像基座，**不是可写数据盘写满**；真实数据盘 `/var`（`/dev/vda4`, xfs）为 `8.5G 总 / 2.2G 用 / 6.3G 可用 / 26%`；`/boot` 18%，`/boot/efi` 2%。
+- **inode**：`/dev/vda4` 使用 45,035 / 4,460,544（2%），无 inode 耗尽风险。
+- **内存**：`MemTotal 4,003,676 kB`，`MemAvailable 1,917,356 kB`（约 48% 可用）；`SwapTotal 0`，未配置 swap（该镜像默认，未按故障计）。
+- **关键服务**：`sshd`、`NetworkManager`、`systemd-journald`、`dbus-broker` 均 `active/running`；`polkit`、`udevd`、`logind`、`daedalus-host-controller` 正常。
+- **监听端口**：除 18080 外仅 `0.0.0.0:22` 与 `[::]:22`（sshd）；UDP 监听为 0 条，未发现其它可疑端口。
+- **重复文件**：对 `/home`、`/tmp`、`/var/log` 做 sha256（≥4 KiB）比对，返回 `[]`，无重复文件。
+- **大文件分布**：`/var/log` 最大为 2 个 8 MiB journal；`/home` 最大 71,115 字节；仅 /tmp 存在上述 1.17 GiB 文件。
+- **软件包**：已安装列表仅 1 个内核 `kernel-6.12.0-273.el10`，未发现同名包多版本并存。
+- **sssd**：`inactive (dead)` 但 `Condition: start condition unmet`，属未配置域时的正常跳过，非异常停止。
+- **定时器**：`list-timers --all` 共 9 个，下一次触发时间均正常（如 `daedalus-audit-rotate.timer` 4 分钟后、`logrotate.timer` 次日）。
+
+## 未覆盖（拿不到数据，不能视为正常）
+
+- **systemd journal 内容**：`journalctl` 不在命令白名单；直接读 `/var/log/journal/.../system.journal` 触发 MCP 16 MiB 边界错误。journal 内的错误/告警未审计。
+- **/var/log/boot.log**：`fs_read_file` 返回 `permission denied`，启动日志未读。
+- **/var/log/samba、/var/log/sssd、/var/log/chrony、/var/log/private**：均 `permission denied`，这些子日志未覆盖。
+- **/var/log/daedalus/audit.jsonl**：`permission denied`；仅能通过 trace 工具读 `/tmp/daedalus-audit-lab-a.jsonl`（工具审计链，120 条，非系统审计日志）。
+- **软件包完整性/可更新性**：`rpm -Va`、`dnf check` 均被命令白名单拒绝；无法验证文件校验和、依赖破损与待更新补丁，仅完成“已安装清单”层面的检查。
+- **监听套接字属主 PID**：`/proc/<pid>/fd` 读取被拒（`permission denied`），22/18080 的 socket 无法直接反查 PID；18080 通过 cgroup 间接确认，22 通过进程列表确认。
+- **SELinux / 防火墙运行态**：无对应只读工具且相关命令不在白名单，未取证。
+
+## 总结
+
+**严重 3 条 / 警告 4 条 / 正常 8 条（另有 6 类未覆盖）**

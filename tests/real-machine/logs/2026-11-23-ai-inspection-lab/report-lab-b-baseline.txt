@@ -1,0 +1,55 @@
+I'll start by checking for applicable skills before running the inspection.
+The skill tool is permission-blocked; I'll proceed with the read-only inspection using the available MCP tools.
+
+
+
+# 巡检报告 — lab-b（AlmaLinux Kitten 10 / kernel 6.12.0-273.el10）
+
+巡检方式：仅使用本机 MCP 只读工具。系统运行 40 分钟，load 0.18/0.21/0.14，156 个进程，PID 1 为 systemd（init.scope），根为 composefs 只读镜像，`/var`、`/etc` 位于 `/dev/vda4`（xfs），`/boot` 位于 `/dev/vda3`。
+
+## 严重（0 条）
+
+未发现严重异常：无失败单元、无服务崩溃循环、无磁盘写满、无可疑监听端口。
+
+## 警告（2 条）
+
+### W1. 主机防火墙缺失：无任何防火墙服务在运行
+- `service_query firewalld` → `error: unit firewalld.service not found`
+- `pkg_dnf_list_installed firewalld*` → `[]`（未安装）
+- `systemctl list-unit-files fire*/nftables*/iptables*` → `iptables.service disabled disabled`、`nftables.service disabled disabled`
+- 同时 SSH 对所有网卡开放：`proc_listen tcp` → `0.0.0.0:22` 与 `[::]:22` LISTEN；`sshd.service` active/running，`MainPID=1044`
+- 影响：SSH 暴露面仅靠 sshd 自身配置（公钥登录，见 N6），主机层无包过滤。
+- 限定：内核 nftables/iptables 规则无法取证（命令不在白名单），只能确认“服务层无防火墙”。
+
+### W2. 审计与系统日志链不完整，且审计记录写在 tmpfs
+- `auditd.service` → `not found`；`pkg_dnf_list_installed audit*` → 仅 `audit-libs-4.2.1-3.el10`（无 `audit` 用户态包）
+- `systemctl status systemd-journald` 日志原文：`Collecting audit messages is disabled.`
+- `rsyslog*` 未安装；`syslog.service` LoadState=`not-found`；`/var/log` 下无 `messages`/`secure`
+- 审计链实际落盘位置：`trace_summary` → `log_path=/tmp/daedalus-audit-lab-b.jsonl`（tmpfs，1.5G 的 1%），而 `/var/log/daedalus/audit.jsonl` 仅 359 B（03:05 后未增长）→ 审计记录重启即丢失
+- 影响：特权操作无可持久化的内核审计记录，审计与取证能力受限。
+
+## 正常（9 条，含需说明项）
+
+| # | 检查项 | 证据 |
+|---|---|---|
+| N1 | 失败单元 / 系统状态 | `systemd_failed` → `[]`；`systemctl is-system-running` → `running`；`list-jobs` → `No jobs running`；sshd/chronyd/sssd `NRestarts=0` |
+| N2 | 关键服务 | sshd active/enabled PID 1044；chronyd active/enabled PID 925，日志 `Selected source 139.199.215.251`；NetworkManager active/enabled PID 921；dbus-broker、journald(773)、polkit、udisks2、daedalus-host-controller(936, enabled) 均 active/running |
+| N3 | 条件跳过的服务（非故障） | `sssd` inactive 但 `ConditionPathExists=/etc/sssd/sssd.conf` 未满足；`kdump` inactive 但 `ExecCondition` 因 cmdline 无 `crashkernel` 返回 1 被跳过；`bluetooth` enabled/dead（无蓝牙硬件，无报错） |
+| N4 | 磁盘/文件系统 | `/dev/vda4`（/var）= 8.5G，用 2.2G，可用 6.3G，**26%**（inode 2%）；/etc 同设备 26%；`/boot` 960M **18%**；`/boot/efi` 501M **2%**；/tmp 1%；/run 1%；journald 自报 System Journal `max 864.8M, free 856.8M` |
+| N5 | 根 “100%” 说明 | `df /` → composefs 6.8M/6.8M，0 可用，100%。这是只读镜像层，非真实空间耗尽：可写数据在独立挂载的 `/var`、`/etc`（26%），且 journald 仍在正常写入（03:42 有 flush 记录） |
+| N6 | 端口/登录 | 仅 `tcp 22`（0.0.0.0 + ::，sshd）与 `udp 323`（仅 127.0.0.1/[::1]，chrony 端口）；无其他监听。`/var/log/btmp` = 0 B、`lastlog` = 0 B → 无失败登录；sshd 日志 10 条 `Accepted publickey ... from 10.0.2.2`，对应 9 个 daedalus 插件会话 + 控制会话，属预期架构 |
+| N7 | 进程 | 无 Z/D 状态进程；CPU 最高为巡检自身进程（10%，瞬时）；daedalus-host 22.6M/76ms；无孤儿或异常高占用 |
+| N8 | 超大/重复文件 | 最大文件为 2×8 MiB 的 journal；boot.log 26,900 B；/home 最大 22,074 B；/tmp 6,124 B → 无超大文件。`dupe_scan sha256 /var/log/journal` → `[]`（size_only 命中的两个 8 MiB journal 并非副本） |
+| N9 | 软件包 | 运行内核 `6.12.0-273.el10.x86_64` 与已安装唯一内核一致（无旧内核堆积）；systemd 257-34.el10.alma.1 组件版本一致；openssh-server 9.9p1-32、chrony 4.8；定时任务正常：logrotate.timer 次日 00:40、fstrim 11-30、tmpfiles-clean 已跑（03:20）、audit-rotate 03:36 已跑且下次 03:46:58、bootc 更新 04:54。观察项：`dnf-makecache.timer` inactive（无自动元数据刷新），由 bootc 镜像更新承担 |
+
+## 未覆盖 + 原因
+
+1. **/var/log 文本错误内容**：`/var/log/boot.log` 权限 `-rw------- root root`、`/var/log/daedalus/audit.jsonl` `-rw-r----- root root` → `permission denied`；`journalctl`、`dmesg` 不在 shell 命令白名单；无 rsyslog。仅能间接判断（无失败单元、系统 running）。
+2. **端口→PID 精确归属**：`proc_listen` 报 `unowned_sockets=2`（tcp）与 `2`（udp）；`proc_fds` 读 `/proc/1044/fd`、`/proc/925/fd` 均 `permission denied`。22/323 的归属系依据运行服务与端口惯例推断。
+3. **防火墙内核规则**：`nft`/`iptables` 不可执行，故 W1 仅覆盖服务层。
+4. **SELinux 状态**：`/sys/fs/selinux/enforce` 被 fs 工具目录白名单拒绝，`getenforce`/`sestatus` 不在白名单 → 强制模式未验证。
+5. **软件包完整性与可用更新**：`rpm -Va`、`dnf check-update` 不在白名单，`dnf-makecache.timer` inactive → 文件完整性、补丁缺口未验证。
+6. **扫描范围**：大文件/重复文件工具仅允许 `/home`、`/var/log`、`/tmp`，`/var/lib`、`/usr`、`/opt` 未扫描；无 SMART/坏块检测工具。
+7. **时间同步偏差**：`chronyc`、`timedatectl` 不可用，仅证实 chronyd 运行并已选源，未取得 offset。
+
+**总结：严重 0 条，警告 2 条，正常 9 条（另有 7 项明确未覆盖）。**
