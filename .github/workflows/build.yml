@@ -120,7 +120,7 @@ jobs:
         # go.mod pins `go 1.25.0`;runner image 可能更老,显式 pin。
         # setup-go 缓存 go.sum;vendor/ 不入库,首次构建走 module proxy。
         # 主仓在 daedalus-core 子目录,缓存依赖文件路径须带前缀。
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.x'
           # 本 job 由 pull_request 触发 → 显式关掉 module cache。cache 按分支
@@ -446,7 +446,7 @@ jobs:
 
       - name: Set Up Go Toolchain
         # 主仓在 daedalus-core 子目录,缓存依赖文件路径须带前缀。
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.26.x'
           # 同 test job:本文件的 workflow 由 pull_request 触发,故文件内所有
