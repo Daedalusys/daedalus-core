@@ -66,7 +66,7 @@ opt/daedalus/
 
 - **单一事实源 = Go**：策略与审计的行为规格以 `../daedalus-sdk`（policy/shellpolicy/audit 等包）
   与本仓 `cmd/`+`internal/` 为准；
-  `policy.ts` 中的 15 命令 / 9 前缀 / 5 blocked 常量是有意保留的冻结副本，
+  `policy.ts` 中的 16 命令 / 9 前缀 / 5 blocked 常量是有意保留的冻结副本，
   使 copilot 进程内校验与 `daedalus-shell` 二进制零偏离。
 - **白名单变更走三点链**：`shared/policy.toml`（运行时强制执行）↔ `policy.Default()`
   （缺失兜底）↔ shellpolicy/pathguard 常量（兼容默认），三处同步改，漂移由防漂移测试拒绝；

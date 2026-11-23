@@ -322,9 +322,10 @@ Deno.test("classifyProposal - L2 danger patterns table coverage and reasonKey in
 });
 
 Deno.test("classifyProposal - risk table structure exports", () => {
-  // L0 白名单恰为 15 命令(与 ALLOW_COMMANDS 同源引用)
-  expect(L0_WHITELIST.size).toBe(15);
+  // L0 白名单恰为 16 命令(与 ALLOW_COMMANDS 同源引用)
+  expect(L0_WHITELIST.size).toBe(16);
   expect(L0_WHITELIST.has("df")).toBe(true);
+  expect(L0_WHITELIST.has("journalctl")).toBe(true);
   expect(L0_WHITELIST.has("systemctl")).toBe(true);
   expect(L0_WHITELIST.has("rm")).toBe(false);
   // L1 集含 plan 4.1 清单关键命令

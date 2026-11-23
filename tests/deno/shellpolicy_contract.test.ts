@@ -50,8 +50,8 @@ function extractTomlArray(src: string, key: string): string[] {
 
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
-Deno.test("跨语言契约 - policy.ts 冻结 ALLOW_COMMANDS 恰为 15 项(与 daedalus-sdk/shellpolicy 默认一致)", () => {
-  expect(DEFAULT_ALLOW_COMMANDS.size).toBe(15);
+Deno.test("跨语言契约 - policy.ts 冻结 ALLOW_COMMANDS 恰为 16 项(与 daedalus-sdk/shellpolicy 默认一致)", () => {
+  expect(DEFAULT_ALLOW_COMMANDS.size).toBe(16);
 });
 
 Deno.test("跨语言契约 - policy.ts DEFAULT_ALLOW_COMMANDS == Go DefaultAllowCommands(shellpolicy.go)", async () => {
@@ -93,7 +93,7 @@ Deno.test("跨语言契约 - ALLOW_COMMANDS 环境变量为整体替换(REPLACE)
   // 中注入环境变量后重新求值,才是对真实代码路径的断言(而非测试内复刻)。
   // 语义契约(Go shellpolicy.ResolveAllowCommands 文档同源):
   //   非空 env → 逗号分隔、逐项 trim、丢弃空项,整体替换默认集(不取并集);
-  //   空/缺省 env → 回退默认 15 项。
+  //   空/缺省 env → 回退默认 16 项。
   const policyUrl = new URL("plugin/copilot/policy.ts", repoRoot);
   const probe = `
     const { ALLOW_COMMANDS, DEFAULT_ALLOW_COMMANDS } = await import("${policyUrl.href}");
@@ -115,7 +115,7 @@ Deno.test("跨语言契约 - ALLOW_COMMANDS 环境变量为整体替换(REPLACE)
   expect(replaced.code).toBe(0);
   const replacedJson = JSON.parse(new TextDecoder().decode(replaced.stdout));
   expect(replacedJson.allowed).toEqual(["cat", "echo", "rm"]); // REPLACE:df 等默认项不复存在
-  expect(replacedJson.defaultSize).toBe(15);
+  expect(replacedJson.defaultSize).toBe(16);
 
   // 用例 2:env 为空字符串 → 与 Go(envValue == "" → 默认副本)一致的兜底语义。
   const fallback = await new Deno.Command(Deno.execPath(), {

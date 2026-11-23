@@ -8,6 +8,9 @@ export interface ExecResult {
   stderr: string;
   returncode: number;
   error?: string | null;
+  // 结局词表(ok/ran_and_failed/denied/timeout),由 daedalus-shell 产出:
+  // ran_and_failed 表示命令跑完但退出码非零,error 为 null,调用方看 returncode。
+  outcome?: string;
 }
 
 // 跟踪活动子进程以便在信号终止时进行安全清理
@@ -401,6 +404,7 @@ export async function execAllowlisted(
         stderr?: string;
         returncode?: number;
         error?: string | null;
+        outcome?: string;
       };
 
       return {
@@ -409,6 +413,9 @@ export async function execAllowlisted(
         returncode:
           typeof innerResult.returncode === "number" ? innerResult.returncode : 0,
         error: innerResult.error ?? null,
+        outcome: typeof innerResult.outcome === "string"
+          ? innerResult.outcome
+          : undefined,
       };
     } catch (rpcErr: unknown) {
       if (isTimedOut) {

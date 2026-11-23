@@ -100,7 +100,7 @@ CodeGraph indexes `tests/` and tracked root files (`base_image/` is gitignored).
 | `fleet` | Go pkg | `internal/fleet/` | 控制面下发:`Scheduler.Run` 批→机→intent 串行,风险×N1/N2/N3 分桶;`Probe` 是下发前活性预检(时限取 `[fleet].heartbeat_timeout_seconds`),心跳口径**只**作用于 `Heartbeat`,工作 RPC 兜底恒为 `defaultCallTimeout`;节点注册表身份(`nodes.jsonl`)/观测(`seen.log`)分家,`MarkSeen` 只追加不 fsync |
 | `plugin` | Go pkg | `../daedalus-sdk/plugin/` | manifest schema 校验 + Pack/Extract/Verify/VerifyDir |
 | `policy` | Go pkg | `../daedalus-sdk/policy/` | policy.toml 严格加载 (ErrNotFound 哨兵 / LoadOrDefault / ALLOW_COMMANDS REPLACE) |
-| `shellpolicy` | Go pkg | `../daedalus-sdk/shellpolicy/` | 15 命令 / 4 bin 目录 / 路径规则权威实现 (CLEAN_ENV, 30s, rc 126/124) |
+| `shellpolicy` | Go pkg | `../daedalus-sdk/shellpolicy/` | 16 命令 / 4 bin 目录 / 路径规则权威实现 (CLEAN_ENV, 30s, rc 126/124) |
 | `pathguard` | Go pkg | `../daedalus-sdk/pathguard/` | fs 路径校验 (ALLOWED_DIRS 前缀边界, 空字节, realpath) |
 | `audit` | Go pkg | `../daedalus-sdk/audit/` | 哈希链审计库, Python 金样字节级兼容 (三种序列化模式) |
 | `objectmodel` | Go pkg | `../daedalus-sdk/objectmodel/` | 对象模型 schema 单一事实源;Kind 封闭枚举 7 类 + spec/status 信封 `Object` |
@@ -191,7 +191,7 @@ Daedalus implements OS capability servers adhering to the Model Context Protocol
 
 ### 2. Shell Server (`daedalus.shell` plugin / `cmd/daedalus-shell`)
 - **Purpose**: Controlled execution of safe, read-only and diagnostic system commands.
-- **Argv Whitelisting**: 15-command `allowed_commands`, 4 binary dirs (`/usr/bin /bin /usr/sbin /sbin`), path-like arg rules (`../daedalus-sdk/shellpolicy`, policy.toml `[shell]` section; `ALLOW_COMMANDS` env = whole-set REPLACE).
+- **Argv Whitelisting**: 16-command `allowed_commands`, 4 binary dirs (`/usr/bin /bin /usr/sbin /sbin`), path-like arg rules (`../daedalus-sdk/shellpolicy`, policy.toml `[shell]` section; `ALLOW_COMMANDS` env = whole-set REPLACE).
 - **No Raw Shell Interpretation**: Direct `os/exec` argv execution without `/bin/sh` or `/bin/bash` wrapper.
 - **Execution Limits**: 30s timeout, CLEAN_ENV, returncode 126 (denied) / 124 (timeout).
 - **Tools**: `shell_exec`.
@@ -225,8 +225,8 @@ Daedalus implements OS capability servers adhering to the Model Context Protocol
 - **Systemd**: `daedalus-tx.service` + `.service.d/{landlock,credentials}.conf`,沙箱基线与其他能力服务器一致;`/run/daedalus` 的放行在 landlock drop-in。
 
 ### 5. Daedalus Copilot CLI (`daedalus` / plugin `daedalus.copilot`, runtime=deno)
-- **Purpose**: Command advisor (命令顾问, 非 agent): translates user intent into a proposed shell command with a risk label (L0 safe / L1 cautious / L2 danger, judged by a local static classifier — the LLM never self-labels risk). L0 (safe + within the 15-command allowlist) may run in the `daedalus-shell` sandbox after y/n confirmation; L1/L2 are display-only with a manual-execution hint. Out-of-allowlist commands are never auto-executed.
-- **Risk-Tiered Flow**: Proposals are validated against the schema and re-checked against the 15-command allowlist plus path rules before execution. L0 asks y/n then runs sandboxed; L1/L2 never enter the execution channel. `-i/--interactive` displays the proposal and prompts for `[y]es / [e]dit / [n]o (feedback) / [q]uit`. `-v/--verbose` shows the translated command, `--dry-run` shows without executing, `-y/--yes` is a backward-compat alias, and `-V` prints the version. Every decision still lands in the hash-chained audit log.
+- **Purpose**: Command advisor (命令顾问, 非 agent): translates user intent into a proposed shell command with a risk label (L0 safe / L1 cautious / L2 danger, judged by a local static classifier — the LLM never self-labels risk). L0 (safe + within the 16-command allowlist) may run in the `daedalus-shell` sandbox after y/n confirmation; L1/L2 are display-only with a manual-execution hint. Out-of-allowlist commands are never auto-executed.
+- **Risk-Tiered Flow**: Proposals are validated against the schema and re-checked against the 16-command allowlist plus path rules before execution. L0 asks y/n then runs sandboxed; L1/L2 never enter the execution channel. `-i/--interactive` displays the proposal and prompts for `[y]es / [e]dit / [n]o (feedback) / [q]uit`. `-v/--verbose` shows the translated command, `--dry-run` shows without executing, `-y/--yes` is a backward-compat alias, and `-V` prints the version. Every decision still lands in the hash-chained audit log.
 - **Zero Raw Execution**: The Copilot process never executes shell commands directly. It spawns the sandboxed `daedalus-shell` Go MCP server over stdio JSON-RPC.
 - **Plugin Host Launch**: Copilot is installed as plugin `daedalus.copilot` (runtime=deno) under `/opt/daedalus/plugins/`; source lives in `plugin/copilot/`. The `/usr/local/bin/daedalus` wrapper asks `daedalus-host run-plugin daedalus.copilot` to construct (not spawn) the launch command from the manifest, expands `$HOME` placeholders, then execs it:
   ```sh
@@ -330,7 +330,7 @@ Daedalus strictly forbids hardcoding API tokens, private keys, or passwords insi
 - **镜像安装态策略**: `files/system/opt/daedalus/plugins/daedalus.*/bin/` 与 `files/system/usr/local/bin/daedalus-{audit,host,shell}` 是 `just plugin-pack` 的 Go 编译产物副本,均**不入库**(同 `cmd/../bin/` 性质);开发者 clone 后必须 `just plugin-pack` 才能 build,与 `just sync` 一起完成 vendor 树重建。
 - **Justfile workflow**: Use `just sync`, `just build`, `just test`, `just plugin-pack`, `just verify-image`, `just iso`, `just qemu`, `just verify-dev-layout` for all lifecycle actions.
 - **Build step order**: Numbered scripts in `files/scripts/` run in `sort --sort=human-numeric` order (`10-base` → … → `60-ai-middleware` → `65-ai-safety` → `70-daedalus-mcp-servers` → `75-daedalus-copilot` → `76-daedalus-plugin-gen` → `91-image-info` → `cleanup.sh`)。
-- **Go 唯一实现(取代旧 Python+Deno parity 条款)**: fs/shell/pkg/sysinfo/service/blueprint 与审计仅有 Go 实现(能力服务器在 `../daedalus-plugins/<cap>/`,审计库在 `../daedalus-sdk/audit/`),不得恢复 Python/Deno 服务器。Copilot 的 `policy.ts` 内联 15 命令/9 前缀/5 blocked **冻结副本**,与 `../daedalus-sdk/shellpolicy` 存在**双向同步义务**(改一侧必改另一侧);该契约由 `tests/deno/shellpolicy_contract.test.ts`(ALLOW_COMMANDS REPLACE 语义 Go↔Deno 一致)与 Go 侧钉子测试共同钉住。policy.toml ↔ `policy.Default()` ↔ shellpolicy/pathguard 常量的三点防漂移链见 `../daedalus-sdk/policy` 测试。
+- **Go 唯一实现(取代旧 Python+Deno parity 条款)**: fs/shell/pkg/sysinfo/service/blueprint 与审计仅有 Go 实现(能力服务器在 `../daedalus-plugins/<cap>/`,审计库在 `../daedalus-sdk/audit/`),不得恢复 Python/Deno 服务器。Copilot 的 `policy.ts` 内联 16 命令/9 前缀/5 blocked **冻结副本**,与 `../daedalus-sdk/shellpolicy` 存在**双向同步义务**(改一侧必改另一侧);该契约由 `tests/deno/shellpolicy_contract.test.ts`(ALLOW_COMMANDS REPLACE 语义 Go↔Deno 一致)与 Go 侧钉子测试共同钉住。policy.toml ↔ `policy.Default()` ↔ shellpolicy/pathguard 常量的三点防漂移链见 `../daedalus-sdk/policy` 测试。
 - **测试布局**: Deno 测试住仓库根 `tests/deno/`(镜像外),相对导入指向 `plugin/copilot/` 源码;Go 测试随包住本仓 `cmd/`、`internal/` 及兄弟仓各包。镜像 rootfs 内零测试文件。
 - **Single Containerfile**: `Containerfile` at repository root is the sole build entry point. All `*.daedalus` aliases have been removed.
 - **i18n 多语言(强制)**: 所有插件的 UI 字符串必须经 `i18n.ts` 的 `t(key, ...args)` 走,不在源码里硬编码。locale 文件在 `<plugin>/i18n/<locale>.json`(POSIX 下划线命名,`en_US` / `zh_CN` / `ja_JP` / `ko_KR` 等); manifest 声明 `"i18n": ["en_US", "zh_CN"]` 数组形式,en_US 必定位兜底。声明 ↔ 实物用 `scripts/plugin-i18n-sync.sh` 双向校验,CI 走严模式(exit 1 拒漂移),开发者加新 locale 走 `--autofix` 自动改写 manifest。locale 探测: `LC_ALL` > `LANG` > `en_US`,支持精确匹配 → 语言级回退(精确 `zh_CN` → 语言级 `zh` → 兜底 `en_US`)。命名: `<key>` 风格 + `{0}` `{1}` printf 占位符。Go 侧 MCP server 的字符串翻译在 P1 单独做(共享同一份 JSON 文件,经 `embed.FS` 嵌入二进制)。

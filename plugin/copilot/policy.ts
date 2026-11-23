@@ -4,7 +4,7 @@
  * **修改 Go 侧 daedalus-sdk/shellpolicy 时必须同步修改本文件。**
  */
 
-// 显式允许的诊断/只读命令（与 daedalus-sdk/shellpolicy 默认白名单一致的冻结副本，15 项）
+// 显式允许的诊断/只读命令（与 daedalus-sdk/shellpolicy 默认白名单一致的冻结副本，16 项）
 export const DEFAULT_ALLOW_COMMANDS = new Set([
   "df",
   "ls",
@@ -21,6 +21,7 @@ export const DEFAULT_ALLOW_COMMANDS = new Set([
   "date",
   "ping",
   "systemctl",
+  "journalctl",
 ]);
 
 // 允许通过环境变量覆盖或扩展允许的命令
