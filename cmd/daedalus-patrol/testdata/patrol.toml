@@ -1,0 +1,31 @@
+# CLI 夹具:全局两项(其中一项默认停用)+ lab-a 一项本机专属项。
+
+[patrol]
+interval = "30m"
+node_timeout = "10m"
+
+[patrol.ai_client]
+command = ["opencode", "--standalone", "run", "--auto", "--agent", "inspector", "--format", "json"]
+
+[patrol.smtp]
+host = ""
+port = 587
+from = ""
+to = []
+starttls = true
+
+[[checklist.item]]
+id = "disk-health"
+prompt = "磁盘空间、inode、挂载点与文件系统类型有哪些健康问题迹象?"
+severity = "warning"
+
+[[checklist.item]]
+id = "disabled-one"
+prompt = "这条默认关掉,不该进本轮工作项。"
+severity = "info"
+enabled = false
+
+[[node."lab-a".checklist.item]]
+id = "kvm-storage"
+prompt = "KVM 存储后端(/dev/vdb、md 阵列)有哪些降级迹象?"
+severity = "critical"

@@ -1,0 +1,11 @@
+# 全局段里两条 id 相同 —— 合并后仍重复,解析必须拒绝。
+
+[[checklist.item]]
+id = "disk-health"
+prompt = "磁盘健康?"
+severity = "warning"
+
+[[checklist.item]]
+id = "disk-health"
+prompt = "第二个同名项?"
+severity = "critical"

@@ -1,0 +1,7 @@
+# tools 里有空串 —— 提示词里的工具名不能是空壳,解析必须拒绝。
+
+[[checklist.item]]
+id = "disk-health"
+prompt = "磁盘健康?"
+severity = "warning"
+tools = ["shell_exec", ""]

@@ -1,0 +1,22 @@
+# 合并语义夹具:全局基线两项,lab-a 段两项(一项与全局同 id 覆盖,一项本机专属)。
+
+[[checklist.item]]
+id = "disk-health"
+prompt = "这台机器的磁盘空间、inode、挂载点与文件系统类型有哪些健康问题迹象?"
+severity = "warning"
+tools = ["shell_exec", "fs_read"]
+
+[[checklist.item]]
+id = "journal-patterns"
+prompt = "最近的系统日志里有哪些反复出现的错误模式?"
+severity = "warning"
+
+[[node."lab-a".checklist.item]]
+id = "disk-health"
+prompt = "lab-a 的磁盘(含 KVM 阵列)有哪些健康问题迹象?"
+severity = "critical"
+
+[[node."lab-a".checklist.item]]
+id = "kvm-storage"
+prompt = "KVM 存储后端(/dev/vdb、md 阵列)有哪些降级迹象?"
+severity = "critical"

@@ -1,0 +1,7 @@
+# enabled = false 是合法配置:项留在清单里,开关状态由调用方消费。
+
+[[checklist.item]]
+id = "reboot-pending"
+prompt = "是否有需要重启才能生效的更新?"
+severity = "info"
+enabled = false

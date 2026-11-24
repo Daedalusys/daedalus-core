@@ -1,0 +1,10 @@
+# 节点专属项没有全局同名项可继承,severity 缺失即非法。
+
+[[checklist.item]]
+id = "disk-health"
+prompt = "磁盘健康?"
+severity = "warning"
+
+[[node."lab-a".checklist.item]]
+id = "kvm-storage"
+prompt = "KVM 存储降级迹象?"

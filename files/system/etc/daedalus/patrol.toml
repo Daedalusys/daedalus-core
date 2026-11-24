@@ -1,0 +1,20 @@
+# 巡检配置 —— 清单与运行参数的单一事实源。
+#
+# 清单为空时巡检无事可做:没有清单项就没有巡检轮次,也不会发信。全局项对所有节点生效;
+# 节点专属段同名项逐字段覆盖、异名项追加,多项必须写数组表 [[node."<节点 id>".checklist.item]]。
+#
+# SMTP 凭据走 systemd LoadCredential,不进本文件;默认不开巡检,跑不跑由运维装 timer 决定。
+
+[patrol]
+interval = "30m"
+node_timeout = "10m"
+
+[patrol.ai_client]
+command = ["opencode", "--standalone", "run", "--auto", "--agent", "inspector", "--format", "json"]
+
+[patrol.smtp]
+host = ""
+port = 0
+from = ""
+to = []
+starttls = true
