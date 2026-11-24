@@ -1,0 +1,86 @@
+I'll start by loading the inspection skill if one exists, then run the read-only checks.
+
+
+Skill loading is denied by permissions, so I'll proceed directly with the read-only inspection using the MCP tooling.
+
+
+Now let me dig into the failed units, services, listeners, and filesystem/log checks.
+巡检完成。以下按严重度汇总，所有结论均附工具取证。
+
+---
+
+## 🔴 严重
+
+### 1. 两个 HTTP 服务以 root 身份监听所有网卡（0.0.0.0）
+- `proc_listen`（tcp）：
+  - `0.0.0.0:18080` LISTEN，归属 `lab-fault-listen.service`（PID 7470）
+  - `0.0.0.0:18081` LISTEN，归属 `lab-fault-rootlisten.service`（PID 7802）
+- `proc_cgroup`：7470 → `/system.slice/lab-fault-listen.service`；7802 → `/system.slice/lab-fault-rootlisten.service`
+- `ps -o user,pid,cmd`：两者 **USER 均为 root**，命令 `/usr/bin/python3 -m http.server 18080/18081 --bind 0.0.0.0`
+- 影响：root 权限的目录列表型 HTTP 服务对整个网络暴露，属高风险暴露面。建议确认是否为实验注入项并关闭。
+
+> 说明：`/` 挂载显示 100%（`df`：composefs overlay 6.8M/6.8M），这是 bootc 只读镜像根，属正常架构，不算异常。
+
+---
+
+## 🟡 警告
+
+### 2. 4 个 systemd 单元处于 failed 状态（`systemd_failed`）
+| 单元 | 关键字段 |
+|---|---|
+| `bootc-fetch-apply-updates.service` | LoadState=loaded, ActiveState=failed, UnitFileState=static |
+| `rpm-ostree-countme.service` | LoadState=loaded, ActiveState=failed, UnitFileState=static |
+| `lab-fault-crash.service` | ActiveState=failed, UnitFileState=enabled, ActiveEnterTimestamp=Tue 2026-11-24 00:03:30 UTC |
+| `lab-fault-fail.service` | ActiveState=failed, UnitFileState=enabled |
+
+- `lab-fault-crash` 日志：`cannot open /etc/lab-fault-crash.conf (No such file or directory)` → `status=78/CONFIG`，重启 3 次后 `Start request repeated too quickly`。
+- 两个 `static` 单元是镜像更新/telemetry 定时任务；`systemctl list-timers` 显示 `bootc-fetch-apply-updates.timer` 上次 23:54:06 跑过、`rpm-ostree-countme.timer` 上次 13:19:06 跑过，均已失败（journal 无历史条目，疑似已轮转）。
+
+### 3. `/var/log/lab-fault-app.log` 含大量 ERROR/FATAL
+- `fs_read_file`：2026-11-23T03:21:00Z ~ 03:29:00Z 连续 200 条
+  `ERROR app-worker[N] failed to commit transaction: connection reset by peer`，及 200 条 `FATAL app-worker[N] crater: exiting`（文件 22,383 字节）。
+
+### 4. `/tmp` 被 1.2GB 文件占用，tmpfs 使用 62%（内存型）
+- `scan_large /tmp`：`/tmp/lab-fault-big.bin` = **1,258,291,200 字节**（mtime 2026-11-23T17:00:01Z）
+- `df -hT`：`tmpfs 2.0G 1.2G 755M 62% /tmp`
+- `free -h`：`shared 1.2Gi`，说明该文件实际占内存；叠加 **Swap=0B**，存在内存压力/OOM 风险。
+
+### 5. 审计守护缺失（auditd）
+- `service_list`：`auditd.service` ActiveState=inactive, **LoadState=not-found**
+- `dnf_list_installed`：仅有 `audit-libs`，无 `audit` 包（`dnf_query audit` 显示它只在仓库中可得、未装）
+- 影响：内核审计记录无法持久化落盘。
+
+### 6. 时间同步未运行
+- `chrony` 已安装（dnf_query 有安装日期/签名），但 `service_list`：`chronyd.service` ActiveState=inactive, SubState=dead, LoadState=loaded。
+- 影响：系统时钟无 NTP 同步。
+
+### 7. `sssd.service` 未运行
+- `service_list`：ActiveState=inactive, SubState=dead, LoadState=loaded；但 `sssd-*` 多个包已安装。
+- 若依赖 AD/LDAP/IdM 认证则为缺口；若本机不接目录服务则属正常。
+
+### 8. 伪造/注入式“磁盘故障”日志
+- `journalctl -p err`：`Nov 24 00:03:29 lab-a lab-fault[9684]: DISK FAILURE predicted on /dev/vdb, array degraded, 3 of 5 members offline` 及 `I/O error, dev vdb, sector 2048`
+- 交叉验证：`journalctl -k -p err` 返回 `-- No entries --`（内核无 I/O 错误）；`df` 仅见 `/dev/vda2/3/4`。该行来自名为 `lab-fault` 的进程，**判定为注入的日志噪声，非真实硬件故障**。
+
+---
+
+## 🟢 正常 / 未发现异常
+
+- 监听端口：除 `0.0.0.0:22`（sshd，预期）外，仅上述两个 python 服务；UDP 无监听（`proc_listen proto=udp` 空）。
+- 重复文件：`scan_dupes sha256` 仅一组 —— `/tmp/mcp.err` 与 `/var/log/lastlog`，均 0 字节，`wasted_bytes=0`，无可回收空间。
+- 文件系统容量：`/etc`(vda4) 29%、`/boot` 18%、`/boot/efi` 2%、`/dev/shm` 1%、`/run` 1% —— 均充裕。
+- 资源：负载 `load average 0.18, 0.18, 0.12`；内存 `3.8Gi 总 / 1.8Gi used / 2.0Gi available`（除共享 1.2Gi 的 tmpfs 文件外健康）。
+- 软件包集合：AlmaLinux Kitten 10，单一内核 `6.12.0-273.el10`，无明显重复/冲突包；`rpm` 数据库可正常查询。
+
+---
+
+## ⚠️ 未覆盖（权限/工具限制，未当作正常）
+
+- **软件包完整性校验（`rpm -Va`）**：被 allowlist 拒绝（`Command 'rpm' is not in ALLOW_COMMANDS`）；`dnf check` 同样被拒。仅能列出/查询包，无法做文件级校验。
+- **块设备清单（`lsblk`）**：被 allowlist 拒绝，无法独立确认 `/dev/vdb` 是否存在（但内核日志与 df 已佐证无对应设备/错误）。
+- **`/var/log/boot.log`**：`fs_read_file` 返回 `permission denied`（-rw------- root）。
+- **`/var/log/daedalus/audit.jsonl`**：`permission denied`（目录 drwxr-x--- root）。
+
+---
+
+**总结：严重 1 条 / 警告 7 条 / 正常项 5 类（重复文件、容量、资源、端口基线、包集合均正常）。**

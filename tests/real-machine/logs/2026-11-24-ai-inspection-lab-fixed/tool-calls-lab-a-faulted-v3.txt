@@ -1,0 +1,42 @@
+[error] skill {"id": "systematic-debugging"}  ERR=Permission denied: skill
+[completed] lab-a-service_systemd_failed {}
+[completed] lab-a-osstate_os_state {}
+[completed] lab-a-osstate_filesystem_info {}
+[completed] lab-a-trace_trace_summary {}
+[completed] lab-a-proc_proc_list {}
+[completed] lab-a-proc_proc_listen {"proto": "tcp"}
+[completed] lab-a-service_service_query {"name": "rpm-ostree-countme.service"}
+[completed] lab-a-service_service_query {"name": "lab-fault-crash.service"}
+[completed] lab-a-service_service_query {"name": "bootc-fetch-apply-updates.service"}
+[completed] lab-a-service_service_list {"filter": "*"}
+[completed] lab-a-service_service_query {"name": "lab-fault-fail.service"}
+[completed] lab-a-proc_proc_listen {"proto": "udp"}
+[completed] lab-a-shell_shell_exec {"command": "df", "args": ["-hT"]}
+[completed] lab-a-shell_shell_exec {"command": "ls", "args": ["-la", "/var/log"]}
+[completed] lab-a-dupe_scan_large {"dir": "/var/log", "top_n": 20}
+[completed] lab-a-dupe_scan_large {"dir": "/tmp", "top_n": 20}
+[completed] lab-a-dupe_scan_large {"dir": "/home", "top_n": 20}
+[completed] lab-a-shell_shell_exec {"command": "journalctl", "args": ["-p", "err", "--no-pager", "-n", "60"]}
+[completed] lab-a-fs_read_file {"path": "/var/log/lab-fault-app.log"}
+[completed] lab-a-shell_shell_exec {"command": "free", "args": ["-h"]}
+[error] lab-a-fs_read_file {"path": "/var/log/daedalus/audit.jsonl"}  ERR=Error: open /var/log/daedalus/audit.jsonl: permission denied
+[completed] lab-a-service_service_query {"name": "lab-fault-listen.service"}
+[completed] lab-a-service_service_query {"name": "lab-fault-rootlisten.service"}
+[completed] lab-a-pkg_dnf_list_installed {"pattern": "*"}
+[completed] lab-a-dupe_scan_dupes {"dirs": ["/tmp", "/home", "/var/log"], "algo": "sha256"}
+[error] lab-a-shell_shell_exec {"command": "rpm", "args": ["-Va"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'rpm' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Command 'rpm' is not in ALLOW_COMMANDS allowlist.",   "outcome": "denied",   "stdout_truncated": false,   "stderr_truncated": false }
+[completed] lab-a-proc_proc_cgroup {"pid": 7470}
+[completed] lab-a-proc_proc_cgroup {"pid": 7802}
+[completed] lab-a-shell_shell_exec {"command": "journalctl", "args": ["-u", "bootc-fetch-apply-updates.service", "-u", "rpm-ostree-countme.service", "--no-pager", "-n", "40"]}
+[completed] lab-a-pkg_dnf_query {"name": "chrony"}
+[completed] lab-a-pkg_dnf_query {"name": "audit"}
+[error] lab-a-shell_shell_exec {"command": "lsblk", "args": ["-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'lsblk' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Command 'lsblk' is not in ALLOW_COMMANDS allowlist.",   "outcome": "denied",   "stdout_truncated": false,   "stderr_truncated": false }
+[completed] lab-a-shell_shell_exec {"command": "journalctl", "args": ["-k", "-p", "err", "--no-pager", "-n", "40"]}
+[error] lab-a-fs_read_file {"path": "/var/log/boot.log"}  ERR=Error: open /var/log/boot.log: permission denied
+[completed] lab-a-shell_shell_exec {"command": "journalctl", "args": ["-u", "lab-fault-fail.service", "-u", "lab-fault-crash.service", "--no-pager", "-n", "40"]}
+[completed] lab-a-shell_shell_exec {"command": "ps", "args": ["-o", "user,pid,cmd", "-p", "7470,7802"]}
+[completed] lab-a-shell_shell_exec {"command": "journalctl", "args": ["-u", "lab-fault-fail.service", "--no-pager", "-n", "30"]}
+[completed] lab-a-proc_proc_list {"filter": "lab-fault"}
+[error] lab-a-shell_shell_exec {"command": "dnf", "args": ["check", "--quiet"]}  ERR={   "stdout": "",   "stderr": "Command validation failed: Command 'dnf' is not in ALLOW_COMMANDS allowlist.",   "returncode": 126,   "error": "Command 'dnf' is not in ALLOW_COMMANDS allowlist.",   "outcome": "denied",   "stdout_truncated": false,   "stderr_truncated": false }
+[completed] lab-a-shell_shell_exec {"command": "uptime", "args": []}
+[completed] lab-a-shell_shell_exec {"command": "systemctl", "args": ["list-timers", "--all", "--no-pager"]}

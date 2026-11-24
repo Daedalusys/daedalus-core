@@ -1,0 +1,101 @@
+== 1. journalctl 已在白名单 ==
+server=daedalus-shell bytes=556 isError=False
+fields={"returncode": 0, "outcome": "ok", "stdout_truncated": false, "stderr_truncated": false}
+{
+  "stdout": "Nov 24 00:03:29 lab-a lab-fault[9684]: DISK FAILURE predicted on /dev/vdb, array degraded, 3 of 5 members offline\nNov 24 00:03:29 lab-a lab-fault[9685]: I/O error, dev vdb, sector 2048 op 0x0\nNov 24 00:03:30 lab-a systemd[1]: Failed to start lab-fault-crash.service - lab fault: crash loop with journal-only explanation.\n",
+  "stderr": "",
+  "returncode": 0,
+  "outcome": "ok",
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}
+
+== 2. 非零退出码不再是 MCP error(is-system-running=1) ==
+server=daedalus-shell bytes=252 isError=False
+fields={"returncode": 1, "outcome": "ran_and_failed", "stdout_truncated": false, "stderr_truncated": false}
+{
+  "stdout": "degraded\n",
+  "stderr": "",
+  "returncode": 1,
+  "outcome": "ran_and_failed",
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}
+
+== 3. 单元不存在(rc=4)不再是 MCP error ==
+server=daedalus-shell bytes=289 isError=False
+fields={"returncode": 4, "outcome": "ran_and_failed", "stdout_truncated": false, "stderr_truncated": false}
+{
+  "stdout": "",
+  "stderr": "Unit no-such-unit.service could not be found.\n",
+  "returncode": 4,
+  "outcome": "ran_and_failed",
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}
+
+== 4. 真正该拒的仍然拒(journalctl -f)==
+server=daedalus-shell bytes=406 isError=True
+fields={"returncode": 126, "outcome": "denied", "stdout_truncated": false, "stderr_truncated": false, "error": "Argument '-f' is not allowed for command 'journalctl'."}
+{
+  "stdout": "",
+  "stderr": "Argument validation failed: Argument '-f' is not allowed for command 'journalctl'.",
+  "returncode": 126,
+  "error": "Argument '-f' is not allowed for command 'journalctl'.",
+  "outcome": "denied",
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}
+
+== 5. 单次 shell 输出 > 1 MiB:截断而非断连 ==
+server=daedalus-shell bytes=1060996 isError=False
+fields={"returncode": 0, "outcome": "ok", "stdout_truncated": true, "stderr_truncated": false}
+{
+  "stdout": "Nov 24 00:03:35 lab-a lab-fault-bulk[9834]: lab-fault-bulk line 000000 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nNov 24 00:03:35 lab-a lab-fault-bulk[9834]: lab-fault-bulk line 000001 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nNov 24 00:03:35 lab-a lab-fault-bulk[9834]: lab-fault-bulk line 000002 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nNov 24 00:03:35 lab-a lab-fault-bulk[9834]: lab-fault-bulk line 000003 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nNov 24 00:03:35 lab-a lab-fault-bulk[9834]: lab-fault-bulk line 000004 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nNov 24 00:03:35 lab-a lab-fault-bulk[9834]: lab-fault-bulk line 000005 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nNov 24 00:03:35 lab-a lab-fault-bulk[9834]: lab-fault-bulk line 000006 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nNov 24 00:03:35 lab-a lab-fault-bulk[9834]: lab-fault-bulk line 000007 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nNov 24 00:03:35 lab-a lab-fault-bulk[9834]: lab-fault-bulk line 000008 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+== 6. 读 8 MiB journal:回包必须 < 16 MiB ==
+server=daedalus-fs bytes=6283930 isError=False
+daedalus: truncated=true total_bytes=8388608 read_bytes=1048576
+（8 MiB 二进制正文从略：前 1 MiB 原始字节经 JSON 转义后 6,283,930 字节；下面是结构，不是内容）
+
+== 7. 端口归属线索(data 进程 fd 不可读时) ==
+server=daedalus-proc bytes=736 isError=False
+{
+  "proc_root": "/proc",
+  "proto": "tcp",
+  "port": 18081,
+  "listeners": [
+    {
+      "proto": "tcp",
+      "local_address": "0.0.0.0",
+      "local_port": 18081,
+      "state": "LISTEN",
+      "inode": 69676,
+      "pids": [],
+      "names": null,
+      "attribution": "cmdline_hint",
+      "hints": [
+        {
+          "pid": 7802,
+          "cmdline": "/usr/bin/python3 -m http.server 18081 --bind 0.0.0.0",
+          "cgroup_unit": "lab-fault-rootlisten.service",
+          "match": "cmdline"
+        }
+      ]
+    }
+  ],
+  "scanned_sockets": 1,
+  "unowned_sockets": 1
+}
+
+== 8. proc_fds 权限不足:部分结果 + denied ==
+server=daedalus-proc bytes=295 isError=False
+{
+  "proc_root": "/proc",
+  "pid": 1,
+  "entries": [],
+  "total": 0,
+  "unreadable": 0,
+  "denied": true,
+  "denied_reason": "proc: 读取 /proc/1/fd 失败: open /proc/1/fd: permission denied"
+}

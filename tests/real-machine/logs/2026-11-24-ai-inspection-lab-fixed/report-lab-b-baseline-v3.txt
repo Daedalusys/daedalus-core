@@ -1,0 +1,125 @@
+I'll start by checking for applicable skills, then run a read-only inspection.
+Skill tool is not available (permission denied), so I'll proceed directly with read-only MCP evidence gathering.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 巡检结论
+
+系统当前处于 `degraded` 状态（`systemctl is-system-running` 返回 `degraded`，returncode 1），但未发现导致服务中断的严重故障。以下按严重度列出，全部为只读取证，未做任何修改。
+
+主机：AlmaLinux Kitten 10（`almalinux`/`10`，`AlmaLinux Kitten 10 (Lion Cub)`），systemd 初始化，dnf 包管理，内核 `6.12.0-273.el10.x86_64`，已运行 21 小时（`/proc/uptime` 75816.97s）。
+
+---
+
+## 严重（0 条）
+
+未发现。
+
+---
+
+## 警告（5 条）
+
+**1. bootc 自动更新持续失败，系统实际无法自更新**
+- 证据：`systemd_failed` → `bootc-fetch-apply-updates.service` `load_state=loaded / active_state=failed / sub_state=failed`；`systemctl list-units --state=failed` 同样只列它和 countme。
+- 日志（`journalctl -u bootc-fetch-apply-updates`）在 Nov 23 04:54:59、13:47:59、22:06:59 三次失败：
+  `error: ... Fetching manifest latest in localhost/daedalus-os: pinging container registry localhost: Get "https://localhost/v2/": dial tcp [::1]:443: connect: connection refused`
+- 影响：更新源 registry `localhost:443` 不存在，`bootc-fetch-apply-updates.timer` 仍 active/waiting（下次约 1d3h 后触发），会继续失败。
+
+**2. 审计日志落在 tmpfs，持久化路径未增长（取证/合规风险）**
+- 证据：插件进程环境 `DAEDALUS_AUDIT_LOG_PATH=/tmp/daedalus-audit-lab-b.jsonl`（读 `/proc/4843/environ`）；该文件 43502 B、mtime 持续增长，位于 tmpfs（`df` 显示 `/tmp` 为 tmpfs，1.5G）。
+- 对照：`/var/log/daedalus/audit.jsonl` 仅 359 B，mtime 停在 `2026-11-23T03:05:13Z`；`daedalus-audit.service` 开机时对其执行 `touch` + `chmod 0640` + `chattr +a`。
+- 影响：重启即丢失全部审计记录，且 `/var/log` 下的“正式”审计文件自开机起未写入。
+
+**3. 无主机防火墙，SSH 监听所有地址**
+- 证据：`systemctl show firewalld.service` → `unit firewalld.service not found`；`list-unit-files` 中无 nftables/iptables 单元；`/proc/net/ip_tables_names`、`/proc/net/ip_tables_names`、`/proc/net/nf_conntrack` 均不存在（未加载 netfilter 表）。
+- 监听：`proc_listen` tcp → `0.0.0.0:22`（inode 8683）与 `[::]:22`（inode 8691）；`/proc/net/tcp` 显示 9 条来自 `10.0.2.2` 的 ESTABLISHED 连接到 `10.0.2.15:22`。
+- 说明：地址为 NAT 私网（10.0.2.15），风险有限，但主机侧无任何包过滤。
+
+**4. auditd 未安装（缺少 OS 级审计守护进程）**
+- 证据：`service_list` → `auditd.service` `LoadState=not-found`；`service_query auditd` → `error: unit auditd.service not found`；`rpm -qa` 结果中只有 `audit-libs-4.2.1-3.el10.x86_64`，没有 `audit` 包（`pkg_dnf_query audit` 回退到仓库查询，说明本地未安装）。
+- 影响：内核 audit 有 `kauditd`，但没有用户态 auditd 规则/落盘；实际审计依赖 daedalus-audit（见第 2 条）。
+
+**5. `daedalus-audit-rotate.service` 曾连续失败约 6.5 小时（已恢复）**
+- 证据：`journalctl -p err` 显示 17:32:03 → 23:53:48 每约 10 分钟一次的 `Failed to start daedalus-audit-rotate.service`；根因日志：
+  `daedalus-audit[4517]: policy: /opt/daedalus/shared/policy.toml 含未知键(fail-closed,拒绝拼写错误/第二事实源): fs.max_read_bytes, shell.max_output_bytes`
+- 现状：最近一次 00:03:57 已成功（`rotated=false` → `Deactivated successfully`，`status=0`），`systemctl list-units --state=failed` 已不含该单元；`daedalus-audit-rotate.timer` active/waiting，下次 00:13:57。
+- 残留疑点：成功但 `rotated=false`，且目标 `/var/log/daedalus/audit.jsonl` 仍为 359 B 未变化，与第 2 条相互印证。
+
+---
+
+## 信息 / 低风险（6 条）
+
+1. `rpm-ostree-countme.service` 失败（Nov 23 23:26:49）：`HTTP status client error (404 Not Found)`，请求 URL 含未展开字面量 `${stream:+s}`（EPEL metalink 缺陷），仅影响遥测，无害但会让系统保持 degraded。
+2. `WALinuxAgent-udev-2.14.0.1-3.el10.noarch` 已安装，但主包 `WALinuxAgent` 未安装（`rpm -qa 'WALinuxAgent*'` 只返回 udev 子包），属孤立子包。
+3. `python3-urllib3-1.26.19-4.el10` 仍在使用 1.26 分支（上游已 EOL），安全支持依赖发行版回补。
+4. `sssd.service` `UnitFileState=enabled` 但未运行 —— 日志明确为良性：`sssd.service ... was skipped because no trigger condition checks were met`。
+5. `bluetooth.service` enabled 但 inactive/dead（无蓝牙硬件场景下正常）。
+6. 无 swap：`free -m` → `Swap: 0 0 0`；物理内存 2901 MB（可用 2210 MB），当前无压力，但峰值余量偏小。
+
+---
+
+## 正常（已验证，12 条）
+
+1. **磁盘/文件系统**：`df -hT` → `/`（composefs，overlay）6.8M/6.8M 100%（只读镜像，属正常设计，非写满）；`/dev/vda4` xfs 8.5G 用 2.4G = **29%**（挂 `/etc`，mountinfo 显示同一设备承载 `/var`）；`/dev/vda3` `/boot` 171M/960M = 18%；`/dev/vda2` `/boot/efi` 9.2M/501M = 2%；`/tmp` 44K/1.5G。
+2. **inode**：`df -i` → `/dev/vda4` 2%（45119/4460544），`/boot` 1%，tmpfs ≤1%，无 inode 耗尽。
+3. **内存**：`MemTotal` 2971484 kB，`MemAvailable` 2470500 kB；`free -m` used 691 / available 2210 MB。
+4. **负载与进程**：`/proc/loadavg` = `0.04 0.10 0.09 4/253`；`proc_list` 共 159 个进程，无 D/Z 状态进程，无可疑高占用（`daedalus-proc` 10% 为测量工具自身）。
+5. **内核版本一致**：`uname -r` = `6.12.0-273.el10.x86_64`，已装 `kernel-6.12.0-273.el10.x86_64`；仅一个内核版本，无旧内核残留。
+6. **内核错误日志为空**：`journalctl -k -p err -b` → `-- No entries --`（此范围内无 OOM、I/O 错误、段错误记录）。
+7. **时间同步**：`chronyd` active/running（PID 925），日志 `Selected source 139.199.215.251 (2.almalinux.pool.ntp.org)`。
+8. **监听端口最小化**：仅 tcp `0.0.0.0:22` / `[::]:22`（sshd，PID 1044）与 udp `127.0.0.1:323` / `[::1]:323`（chronyd，本地回环），无其他对外开放端口。
+9. **超大文件（覆盖范围内）**：`/var/log` 最大为 `system.journal` / `user-1000.journal` 各 8388608 B，`boot.log` 26900 B，`wtmp` 2304 B；`/home` 最大 `state.jsonl` 50050 B；`/tmp` 最大 43502 B —— 无异常大文件。
+10. **重复文件**：`sha256` 扫描 `/var/log/journal` 返回 `[]`；`/home`+`/var/log`+`/tmp`（min_size=1）返回 `[]`；先前 size-only 命中的两个 8 MB journal 仅为分段等长，内容不重复。
+11. **登录安全**：`/var/log/btmp` = 0 字节（无失败登录记录），`lastlog` 0 字节；`uptime` 的“9 users”与 9 个 `sshd-session: daedalus@notty` + 9 个 daedalus 插件进程一一对应，是本巡检链自身连接，非异常。
+12. **关键服务与软件包**：`sshd`、`NetworkManager`、`chronyd`、`systemd-journald`、`dbus-broker`、`polkit`、`udisks2`、`fwupd`、`daedalus-host-controller` 均 active/running；`rpm -qa` 无同名多版本，`python3-gobject-base` 与 `-noarch` 为同源正常拆分；`systemctl list-jobs` 无卡住任务（此前记录 `returncode=0`）。
+
+---
+
+## 未覆盖（明确列出，未当作正常）
+
+1. **`/var/log/sssd`、`/var/log/samba`、`/var/log/chrony`、`/var/log/boot.log`、`/var/log/daedalus/audit.jsonl` 及 `archive/`**：读取被拒（`permission denied`），目录/文件为 root 0700/0640，当前身份为 `daedalus`，无法检查其内容。
+2. **超大/重复文件仅覆盖 `/home`、`/var/log`、`/tmp`**：工具白名单限制，`/var/lib`、`/opt`、`/usr`、`/etc`、`/var` 其余部分未扫描（仅能由 `df` 推断 vda4 用量 29%，无空间压力）。
+3. **`dmesg`（内核环形缓冲）**：命令不在 ALLOW_COMMANDS，被拒；已用 `journalctl -k` 部分替代。
+4. **软件包完整性/依赖校验**：`rpm -Va`、`dnf check` 均被拒（命令不在白名单），包内容是否被篡改、依赖是否破损未验证；仓库可用更新也未检查。
+5. **防火墙规则明细**：无 `nft`/`iptables` 查询能力，仅能从“无 firewalld/nftables 单元 + `/proc/net` 无表”推断无规则，未直接读取规则集。
+6. **SELinux 强制状态**：`getenforce`/`sestatus` 被拒，无法确认 Enforcing/Permissive（仅确认 selinux-policy 包已安装）。
+7. **监听端口的进程归属**：`proc_listen` 全部 `attribution=unresolved`，根因是 `proc_fds` 对 root 进程（如 PID 936）返回 `denied: /proc/936/fd: permission denied`；已用进程列表交叉确认 sshd PID 1044、chronyd PID 925。
+8. **`/opt/daedalus/shared/policy.toml` 内容**：不在允许目录，无法直读；仅依据 journal 中的报错文本判断未知键为 `fs.max_read_bytes`、`shell.max_output_bytes`。
+9. **PSI 压力指标**：`/proc/pressure/*` 不存在，无法做 CPU/内存/IO 压力分析。
+
+---
+
+**总结：严重 0 条 / 警告 5 条 / 正常 12 条**（另有信息级 6 条、未覆盖 9 项；`systemctl is-system-running` 当前为 `degraded`，由 2 个 failed 单元 `bootc-fetch-apply-updates.service`、`rpm-ostree-countme.service` 导致）。
