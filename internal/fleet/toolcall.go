@@ -181,6 +181,10 @@ func (c *ToolCaller) connect(ctx context.Context, nodeID string) (agentv1.AgentS
 		return nil, nil, status.Errorf(codes.Unavailable, "fleet: 连接节点 %s(%s)失败: %v", nodeID, node.Addr, err)
 	}
 	if client == nil {
+		// Dial 回了非 nil closer 时必须关掉:连接已经建起来却没人用,放着就是泄漏。
+		if closer != nil {
+			_ = closer()
+		}
 		return nil, nil, status.Errorf(codes.Internal, "fleet: 连接节点 %s 未产出客户端", nodeID)
 	}
 	if closer == nil {

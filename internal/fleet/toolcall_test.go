@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/Daedalusys/daedalus-core/internal/fleet"
 )
@@ -52,7 +53,7 @@ func TestClassifyToolCall(t *testing.T) {
 func TestToolCaller_ListTools(t *testing.T) {
 	want := []agentv1.ToolDescriptor{
 		{PluginId: "daedalus.shell", ToolName: "shell_exec", Description: "受控命令执行", InputSchemaJson: `{"type":"object"}`, ReadOnly: true},
-		{PluginId: "daedalus.svc", ToolName: "service_query", ReadOnly: true},
+		{PluginId: "daedalus.svc", ToolName: "service_query", Description: "只读服务状态查询", InputSchemaJson: `{"type":"object","properties":{"name":{"type":"string"}}}`, ReadOnly: true},
 	}
 	stub := &toolStub{tools: []*agentv1.ToolDescriptor{&want[0], &want[1]}}
 	reg := newToolTestRegistry(t, "lab-a", "passthrough:///bufnet")
@@ -66,10 +67,12 @@ func TestToolCaller_ListTools(t *testing.T) {
 		t.Fatalf("工具数 = %d, want %d", len(got), len(want))
 	}
 	for i := range want {
-		if got[i].GetPluginId() != want[i].GetPluginId() || got[i].GetToolName() != want[i].GetToolName() || got[i].GetReadOnly() != want[i].GetReadOnly() {
-			t.Errorf("第 %d 个工具 = %s/%s(只读=%v), want %s/%s(只读=%v)", i,
-				got[i].GetPluginId(), got[i].GetToolName(), got[i].GetReadOnly(),
-				want[i].GetPluginId(), want[i].GetToolName(), want[i].GetReadOnly())
+		// 整结构相等(proto.Equal):实现是手写字段拷贝,少拷一个字段就得被这条
+		// 断言逮住 —— 逐字段挑着比就漏掉了 Description / InputSchemaJson。
+		if !proto.Equal(&got[i], &want[i]) {
+			t.Errorf("第 %d 个工具 = %s/%s/%s/%s(只读=%v), want %s/%s/%s/%s(只读=%v)", i,
+				got[i].GetPluginId(), got[i].GetToolName(), got[i].GetDescription(), got[i].GetInputSchemaJson(), got[i].GetReadOnly(),
+				want[i].GetPluginId(), want[i].GetToolName(), want[i].GetDescription(), want[i].GetInputSchemaJson(), want[i].GetReadOnly())
 		}
 	}
 }
@@ -181,11 +184,64 @@ func TestToolCaller_CallTimeoutBounded(t *testing.T) {
 	if err == nil {
 		t.Fatal("节点卡住必须超时返回错误")
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("超时没生效:耗时 %v", elapsed)
 	}
 	if got := fleet.ClassifyToolCall(nil, err); got != fleet.ToolCallNodeUnreachable {
 		t.Errorf("ClassifyToolCall = %v, want %v(err=%v)", got, fleet.ToolCallNodeUnreachable, err)
+	}
+}
+
+// TestToolCaller_NodeWithoutAddressIsUnreachable 钉住「节点行没有地址」这一支:
+// 不建连,错误带 Unavailable 语义(节点侧的问题),不是误用。
+func TestToolCaller_NodeWithoutAddressIsUnreachable(t *testing.T) {
+	reg := newToolTestRegistry(t, "lab-a", "")
+	dialed := false
+	caller := &fleet.ToolCaller{
+		Registry: reg,
+		Dial: func(context.Context, string) (agentv1.AgentServiceClient, func() error, error) {
+			dialed = true
+			return nil, nil, errors.New("不该被调用")
+		},
+	}
+
+	resp, err := caller.CallTool(context.Background(), "lab-a", "daedalus.fs", "read_file", `{}`)
+	if dialed {
+		t.Error("节点没有地址时不得建连")
+	}
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Errorf("错误码 = %v, want %v(err=%v)", code, codes.Unavailable, err)
+	}
+	if got := fleet.ClassifyToolCall(resp, err); got != fleet.ToolCallNodeUnreachable {
+		t.Errorf("ClassifyToolCall = %v, want %v(err=%v)", got, fleet.ToolCallNodeUnreachable, err)
+	}
+}
+
+// TestToolCaller_NilRegistryIsInternal 钉住装配缺失这一支:Registry 没装是误用,
+// 报 Internal(不是节点不可达——那样会把配置错误说成机器掉线)。
+func TestToolCaller_NilRegistryIsInternal(t *testing.T) {
+	caller := &fleet.ToolCaller{}
+
+	_, err := caller.CallTool(context.Background(), "lab-a", "daedalus.fs", "read_file", `{}`)
+	if err == nil {
+		t.Fatal("Registry 没装必须报错")
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Errorf("错误码 = %v, want %v(err=%v)", code, codes.Internal, err)
+	}
+}
+
+// TestToolCaller_NilDialIsInternal 钉住建连缝没装这一支:同样报 Internal。
+func TestToolCaller_NilDialIsInternal(t *testing.T) {
+	reg := newToolTestRegistry(t, "lab-a", "passthrough:///bufnet")
+	caller := &fleet.ToolCaller{Registry: reg}
+
+	_, err := caller.CallTool(context.Background(), "lab-a", "daedalus.fs", "read_file", `{}`)
+	if err == nil {
+		t.Fatal("Dial 没装必须报错")
+	}
+	if code := status.Code(err); code != codes.Internal {
+		t.Errorf("错误码 = %v, want %v(err=%v)", code, codes.Internal, err)
 	}
 }
 

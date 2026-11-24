@@ -13,6 +13,7 @@ require (
 	github.com/Daedalusys/daedalus-sdk v0.6.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	google.golang.org/grpc v1.84.0
+	google.golang.org/protobuf v1.36.12
 )
 
 replace github.com/Daedalusys/daedalus-sdk => ../daedalus-sdk
@@ -29,5 +30,4 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 )
