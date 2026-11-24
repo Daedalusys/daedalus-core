@@ -97,3 +97,13 @@ tests/real-machine/logs/2026-11-24-ai-inspection-lab-fixed/fault-injection-v2.sh
 # 4) 直连探针(量字节数与 outcome)
 tests/real-machine/logs/2026-11-24-ai-inspection-lab-fixed/probe-capabilities.sh 9601
 ```
+
+## 镜像侧(与本目录的证据分开看)
+
+本机 CPU 不支持 x86-64-v3,镜像构建改由 CI 做;同一 commit `95b65df` 的 run
+`45295995487` 全绿:Test(go/deno/i18n/drift)、镜像构建与推送(插件 zip 取
+daedalus-plugins v0.9.0、SDK 取 v0.5.0,镜像内 76 门禁自校验)、bootc switch + rollback、
+ISO 无人值守安装、guest 探针 A3–A12、qcow2 构建、real KVM boot。
+
+这证明「镜像能构建、能启动、插件清单自校验通过」;**不证明**靶场跑的就是新镜像(靶场仍是
+v0.1.1 + 就地替换)。

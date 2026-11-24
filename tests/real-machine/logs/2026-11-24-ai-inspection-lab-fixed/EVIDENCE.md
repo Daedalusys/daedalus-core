@@ -111,10 +111,17 @@ fs.max_read_bytes, shell.max_output_bytes
 
 **不能证明**
 
-- **没有重建镜像**。本机 CPU 不支持 x86-64-v3,`just build` 跑不起来;镜像构建与
-  `76-daedalus-plugin-gen.sh` 门禁由 CI 承担。本目录的证据证明的是「替换掉二进制与策略
-  之后,插件行为正确」,**不证明**「发布镜像里就带着这批二进制」。
-- **不是发行版验收**。guest 仍是 v0.1.1 镜像 + 就地替换,不是 v0.2.0 镜像。
+- **靶场没有用新镜像**。本机 CPU 不支持 x86-64-v3,`just build` 跑不起来
+  (`Fatal glibc error: CPU does not support x86-64-v3`)。镜像构建改由 CI 承担
+  (run `45295995487`,同一 commit `95b65df`,全绿:Test / Build & Publish Image /
+  bootc switch + rollback / ISO boot + unattended install / guest probes A3–A12 /
+  qcow2 构建 / real KVM boot)。
+  所以本目录的证据证明的是「**就地替换二进制与策略之后,插件行为正确**」,
+  **不证明**「靶场跑的就是新镜像」——靶场仍是 v0.1.1 镜像 + 就地替换。
+  「新镜像里确实装着这批二进制」由 CI 的镜像构建腿负责(插件 zip 取自
+  daedalus-plugins v0.9.0 release,SDK 取 v0.5.0 tag,镜像内 76 门禁自校验),
+  但那是一条**不同的证据链**,不与本目录混为一谈。
+- **不是发行版验收**:guest 不是 v0.2.0 镜像。
 - **归属线索不是归因**。`cmdline_hint` 只是「某可见进程的 cmdline 里出现了这个端口」,
   不是「这个 socket 属于该进程」;两条 `lab-fault-*` 监听靠这条线索定位到 unit,
   但对没有端口 token 的进程(如 sshd)依然 `unresolved`——健康对照机的报告如实写了这一点。
