@@ -98,9 +98,32 @@ func (a *fakeAgent) ApplyIntent(_ context.Context, req *agentv1.ApplyIntentReque
 	}, nil
 }
 
+// toolFakeAgent 在 fakeAgent 之上实现只读工具调用面:工具清单由用例给定,
+// 调用回报可以切成「插件自报错误」(RPC 仍然成功)。
+type toolFakeAgent struct {
+	fakeAgent
+	tools   []*agentv1.ToolDescriptor
+	isError bool
+	calls   []*agentv1.CallToolRequest
+}
+
+func (a *toolFakeAgent) ListTools(context.Context, *agentv1.ListToolsRequest) (*agentv1.ListToolsResponse, error) {
+	return &agentv1.ListToolsResponse{Tools: a.tools, AuditSeq: 11}, nil
+}
+
+func (a *toolFakeAgent) CallTool(_ context.Context, req *agentv1.CallToolRequest) (*agentv1.CallToolResponse, error) {
+	a.calls = append(a.calls, req)
+	resp := &agentv1.CallToolResponse{ContentJson: `{"stdout":"io error, dev vdb\n"}`, AuditSeq: 12}
+	if a.isError {
+		resp.IsError = true
+		resp.ErrorMessage = "插件拒绝:路径越界"
+	}
+	return resp, nil
+}
+
 // startFakeAgent 在 loopback 上起一个双向 TLS 的 agent 桩,并把控制面的凭证
 // 环境变量指向它,返回监听地址。
-func startFakeAgent(t *testing.T, agent *fakeAgent) string {
+func startFakeAgent(t *testing.T, agent agentv1.AgentServiceServer) string {
 	t.Helper()
 	dir := t.TempDir()
 	caCert, caKey := newCA(t, dir)
@@ -212,6 +235,76 @@ func TestFleetE2E_HighRiskPackageAdmittedOnAgentNodes(t *testing.T) {
 	}
 	if len(agent.applied) != len(plan.Machines) {
 		t.Errorf("package 高危应下发到每台,agent 收到 %d 条, want %d", len(agent.applied), len(plan.Machines))
+	}
+}
+
+// TestFleetE2E_ToolCallerReadOnlySurface 把巡检链路的工具面走一遍真 mTLS:
+// 工具清单与节点报的一致、调用参数原样到达节点、插件自报错误归到「工具失败」
+// (不是「被拒」也不是「节点不可达」)。
+func TestFleetE2E_ToolCallerReadOnlySurface(t *testing.T) {
+	want := []*agentv1.ToolDescriptor{
+		{PluginId: "daedalus.shell", ToolName: "shell_exec", Description: "受控命令执行", ReadOnly: true},
+		{PluginId: "daedalus.fs", ToolName: "read_file", ReadOnly: true},
+	}
+	agent := &toolFakeAgent{tools: want, isError: true}
+	addr := startFakeAgent(t, agent)
+
+	cfg := fleet.DialConfigFromEnv()
+	cfg.Addr = addr
+	node, err := fleet.RegisterNode(context.Background(), cfg, fleet.RegisterOptions{
+		AgentID: "lab-a",
+		Kind:    objectmodel.MachineKindAgent,
+	})
+	if err != nil {
+		t.Fatalf("RegisterNode: %v", err)
+	}
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	if err := reg.Put(node); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	caller := &fleet.ToolCaller{
+		Registry: reg,
+		Dial: func(ctx context.Context, addr string) (agentv1.AgentServiceClient, func() error, error) {
+			c := fleet.DialConfigFromEnv()
+			c.Addr = addr
+			return fleet.Dial(ctx, c)
+		},
+	}
+
+	tools, err := caller.ListTools(context.Background(), node.NodeID)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(tools) != len(want) {
+		t.Fatalf("工具数 = %d, want %d", len(tools), len(want))
+	}
+	for i := range want {
+		if tools[i].GetPluginId() != want[i].GetPluginId() ||
+			tools[i].GetToolName() != want[i].GetToolName() ||
+			tools[i].GetReadOnly() != want[i].GetReadOnly() {
+			t.Errorf("第 %d 个工具 = %s/%s(只读=%v), want %s/%s(只读=%v)", i,
+				tools[i].GetPluginId(), tools[i].GetToolName(), tools[i].GetReadOnly(),
+				want[i].GetPluginId(), want[i].GetToolName(), want[i].GetReadOnly())
+		}
+	}
+
+	const args = `{"path":"/var/log/messages","max_bytes":4096}`
+	resp, err := caller.CallTool(context.Background(), node.NodeID, "daedalus.fs", "read_file", args)
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if len(agent.calls) != 1 {
+		t.Fatalf("节点收到 %d 次调用, want 1", len(agent.calls))
+	}
+	if got := agent.calls[0].GetArgumentsJson(); got != args {
+		t.Errorf("节点收到的 arguments_json = %q, want %q", got, args)
+	}
+	if got := fleet.ClassifyToolCall(resp, err); got != fleet.ToolCallToolFailed {
+		t.Errorf("插件自报错误应归到 %v, got %v", fleet.ToolCallToolFailed, got)
 	}
 }
 
