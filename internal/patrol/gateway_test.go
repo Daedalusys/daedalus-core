@@ -627,6 +627,38 @@ func TestGateway_NodeToolBusinessErrorIsReportedAsError(t *testing.T) {
 	}
 }
 
+// 失败文本也在证据池里:否则「工具坏了」这条真实告警拿不出证据,只能改报 ok,
+// 下一轮就被四分类算成 Recovered —— 邮件会把「查不了」读成「恢复了」。
+func TestGateway_NodeToolFailureTextIsCitableEvidence(t *testing.T) {
+	f := &fakeFleet{
+		tools: []agentv1.ToolDescriptor{shellToolDesc()},
+		resp:  &agentv1.CallToolResponse{IsError: true, ErrorMessage: "systemd is not running"},
+	}
+	sink := &memSink{}
+	g := newGateway(t, testItems, f, sink)
+	s := connect(t, g.Handler())
+
+	failure := callTool(t, s, "lab_a_shell_exec", rawJSON(`{"command":"systemctl --failed"}`))
+	if !failure.IsError {
+		t.Fatalf("插件业务错误不能伪装成成功:%s", resultText(t, failure))
+	}
+	// 引用模型实际看到的那一整串(含网关前缀),证明「模型看到 == 池里那份」。
+	seen := resultText(t, failure)
+
+	report := callTool(t, s, "report_finding",
+		reportArgsForTool("lab_a_shell_exec", "service-failed", patrol.SeverityCritical, seen))
+	if report.IsError {
+		t.Fatalf("失败原文必须能作为证据上报,实际被拒:%s", resultText(t, report))
+	}
+	got := sink.all()
+	if len(got) != 1 {
+		t.Fatalf("期望 sink 收到 1 条发现,实际 %d 条", len(got))
+	}
+	if got[0].Evidence[0].Output != seen {
+		t.Fatalf("落库证据应当是模型看到的那串失败文本,实际 %q", got[0].Evidence[0].Output)
+	}
+}
+
 // 既没响应也没错误是协议异常:最危险的不是报错,而是被当成「工具返回空」。
 func TestGateway_NodeToolEmptyResponseIsError(t *testing.T) {
 	f := &fakeFleet{tools: []agentv1.ToolDescriptor{shellToolDesc()}}
