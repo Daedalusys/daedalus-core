@@ -293,6 +293,55 @@ func TestReadFindings_BlankLinesSkipped(t *testing.T) {
 	}
 }
 
+// 同一清单项一轮只能有一条发现:重复的 item_id 会让四分类把同一项同时算成
+// 恢复与持续(或新增两条),邮件自相矛盾。读侧 fail-closed 拒掉。
+func TestReadFindings_DuplicateItemIDRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "findings.jsonl")
+	body := `{"item_id":"disk-health","status":"ok"}` + "\n" +
+		`{"item_id":"disk-health","status":"problem","severity":"warning"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := patrol.ReadFindings(path); err == nil {
+		t.Fatal("重复 item_id 必须拒绝")
+	}
+}
+
+// 读侧拒空 item_id,写侧也必须拒:库不能写出自己读不回的文件。
+func TestWriteFindings_EmptyItemIDRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "findings.jsonl")
+	if err := patrol.WriteFindings(path, []patrol.Finding{{Status: "problem", Severity: "warning"}}); err == nil {
+		t.Fatal("空 item_id 必须拒绝")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("被拒的发现不该留下文件")
+	}
+}
+
+// 同理:SaveState 与 LoadState 对「键 == item_id」的口径必须一致。
+func TestSaveState_KeyItemIDMismatchRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lab-a.json")
+	err := patrol.SaveState(path, map[string]patrol.Finding{
+		"disk-health": {ItemID: "journal-patterns", Status: "problem", Severity: "warning"},
+	})
+	if err == nil {
+		t.Fatal("键与 item_id 不一致必须拒绝")
+	}
+}
+
+// 0 字节/纯空白的状态文件是最可能的截断形状:按「文件损坏」处理,不当空状态。
+func TestLoadState_EmptyFileRejected(t *testing.T) {
+	for _, body := range []string{"", " \n\t\n"} {
+		path := filepath.Join(t.TempDir(), "lab-a.json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := patrol.LoadState(path); err == nil {
+			t.Errorf("空状态文件(%q)必须报错", body)
+		}
+	}
+}
+
 func TestWriteFindings_RoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "round", "findings.jsonl")
 	want := []patrol.Finding{

@@ -198,7 +198,7 @@ plugin-pack: blueprint-embed
     # plugin-pack 是独立 recipe,不依赖 go-build 已跑过,故自带 PATH 兜底。
     {{go_path_fallback}}
     # 流程(构建期内建,无运行时安装;安装态必经 Pack 注入 checksums):
-    #   1) 本仓构建 5 个 core runtime 静态二进制(host/audit/tx/smoke/plugin-pack);
+    #   1) 本仓构建 6 个 core runtime 静态二进制(host/audit/tx/patrol/smoke/plugin-pack);
     #   2) 能力二进制在兄弟仓 daedalus-plugins/<cap> 模块内就地构建(唯一事实源),
     #      产物写 <cap>/bin/,输出路径取 manifest executable 字段;
     #   3) 暂存目录只放 daedalus.plugin.json + bin/(zip 不含源码不变式)→ plugin-pack

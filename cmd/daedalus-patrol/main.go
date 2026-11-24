@@ -1,12 +1,11 @@
 // Command daedalus-patrol 是巡检的 oneshot 入口:读清单、跑一轮、把变化交给通知。
+// 本阶段只读清单并打印本轮工作项,网关与 AI 客户端编排在后续阶段接入。
 //
-//	daedalus-patrol run --node <id>          跑一轮(本阶段只读清单并打印本轮工作项)
+//	daedalus-patrol run --node <id>          跑一轮
 //	daedalus-patrol checklist [--node <id>]  打印合并后的清单(调试口)
 //	daedalus-patrol version                  打印版本
 //
-// 退出码与 daedalus 家族 CLI 对齐:0 成功、1 运行期、2 用法。
-//
-// 后续阶段在本进程内接上网关与 AI 客户端编排;巡检只报告不动手,本进程不提供任何写操作。
+// 退出码与 daedalus 家族 CLI 对齐:0 成功、1 运行期、2 用法;巡检只报告不动手。
 package main
 
 import (
@@ -65,10 +64,8 @@ func cmdRun(argv []string, stdout, stderr io.Writer) int {
 	if code, ok := parseFlags(fs, argv, stdout, stderr); !ok {
 		return code
 	}
-	// 没有节点标识就定位不到状态文件与节点专属清单,一轮巡检无从谈起。
-	if *node == "" {
-		fmt.Fprintf(stderr, "daedalus-patrol: run 需要 --node <节点 id>\n\n%s", usage())
-		return exitUsage
+	if code, ok := checkNodeID(*node, true, stderr); !ok {
+		return code
 	}
 
 	cl, err := patrol.LoadChecklist(*config, *node)
@@ -94,6 +91,9 @@ func cmdRun(argv []string, stdout, stderr io.Writer) int {
 func cmdChecklist(argv []string, stdout, stderr io.Writer) int {
 	fs, config, node := newFlagSet("checklist")
 	if code, ok := parseFlags(fs, argv, stdout, stderr); !ok {
+		return code
+	}
+	if code, ok := checkNodeID(*node, false, stderr); !ok {
 		return code
 	}
 
@@ -135,6 +135,24 @@ func newFlagSet(name string) (*flag.FlagSet, *string, *string) {
 	config := fs.String("config", defaultConfigPath, "清单与运行参数的文件路径")
 	node := fs.String("node", "", "节点 id")
 	return fs, config, node
+}
+
+// checkNodeID 校验 --node。run 必须有节点(没有节点就定位不到状态文件与本机清单),
+// checklist 可省(省略即只看全局基线);非空则必须是合法节点 id —— 它会被拼进
+// 状态文件路径,含路径分隔符或 .. 的形状在这里就按用法错误拒掉。
+func checkNodeID(node string, required bool, stderr io.Writer) (int, bool) {
+	if node == "" {
+		if required {
+			fmt.Fprintf(stderr, "daedalus-patrol: run 需要 --node <节点 id>\n\n%s", usage())
+			return exitUsage, false
+		}
+		return exitOK, true
+	}
+	if !patrol.ValidNodeID(node) {
+		fmt.Fprintf(stderr, "daedalus-patrol: --node 非法:%q(只允许字母、数字与 . _ -)\n\n%s", node, usage())
+		return exitUsage, false
+	}
+	return exitOK, true
 }
 
 // parseFlags 解析旗标并归并用法错误。-h/--help 是成功路径(打印用法到 stdout,退出 0)。

@@ -45,6 +45,9 @@ type Changes struct {
 // 因此跨节点混用同一个 map 也不会把两台机器的同名项串成一条。
 // 本轮状态除了明确的 ok 都按「有问题」处理(fail-closed:未知状态不能算正常);
 // 恢复条目带上一轮的发现 —— 邮件要说明「之前报的是什么,现在没了」。
+//
+// cur 的 item_id 必须唯一:唯一性由 ReadFindings 在入口拒重复来保证,本函数不做
+// 二次归并 —— 静默归并会把「上游把同一项报了两遍」这个真问题藏起来。
 func Classify(prev map[string]Finding, cur []Finding) Changes {
 	var ch Changes
 	matched := make(map[string]struct{}, len(cur))
@@ -91,6 +94,9 @@ func Classify(prev map[string]Finding, cur []Finding) Changes {
 
 // ActiveFindings 从一轮的发现里挑出活跃项(状态不是 ok),键是 item_id。
 // 这是落进状态文件、供下一轮比对的形状:ok 项不进状态,它们下轮再出问题算新增。
+//
+// cur 的 item_id 必须唯一(由 ReadFindings 保证):这里的后写覆盖只是取最后一条,
+// 不是归并策略 —— 重复在入口就被拒了。
 func ActiveFindings(cur []Finding) map[string]Finding {
 	st := make(map[string]Finding, len(cur))
 	for _, f := range cur {

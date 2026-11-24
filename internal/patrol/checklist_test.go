@@ -5,6 +5,7 @@ package patrol_test
 // 空工具名一律拒)。夹具在 testdata/ 下,一个夹具一种坏,便于定位是哪条规则被触发。
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -156,5 +157,59 @@ func TestLoadChecklist_ShippedDefaultParses(t *testing.T) {
 	}
 	if len(c.Items) != 0 {
 		t.Errorf("出厂默认配置的清单应为空,实际 %d 项", len(c.Items))
+	}
+}
+
+// 节点 id 会被后续任务拼进状态文件路径(/var/lib/daedalus-patrol/state/<node>.json),
+// 含路径分隔符或 .. 的形状必须在读清单这一步就拒掉。
+func TestLoadChecklist_NodeIDWhitelist(t *testing.T) {
+	full := filepath.Join("testdata", "checklist-full.toml")
+	good := []string{"", "lab-a", "lab.a_1-2", "LAB01"}
+	for _, id := range good {
+		if _, err := patrol.LoadChecklist(full, id); err != nil {
+			t.Errorf("节点 id %q 应被接受,却报错: %v", id, err)
+		}
+	}
+	bad := []string{"..", ".", "../etc", "a/b", "lab a", "lab-a\n", "lab/../a"}
+	for _, id := range bad {
+		if _, err := patrol.LoadChecklist(full, id); err == nil {
+			t.Errorf("节点 id %q 必须拒绝", id)
+		}
+	}
+}
+
+// 配置文件里的节点键同样会被拼进路径:键非法比「将来某次请求恰好用到」更早拒。
+func TestLoadConfig_InvalidNodeKeyRejected(t *testing.T) {
+	dir := t.TempDir()
+	body := `[[node."../etc".checklist.item]]
+id = "disk-health"
+prompt = "磁盘健康?"
+severity = "warning"
+`
+	path := filepath.Join(dir, "patrol.toml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := patrol.LoadConfig(path); err == nil {
+		t.Fatal("非法节点键必须拒绝")
+	}
+}
+
+// Config 是只读快照:调用方改了拿到的清单,不该回写进下一次查询。
+func TestChecklistFor_ReturnsCopy(t *testing.T) {
+	cfg, err := patrol.LoadConfig(filepath.Join("testdata", "checklist-full.toml"))
+	if err != nil {
+		t.Fatalf("LoadConfig 失败: %v", err)
+	}
+	mutated := cfg.ChecklistFor("lab-a")
+	mutated.Items[0].Prompt = "被改坏"
+	mutated.Items[0].Tools[0] = "evil_tool"
+
+	again := cfg.ChecklistFor("lab-a")
+	if again.Items[0].Prompt == "被改坏" {
+		t.Error("调用方改到了 Config 内部的清单项")
+	}
+	if again.Items[0].Tools[0] == "evil_tool" {
+		t.Error("调用方改到了 Config 内部的 tools 切片")
 	}
 }

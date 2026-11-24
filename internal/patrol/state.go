@@ -26,8 +26,10 @@ func LoadState(path string) (map[string]Finding, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取巡检状态 %s 失败: %w", path, err)
 	}
+	// 0 字节或纯空白是最可能的截断形状:按文件损坏处理,不当成空状态 ——
+	// 悄悄清空状态会让下一轮把老问题全报成新增。
 	if len(bytes.TrimSpace(data)) == 0 {
-		return map[string]Finding{}, nil
+		return nil, fmt.Errorf("巡检状态 %s 为空:疑似截断,不能当成没有状态", path)
 	}
 	var st map[string]Finding
 	if err := json.Unmarshal(data, &st); err != nil {
@@ -46,11 +48,16 @@ func LoadState(path string) (map[string]Finding, error) {
 }
 
 // SaveState 整体替换状态文件。上一轮的键不会残留 —— 状态是「本轮活跃项」的快照,
-// 不是逐轮追加的日志。
+// 不是逐轮追加的日志。写侧校验读侧依赖的 invariant:键必须等于条目自报的 item_id。
 func SaveState(path string, st map[string]Finding) error {
 	if st == nil {
 		// nil map 序列化成 null 太含糊:落成 {} 才和「本轮没有活跃项」一一对应。
 		st = map[string]Finding{}
+	}
+	for id, f := range st {
+		if f.ItemID != id {
+			return fmt.Errorf("巡检状态键 %q 与条目 item_id %q 不一致", id, f.ItemID)
+		}
 	}
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
@@ -70,6 +77,7 @@ func ReadFindings(path string) ([]Finding, error) {
 		return nil, fmt.Errorf("读取发现文件 %s 失败: %w", path, err)
 	}
 	var out []Finding
+	seen := make(map[string]struct{})
 	for i, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -83,15 +91,25 @@ func ReadFindings(path string) ([]Finding, error) {
 		if f.ItemID == "" {
 			return nil, fmt.Errorf("发现文件 %s 第 %d 行缺 item_id", path, i+1)
 		}
+		// 同一清单项一轮只能有一条发现。重复会让四分类把同一项同时算成恢复与持续
+		// (或新增两条),一封邮件自相矛盾;模型对同一项调两次 report_finding 就会撞上。
+		if _, dup := seen[f.ItemID]; dup {
+			return nil, fmt.Errorf("发现文件 %s 第 %d 行的 item_id %q 重复:同一项一轮只能有一条发现", path, i+1, f.ItemID)
+		}
+		seen[f.ItemID] = struct{}{}
 		out = append(out, f)
 	}
 	return out, nil
 }
 
 // WriteFindings 写一轮的发现(JSONL,一行一条),整体原子替换。
+// 写侧校验读侧依赖的 invariant:item_id 不能空。
 func WriteFindings(path string, findings []Finding) error {
 	var buf bytes.Buffer
-	for _, f := range findings {
+	for i, f := range findings {
+		if f.ItemID == "" {
+			return fmt.Errorf("第 %d 条发现缺 item_id,不能落盘", i+1)
+		}
 		line, err := json.Marshal(f)
 		if err != nil {
 			return fmt.Errorf("序列化发现失败: %w", err)

@@ -86,6 +86,18 @@ func TestRun_Dispatch(t *testing.T) {
 			wantErr:  []string{"--node"},
 		},
 		{
+			name:     "run 的节点 id 含路径形状是用法错误",
+			argv:     []string{"run", "--config", cfg, "--node", "../etc"},
+			wantCode: exitUsage,
+			wantErr:  []string{"非法"},
+		},
+		{
+			name:     "checklist 的节点 id 含路径形状是用法错误",
+			argv:     []string{"checklist", "--config", cfg, "--node", "a/b"},
+			wantCode: exitUsage,
+			wantErr:  []string{"非法"},
+		},
+		{
 			name:     "run --node 缺取值是用法错误",
 			argv:     []string{"run", "--node"},
 			wantCode: exitUsage,

@@ -25,6 +25,19 @@ const (
 // 形状放宽会让「同一项换了写法」被当成新发现。
 var itemIDPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
+// nodeIDPattern 是节点 id 的白名单。状态文件按 <node>.json 落盘,id 里出现路径分隔符
+// 或 ".." 就会把路径拼到目录之外。
+var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// ValidNodeID 判断节点 id 能否安全用作路径的一段。空 id 不是节点标识 ——
+// 需要「全局视图」的调用方自行用空字符串走 ChecklistFor,不要把它当节点名。
+func ValidNodeID(id string) bool {
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	return nodeIDPattern.MatchString(id)
+}
+
 // Item 是一条巡检清单项。
 //
 // Tools 只是提示级信息(写进提示词,告诉模型这一项建议用哪些工具),不是强制白名单:
@@ -72,20 +85,36 @@ type Config struct {
 	Nodes  map[string]Checklist
 }
 
-// ChecklistFor 返回某节点视角的清单。未知节点不是错误:它只是没有专属项,
-// 退回全局基线即可。
+// ChecklistFor 返回某节点视角的清单(拷贝:Config 是只读快照)。未知节点不是错误:
+// 它只是没有专属项,退回全局基线即可。
 func (c Config) ChecklistFor(nodeID string) Checklist {
 	if nodeID == "" {
-		return c.Global
+		return copyChecklist(c.Global)
 	}
 	if ck, ok := c.Nodes[nodeID]; ok {
-		return ck
+		return copyChecklist(ck)
 	}
-	return c.Global
+	return copyChecklist(c.Global)
+}
+
+// copyChecklist 连同每项的 Tools 一起复制:调用方改了拿到的清单,不该回写进 Config。
+func copyChecklist(c Checklist) Checklist {
+	items := make([]Item, len(c.Items))
+	for i, it := range c.Items {
+		items[i] = it
+		if it.Tools != nil {
+			items[i].Tools = append([]string(nil), it.Tools...)
+		}
+	}
+	return Checklist{Items: items}
 }
 
 // LoadChecklist 读配置并返回某节点视角的合并清单 —— 一轮巡检的输入。
+// nodeID 为空表示只要全局基线;非空则必须是合法节点 id(它会被拼进状态文件路径)。
 func LoadChecklist(path, nodeID string) (Checklist, error) {
+	if nodeID != "" && !ValidNodeID(nodeID) {
+		return Checklist{}, fmt.Errorf("节点 id %q 非法(只允许字母、数字与 . _ -)", nodeID)
+	}
 	cfg, err := LoadConfig(path)
 	if err != nil {
 		return Checklist{}, err
@@ -118,6 +147,10 @@ func LoadConfig(path string) (Config, error) {
 
 	nodes := make(map[string]Checklist, len(raw.Node))
 	for nodeID, sec := range raw.Node {
+		// 节点键会被拼进状态文件路径,和请求侧的 --node 走同一条白名单。
+		if !ValidNodeID(nodeID) {
+			return Config{}, fmt.Errorf("巡检配置 %s 的节点键 %q 非法(只允许字母、数字与 . _ -)", path, nodeID)
+		}
 		items, err := mergeItems(raw.Checklist.Item, sec.Checklist.Item)
 		if err != nil {
 			return Config{}, fmt.Errorf("巡检配置 %s 的节点 %q: %w", path, nodeID, err)
