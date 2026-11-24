@@ -250,6 +250,76 @@ export function validateArg(arg: string): void {
   }
 }
 
+/**
+ * 按命令的「取值是文本」选项豁免表。（daedalus-sdk/shellpolicy 冻结副本）
+ *
+ * 入表条件：该选项必须是 required_argument（如 `-g` 后面必须跟一个值），且取值
+ * 永不被命令当文件打开 —— journalctl 只拿 -g/--grep 的取值做正则匹配，日志里
+ * "I/O error"、"/dev/vdb" 这类含 `/` 的正文因此不该被当成路径拒绝。
+ */
+export const NON_PATH_OPTION_VALUES: Record<string, ReadonlySet<string>> = {
+  journalctl: new Set(["-g", "--grep"]),
+};
+
+/** 判断参数是否为豁免表里的选项：独立形式要跳下一个（取值），等号/粘连形式只跳自己。 */
+function matchNonPathFlag(
+  flags: ReadonlySet<string> | undefined,
+  arg: string,
+): { matched: boolean; consumesNext: boolean } {
+  if (!flags || flags.size === 0) {
+    return { matched: false, consumesNext: false };
+  }
+  if (flags.has(arg)) {
+    return { matched: true, consumesNext: true };
+  }
+  const eqIdx = arg.indexOf("=");
+  if (eqIdx > 0 && flags.has(arg.slice(0, eqIdx))) {
+    return { matched: true, consumesNext: false };
+  }
+  for (const flag of flags) {
+    // 只把单横线短选项当粘连形式（`-gPATTERN`）；长选项必须靠 `=` 分隔，
+    // 否则 `--grep-file` 会被前缀误匹配。
+    if (
+      flag.length === 2 &&
+      flag[0] === "-" &&
+      flag[1] !== "-" &&
+      arg.startsWith(flag) &&
+      arg.length > flag.length
+    ) {
+      return { matched: true, consumesNext: false };
+    }
+  }
+  return { matched: false, consumesNext: false };
+}
+
+/**
+ * 整条 argv 的参数校验。（daedalus-sdk/shellpolicy.ValidateArgs 冻结副本）
+ *
+ * 与 Go 侧一致：命中豁免表的选项时跳过它的取值，其余参数逐个走 validateArg。
+ * TS 侧尚无 DeniedArgs（-f/--follow）副本，该缺口由 shell 插件在真执行时兜住。
+ */
+export function validateArgs(
+  command: string,
+  args: readonly string[],
+): void {
+  const lastSlash = command.lastIndexOf("/");
+  const base = lastSlash >= 0 ? command.slice(lastSlash + 1) : command;
+  const flags = NON_PATH_OPTION_VALUES[base];
+  let skipNext = false;
+  for (const arg of args) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    const m = matchNonPathFlag(flags, arg);
+    if (m.matched) {
+      skipNext = m.consumesNext;
+      continue;
+    }
+    validateArg(arg);
+  }
+}
+
 /** 白名单验证命令名称 + 路径遍历检查。（daedalus-sdk/shellpolicy 冻结副本） */
 export function validateCommand(command: string): string {
   if (!command || typeof command !== "string") {
@@ -555,7 +625,5 @@ export function validateProposal(proposal: CommandProposal): void {
   // 白名单外由沙箱网关拒绝；此检查同时覆盖 L1/L2 的二进制目录校验
   validateCommand(proposal.command);
 
-  for (const arg of proposal.args) {
-    validateArg(arg);
-  }
+  validateArgs(proposal.command, proposal.args);
 }

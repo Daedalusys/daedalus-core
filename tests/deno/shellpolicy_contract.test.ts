@@ -12,6 +12,7 @@ import {
   ALLOWED_PATH_PREFIXES,
   BLOCKED_PATHS,
   DEFAULT_ALLOW_COMMANDS,
+  NON_PATH_OPTION_VALUES,
 } from "../../plugin/copilot/policy.ts";
 
 // 仓库根:本文件位于 <root>/tests/deno/,上溯两级。
@@ -127,4 +128,34 @@ Deno.test("跨语言契约 - ALLOW_COMMANDS 环境变量为整体替换(REPLACE)
   expect(fallback.code).toBe(0);
   const fallbackJson = JSON.parse(new TextDecoder().decode(fallback.stdout));
   expect(fallbackJson.allowed).toEqual(sorted([...DEFAULT_ALLOW_COMMANDS]));
+});
+
+/** 解析 Go 的 `var nonPathOptionValues = map[string]map[string]struct{}{...}`。 */
+function extractGoNonPathTable(src: string): Record<string, string[]> {
+  const decl = /var\s+nonPathOptionValues\s*=\s*map\[string\]map\[string\]struct\{\}\{([\s\S]*?)\n\}/.exec(
+    src,
+  );
+  if (!decl) {
+    throw new Error("在 Go 源码中找不到 nonPathOptionValues(格式变动需同步本解析器)");
+  }
+  // 断言之一：gofmt 后每个命令占一行（一行一个顶层键）。
+  // 一行里的字符串字面量依次是「命令, 选项...」，内层 `{}` 不含字面量，
+  // 所以按行取字面量即可，不必真的解析嵌套 map。
+  const out: Record<string, string[]> = {};
+  for (const line of decl[1].split("\n")) {
+    if (!/^\t"/.test(line)) continue;
+    const literals = [...line.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    out[literals[0]] = literals.slice(1).sort();
+  }
+  return out;
+}
+
+Deno.test("跨语言契约 - 选项取值豁免表 Go 与 policy.ts 一致", async () => {
+  const goSrc = await Deno.readTextFile(goSourceUrl);
+  const goTable = extractGoNonPathTable(goSrc);
+  const tsTable: Record<string, string[]> = {};
+  for (const [cmd, flags] of Object.entries(NON_PATH_OPTION_VALUES)) {
+    tsTable[cmd] = [...flags].sort();
+  }
+  expect(tsTable).toEqual(goTable);
 });

@@ -476,3 +476,37 @@ Deno.test("classifyProposal - legacy paths keep tx_kind undefined (shell default
     expect(Object.hasOwn(r, "tx_kind")).toBe(false);
   }
 });
+
+Deno.test("Copilot Policy & Validation - validateProposal 放行 journalctl 的 -g/--grep 正则取值", () => {
+  const argSets: string[][] = [
+    ["-g", "I/O error"],
+    ["--grep", "I/O error|dev/vdb"],
+    ["--grep=out of memory"],
+    ["-gI/O error"],
+    ["-p", "err", "-g", "I/O error"],
+  ];
+  for (const args of argSets) {
+    expect(() =>
+      validateProposal({
+        command: "journalctl",
+        args,
+        explanation: "按关键字过滤日志",
+      })
+    ).not.toThrow();
+  }
+});
+
+Deno.test("Copilot Policy & Validation - 豁免不越过文件参数、其它命令", () => {
+  const denied: Array<[string, string[]]> = [
+    ["journalctl", ["-g", "I/O error", "--file=/etc/shadow"]],
+    ["journalctl", ["--grep-file=/etc/shadow"]],
+    ["journalctl", ["--file=/etc/shadow"]],
+    ["journalctl", ["-g", "x", "/etc/shadow"]],
+    ["cat", ["-g", "/etc/shadow"]],
+  ];
+  for (const [command, args] of denied) {
+    expect(() =>
+      validateProposal({ command, args, explanation: "x" })
+    ).toThrow();
+  }
+});
