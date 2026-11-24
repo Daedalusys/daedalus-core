@@ -131,6 +131,9 @@ v0.1.1 + 就地替换)。
 验证,不由 AI 那轮验证**。那轮 48 次调用 11 个 error,全是文件权限不足(6)与 allowlist 拒绝(5),
 没有「跑了却被标错」的假错误。
 
+验证版本常量真的到位:同一台 guest 上 `daedalus-shell` 的 MCP 握手现在是
+`{"name":"daedalus-shell","version":"0.5.1"}`(修复前所有插件自报 `0.4.0`)。
+
 同时修掉的:SDK `version.Version` 从 `0.4.0` 抬到 `0.5.1`(v0.5.0 发布时它没跟上,
 十个插件在 MCP 握手里一直自报 `0.4.0`),release workflow 新增「tag 与常量一致」门禁。
 
