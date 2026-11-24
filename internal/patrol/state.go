@@ -68,6 +68,9 @@ func SaveState(path string, st map[string]Finding) error {
 
 // ReadFindings 读一轮的发现(JSONL,一行一条)。文件不存在等于「本轮没有发现」;
 // 任何一行坏掉都报错 —— 静默跳过等于把发现吞掉。
+//
+// 这个文件是**单节点**的一轮发现,所以去重键只用 item_id(不是 (node, item_id)):
+// 每台机器的发现各写各的文件,跨节点不会撞在同一个文件里。
 func ReadFindings(path string) ([]Finding, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -103,13 +106,19 @@ func ReadFindings(path string) ([]Finding, error) {
 }
 
 // WriteFindings 写一轮的发现(JSONL,一行一条),整体原子替换。
-// 写侧校验读侧依赖的 invariant:item_id 不能空。
+// 写侧校验读侧依赖的 invariant:item_id 不能空、不能重复 —— 否则本函数写得出的文件,
+// ReadFindings 下一轮读不回来,整轮巡检直接失败。
 func WriteFindings(path string, findings []Finding) error {
 	var buf bytes.Buffer
+	seen := make(map[string]struct{}, len(findings))
 	for i, f := range findings {
 		if f.ItemID == "" {
 			return fmt.Errorf("第 %d 条发现缺 item_id,不能落盘", i+1)
 		}
+		if _, dup := seen[f.ItemID]; dup {
+			return fmt.Errorf("第 %d 条发现的 item_id %q 重复:同一项一轮只能有一条发现", i+1, f.ItemID)
+		}
+		seen[f.ItemID] = struct{}{}
 		line, err := json.Marshal(f)
 		if err != nil {
 			return fmt.Errorf("序列化发现失败: %w", err)

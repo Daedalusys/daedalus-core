@@ -318,6 +318,22 @@ func TestWriteFindings_EmptyItemIDRejected(t *testing.T) {
 	}
 }
 
+// 同理:读侧拒重复 item_id,写侧也必须拒 —— 否则网关落盘的这一轮发现,
+// 下一轮 ReadFindings 整轮读不回来。
+func TestWriteFindings_DuplicateItemIDRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "findings.jsonl")
+	err := patrol.WriteFindings(path, []patrol.Finding{
+		{ItemID: "disk-health", Status: "ok"},
+		{ItemID: "disk-health", Status: "problem", Severity: "warning"},
+	})
+	if err == nil {
+		t.Fatal("重复 item_id 必须拒绝")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("被拒的发现不该留下文件")
+	}
+}
+
 // 同理:SaveState 与 LoadState 对「键 == item_id」的口径必须一致。
 func TestSaveState_KeyItemIDMismatchRejected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lab-a.json")
