@@ -107,3 +107,32 @@ ISO 无人值守安装、guest 探针 A3–A12、qcow2 构建、real KVM boot。
 
 这证明「镜像能构建、能启动、插件清单自校验通过」;**不证明**靶场跑的就是新镜像(靶场仍是
 v0.1.1 + 就地替换)。
+
+---
+
+## 修复验证:journalctl -g 的正则参数(sdk#72)
+
+上一轮记的第 1 条新发现(`journalctl -g` 的正则被当成路径拒绝)已修,版本链
+**SDK v0.5.1 → plugins v0.9.1 → 主仓 pins**。
+
+真机复测见 `probes-journalctl-grep.txt`:
+
+| 调用 | 修复前 | 修复后 |
+| --- | --- | --- |
+| `journalctl -g "I/O error"` | 被拒(pathguard) | `isError=false`,命令真的跑了 |
+| `journalctl --grep "I/O error\|dev/vdb"` | 被拒 | `isError=false` |
+| `journalctl -t lab-grep -g "I/O error"` | — | 只回命中那一行(过滤生效) |
+| `journalctl --file=/etc/shadow` | 被拒 | **仍被拒**(真·文件参数) |
+| `cat ../../etc/shadow` | 被拒 | **仍被拒**(越界路径) |
+| `journalctl -f` | 被拒 | **仍被拒**(拒绝表优先) |
+
+盲测那次(注入 journal-only 错误 + 崩溃循环,`run-inspect.sh lab-a 9601 grep-fix`)模型没有用
+`-g` —— 它用 `journalctl -u` / `-p err` / `-k -p err` 就够了,所以 **`-g` 这条路径只由直连探针
+验证,不由 AI 那轮验证**。那轮 48 次调用 11 个 error,全是文件权限不足(6)与 allowlist 拒绝(5),
+没有「跑了却被标错」的假错误。
+
+同时修掉的:SDK `version.Version` 从 `0.4.0` 抬到 `0.5.1`(v0.5.0 发布时它没跟上,
+十个插件在 MCP 握手里一直自报 `0.4.0`),release workflow 新增「tag 与常量一致」门禁。
+
+仍然不证明的:靶场还是 v0.1.1 镜像 + 就地替换;镜像侧由 CI 构建(本轮
+`Build & Publish Daedalus Image` 会取 plugins v0.9.1 与 SDK v0.5.1)。

@@ -1,0 +1,90 @@
+# journalctl -g 正则参数:真机复测(修复前被拒 → 修复后放行)
+
+- 复测时间:2026-11-24
+- 对象:lab-a(guest,端口 9601),插件二进制由 `daedalus-plugins` main(SDK v0.5.1)现构,
+  策略为 `daedalus-core` main 的生产 `policy.toml`
+- 上游 issue:Daedalusys/daedalus-sdk#72(SDK v0.5.1 / plugins v0.9.1)
+
+## 修复前(对照)
+
+同一台机器、同一条命令,修复前被 pathguard 当路径拒绝:
+
+```
+journalctl --no-pager -b -g "Out of memory|oom-kill|segfault|I/O error|xfs.*error|EDAC"
+→ Argument validation failed: Path 'Out of memory|oom-kill|segfault|I/O error|...'
+  (resolved: /var/home/daedalus/Out of memory|...) is outside allowed directories
+```
+
+原始记录见 `tool-calls-lab-b-baseline-v3.txt`(2026-11-24 靶场复测的健康对照机那一行)。
+
+## 修复后
+
+### 1. `journalctl -g "I/O error"`(修复前被拒)
+
+```
+server=daedalus-shell bytes=260 isError=False
+fields={"returncode": 1, "outcome": "ran_and_failed", "stdout_truncated": false, "stderr_truncated": false}
+stdout: "-- No entries --\n"
+```
+
+命令真的跑了(没匹配到条目时 journalctl 退出码是 1,故 outcome=ran_and_failed)。
+
+### 2. `journalctl --grep "I/O error|dev/vdb"`
+
+```
+server=daedalus-shell bytes=260 isError=False
+fields={"returncode": 1, "outcome": "ran_and_failed", ...}
+```
+
+### 3. 过滤真的生效(不只是被接受)
+
+往 journal 写两条,一条含 `I/O error`、一条不含:
+
+```
+journalctl -t lab-grep -g "I/O error" --no-pager
+→ stdout: "Nov 24 06:26:52 lab-a lab-grep[11766]: I/O error, dev vdb, sector 2048 op 0x0\n"
+   returncode=0, outcome=ok
+```
+
+不含关键字的那条被过滤掉了 —— 说明 `-g` 是被 journalctl 当正则用的,不是被忽略。
+
+### 4. 反向对照:真·文件参数仍被拒
+
+```
+journalctl --file=/etc/shadow
+→ isError=true, outcome=denied
+  error: Access to blocked path '/etc/shadow' (/etc/shadow) is forbidden.
+```
+
+### 5. 反向对照:越界路径仍被拒
+
+```
+cat ../../etc/shadow
+→ isError=true, outcome=denied
+  error: Path '../../etc/shadow' (resolved: /var/etc/shadow) is outside allowed directories: ...
+```
+
+### 6. 反向对照:拒绝表优先
+
+```
+journalctl -f
+→ isError=true, outcome=denied
+  error: Argument '-f' is not allowed for command 'journalctl'.
+```
+
+## 结论
+
+- 豁免只作用于 `-g` / `--grep` 的**取值**;同一 argv 里的文件参数、别的命令的参数规则、
+  拒绝表全部照旧(六条探针里三条是反向对照)。
+- 取值被 journalctl 当正则做文本匹配,不产生文件系统访问 —— 代价是
+  `journalctl -g /etc/shadow` 这种「拿路径当正则」不再被拦,但它也读不到那个文件。
+
+## 复现
+
+```bash
+# 装新二进制与新策略(见 patch-guests.sh)
+POLICY=files/system/opt/daedalus/shared/policy.toml \
+  bash tests/real-machine/logs/2026-11-24-ai-inspection-lab-fixed/patch-guests.sh 9601
+# 直连探针
+python3 ~/daedalus-lab/mcpcheck.py 9601 shell shell_exec '{"command":"journalctl","args":["-g","I/O error"]}' --fields
+```
