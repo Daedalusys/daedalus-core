@@ -1,0 +1,6 @@
+# id 不匹配 ^[a-z0-9]+(-[a-z0-9]+)*$ —— 解析必须拒绝。
+
+[[checklist.item]]
+id = "Disk_Health"
+prompt = "磁盘健康?"
+severity = "warning"

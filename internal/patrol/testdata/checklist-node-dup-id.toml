@@ -1,0 +1,11 @@
+# 同一个节点段里两条 id 相同 —— 本机专属项之间不许重名,解析必须拒绝。
+
+[[node."lab-a".checklist.item]]
+id = "kvm-storage"
+prompt = "KVM 存储降级迹象?"
+severity = "critical"
+
+[[node."lab-a".checklist.item]]
+id = "kvm-storage"
+prompt = "重复声明同一项?"
+severity = "warning"

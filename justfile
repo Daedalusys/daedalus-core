@@ -297,7 +297,10 @@ plugin-pack: blueprint-embed
     #   直接调用(v1 执行模型 = 调用者进程)。插件 daedalus.tx 的 MCP 二进制叫
     #   daedalus-tx-mcp,走能力插件循环,与这个 CLI 是两回事。
     install -Dm0755 "bin/daedalus-tx" "$root/daedalus-core/files/system/usr/local/bin/daedalus-tx"
-    echo "plugin-pack: 全部能力插件 zip(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot/tx)-> daedalus-core/bin/;全部已解包校验安装 -> daedalus-core/files/system/opt/daedalus/plugins/;host/audit/tx CLI(core 现构)+ shell/service(插件仓现构)-> daedalus-core/files/system/usr/local/bin/"
+    # 巡检二进制进镜像树 /usr/local/bin:oneshot 单元直接执行它 —— 巡检是独立进程,
+    # 不经 daedalus-host(宿主绝不 spawn,也不做任何 MCP 服务器的父进程)。
+    install -Dm0755 "bin/daedalus-patrol" "$root/daedalus-core/files/system/usr/local/bin/daedalus-patrol"
+    echo "plugin-pack: 全部能力插件 zip(fs/shell/pkg/sysinfo/service/blueprint/dupe/diskclean/organize/trace/proc/osstate/snapshot/tx)-> daedalus-core/bin/;全部已解包校验安装 -> daedalus-core/files/system/opt/daedalus/plugins/;host/audit/tx/patrol CLI(core 现构)+ shell/service(插件仓现构)-> daedalus-core/files/system/usr/local/bin/"
 
 # 开发态本地安装:把 dev 产物装进用户前缀,免镜像即可使用全套 CLI。
 # 用法: just dev-install [前缀] (亦兼容 --prefix=X 形式);默认前缀 = $HOME/.local。

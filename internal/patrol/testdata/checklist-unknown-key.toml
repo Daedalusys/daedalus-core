@@ -1,0 +1,8 @@
+# 顶层出现未知键 —— 解析必须拒绝,不静默忽略。
+
+unknown_key = "x"
+
+[[checklist.item]]
+id = "disk-health"
+prompt = "磁盘健康?"
+severity = "warning"
