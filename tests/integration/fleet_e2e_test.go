@@ -98,9 +98,36 @@ func (a *fakeAgent) ApplyIntent(_ context.Context, req *agentv1.ApplyIntentReque
 	}, nil
 }
 
+// fakeToolAgent 在基础桩上补只读工具调用面:ListTools 回 tools 里的工具集,
+// CallTool 把收到的 plugin_id / tool_name / arguments_json 原样记下,并按
+// toolErrMessage 决定这次是成功还是插件自报业务错误(RPC 层仍成功)。
+type fakeToolAgent struct {
+	fakeAgent
+	tools          []*agentv1.ToolDescriptor
+	toolErrMessage string
+	gotPlugins     []string
+	gotToolNames   []string
+	gotArguments   []string
+}
+
+func (a *fakeToolAgent) ListTools(context.Context, *agentv1.ListToolsRequest) (*agentv1.ListToolsResponse, error) {
+	return &agentv1.ListToolsResponse{Tools: a.tools, AuditSeq: 7}, nil
+}
+
+func (a *fakeToolAgent) CallTool(_ context.Context, req *agentv1.CallToolRequest) (*agentv1.CallToolResponse, error) {
+	a.gotPlugins = append(a.gotPlugins, req.GetPluginId())
+	a.gotToolNames = append(a.gotToolNames, req.GetToolName())
+	a.gotArguments = append(a.gotArguments, req.GetArgumentsJson())
+	if a.toolErrMessage != "" {
+		return &agentv1.CallToolResponse{IsError: true, ErrorMessage: a.toolErrMessage, AuditSeq: 8}, nil
+	}
+	return &agentv1.CallToolResponse{ContentJson: `{"stdout":"up 3 days"}`, AuditSeq: 9}, nil
+}
+
 // startFakeAgent 在 loopback 上起一个双向 TLS 的 agent 桩,并把控制面的凭证
-// 环境变量指向它,返回监听地址。
-func startFakeAgent(t *testing.T, agent *fakeAgent) string {
+// 环境变量指向它,返回监听地址。接受任意 agent 实现,以便同一套 mTLS rig 上
+// 挂不同的 RPC 面。
+func startFakeAgent(t *testing.T, agent agentv1.AgentServiceServer) string {
 	t.Helper()
 	dir := t.TempDir()
 	caCert, caKey := newCA(t, dir)
@@ -213,6 +240,92 @@ func TestFleetE2E_HighRiskPackageAdmittedOnAgentNodes(t *testing.T) {
 	if len(agent.applied) != len(plan.Machines) {
 		t.Errorf("package 高危应下发到每台,agent 收到 %d 条, want %d", len(agent.applied), len(plan.Machines))
 	}
+}
+
+// TestFleetE2E_ReadOnlyToolCall 端到端证明控制面经真实 mTLS 走通只读工具调用面:
+// ListTools 的工具集原样回来、CallTool 的 arguments_json 原样到达节点、
+// 插件自报业务错误归到 tool_failed(既不是 denied,也不是 node_unreachable)。
+func TestFleetE2E_ReadOnlyToolCall(t *testing.T) {
+	agent := &fakeToolAgent{tools: []*agentv1.ToolDescriptor{
+		{PluginId: "daedalus.shell", ToolName: "shell_exec", Description: "执行只读命令", ReadOnly: true},
+		{PluginId: "daedalus.fs", ToolName: "read_file", Description: "读取文件", InputSchemaJson: `{"type":"object"}`, ReadOnly: true},
+	}}
+	addr := startFakeAgent(t, agent)
+	reg := registerOneNode(t, addr, "toolcall-node")
+
+	caller := fleet.NewToolCaller(reg)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tools, err := caller.ListTools(ctx, "toolcall-node")
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(tools) != len(agent.tools) {
+		t.Fatalf("工具数 = %d, want %d", len(tools), len(agent.tools))
+	}
+	for i, want := range agent.tools {
+		got := &tools[i]
+		if got.GetPluginId() != want.GetPluginId() ||
+			got.GetToolName() != want.GetToolName() ||
+			got.GetDescription() != want.GetDescription() ||
+			got.GetInputSchemaJson() != want.GetInputSchemaJson() ||
+			got.GetReadOnly() != want.GetReadOnly() {
+			t.Errorf("工具 %d = %s/%s(read_only=%v), want %s/%s(read_only=%v)",
+				i, got.GetPluginId(), got.GetToolName(), got.GetReadOnly(),
+				want.GetPluginId(), want.GetToolName(), want.GetReadOnly())
+		}
+	}
+
+	args := `{"command":"uptime","args":[]}`
+	resp, err := caller.CallTool(ctx, "toolcall-node", "daedalus.shell", "shell_exec", args)
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if len(agent.gotArguments) != 1 || agent.gotArguments[0] != args {
+		t.Errorf("arguments_json 未原样到达节点: %q, want %q", agent.gotArguments, args)
+	}
+	if agent.gotPlugins[0] != "daedalus.shell" || agent.gotToolNames[0] != "shell_exec" {
+		t.Errorf("目标未原样到达节点: plugin=%q tool=%q", agent.gotPlugins[0], agent.gotToolNames[0])
+	}
+	if got := fleet.ClassifyToolCall(resp, err); got != fleet.ToolCallOK {
+		t.Errorf("成功调用归类 = %v, want %v", got, fleet.ToolCallOK)
+	}
+
+	// 插件自己报业务错误:RPC 仍成功,RPC 错误码不许被当成拒绝或不可达。
+	agent.toolErrMessage = "越界"
+	resp, err = caller.CallTool(ctx, "toolcall-node", "daedalus.fs", "read_file", `{"path":"/etc/shadow"}`)
+	if err != nil {
+		t.Fatalf("插件业务错误不该变成 RPC 错误: %v", err)
+	}
+	if got := fleet.ClassifyToolCall(resp, err); got != fleet.ToolCallToolFailed {
+		t.Errorf("插件自报错误归类 = %v, want %v", got, fleet.ToolCallToolFailed)
+	}
+}
+
+// registerOneNode 经真实 Register 把一台节点登记进 registry,Addr 即假 agent 的
+// 监听地址(node_id 由假 agent 按 agent_id 回写)。
+func registerOneNode(t *testing.T, addr, agentID string) *fleet.Registry {
+	t.Helper()
+	reg, err := fleet.OpenRegistry()
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	cfg := fleet.DialConfigFromEnv()
+	cfg.Addr = addr
+	node, err := fleet.RegisterNode(context.Background(), cfg, fleet.RegisterOptions{
+		AgentID:       agentID,
+		Kind:          objectmodel.MachineKindAgent,
+		Distro:        "ubuntu",
+		DistroVersion: "24.04",
+	})
+	if err != nil {
+		t.Fatalf("RegisterNode %s: %v", agentID, err)
+	}
+	if err := reg.Put(node); err != nil {
+		t.Fatalf("Put %s: %v", node.NodeID, err)
+	}
+	return reg
 }
 
 // registerFixtureMachines 经真实 Register 把 Plan 里的目标机登记进 registry

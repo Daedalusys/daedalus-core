@@ -10,7 +10,7 @@ retract [v0.1.0, v0.1.9]
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/Daedalusys/daedalus-sdk v0.5.1
+	github.com/Daedalusys/daedalus-sdk v0.6.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	google.golang.org/grpc v1.84.0
 )
