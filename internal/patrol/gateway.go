@@ -31,6 +31,8 @@ const (
 	reportFindingTool = "report_finding"
 	// maxToolNameLen 是 MCP 工具名上限;节点 id 与工具名都是外部输入,不能假设够短。
 	maxToolNameLen = 128
+	// maxToolNameSuffix 是去重序号上限(2..max-1):节点导出上千个同名工具不现实。
+	maxToolNameSuffix = 1000
 )
 
 // objectSchema 是节点没给 schema 或给了坏 schema 时的兜底:收下任何参数,
@@ -48,14 +50,16 @@ type Fleet interface {
 }
 
 // FindingSink 收本轮发现。是否落盘、落成什么形状由调用方决定。
+//
+// 并发契约:网关保证 Append 是串行调用(一次只有一条在写),实现方不需要自己加锁;
+// 但一个 sink 不能被多个网关共用 —— 串行化只在单个网关内成立。
 type FindingSink interface {
 	Append(finding Finding) error
 }
 
 // Gateway 是一轮巡检对一台机器开出的 MCP 服务。
 //
-// 生命周期:NewGateway → (SetToken) → Handler 挂上监听 → 本轮结束 Close。
-// 证据池只活在内存里,与发现本身一起交给调用方。
+// 生命周期 NewGateway → (SetToken) → Handler → Close;证据池只在内存里。
 type Gateway struct {
 	nodeID string
 	items  map[string]struct{}
@@ -70,6 +74,9 @@ type Gateway struct {
 	reported map[string]struct{}
 	closed   bool
 
+	// sinkMu 只罩住 sink.Append:证据池与去重表用 mu,两把锁互不嵌套。
+	sinkMu sync.Mutex
+
 	once     sync.Once
 	server   *mcp.Server
 	declared []agentv1.ToolDescriptor
@@ -82,8 +89,7 @@ type callRecord struct {
 	output string
 }
 
-// NewGateway 用本轮清单装配网关。清单只用来判 report_finding 的 item_id 是否合法,
-// 不构成工具白名单 —— 网关暴露哪些节点工具由 Fleet.ListTools 决定。
+// NewGateway 用本轮清单装配网关:清单只判 item_id 是否合法,不构成工具白名单。
 func NewGateway(nodeID string, items []Item, fleet Fleet, sink FindingSink) *Gateway {
 	ids := make(map[string]struct{}, len(items))
 	for _, it := range items {
@@ -102,8 +108,7 @@ func NewGateway(nodeID string, items []Item, fleet Fleet, sink FindingSink) *Gat
 // 只应出现在测试或单机演练里 —— 生产监听面由巡检二进制决定。
 func (g *Gateway) SetToken(token string) { g.token = token }
 
-// RecordCall 记一次工具返回,供证据校验。记录的是客户端看到的那份原文,
-// 两侧必须是同一份文本,否则「引用工具原文」就成了空话。
+// RecordCall 记一次工具返回供证据校验:记的必须是客户端看到的那份原文。
 func (g *Gateway) RecordCall(tool, output string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -130,8 +135,7 @@ func (g *Gateway) Handler() http.Handler {
 	return TokenAuth(h, g.token)
 }
 
-// Close 封住本轮:之后的调用一律回错,证据池清空。监听套接字与 MCP 会话归
-// 调用方的 http.Server 管,这里只收回内存态。
+// Close 封住本轮(之后的调用一律回错),监听面与会话归调用方的 http.Server。
 func (g *Gateway) Close() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -218,6 +222,9 @@ func (g *Gateway) buildServer() *mcp.Server {
 			continue
 		}
 		exposed := uniqueToolName(g.toolPrefix(), d.PluginId, d.ToolName, used)
+		if exposed == "" {
+			continue
+		}
 		used[exposed] = struct{}{}
 		srv.AddTool(&mcp.Tool{
 			Name:        exposed,
@@ -265,21 +272,30 @@ func (g *Gateway) checkFinding(f Finding) error {
 	if !validSeverity(f.Severity) {
 		return fmt.Errorf("severity %q 不在 {%s, %s, %s} 里", f.Severity, SeverityInfo, SeverityWarning, SeverityCritical)
 	}
+	// 「有问题」必须带证据:空数组不是「没有异议」,是把这个结论的举证责任放空了。
+	// ok 项允许零证据 —— 它说的是「看过,没问题」,本来就没有可贴的异常输出。
+	if f.Status != StatusOK && len(f.Evidence) == 0 {
+		return fmt.Errorf("status %q 的发现必须至少带一条 evidence:结论要有工具返回原文撑着", f.Status)
+	}
 	for i, ev := range f.Evidence {
-		// 空串是任何文本的子串:不单独拒掉就等于「零证据也能过」。
-		if ev.Output == "" {
+		// 空白串同样是任何文本的子串:不单独拒掉就等于「零证据也能过」。
+		if strings.TrimSpace(ev.Output) == "" {
 			return fmt.Errorf("evidence[%d].output 为空:证据必须是工具返回的原文", i)
+		}
+		tools, names := g.recordedTools()
+		if _, ok := tools[ev.Tool]; !ok {
+			return fmt.Errorf("evidence[%d].tool %q 不是本轮调用过的工具(本轮记录过: %s)",
+				i, ev.Tool, toolNames(names))
 		}
 		if !g.recorded(ev.Output) {
 			return fmt.Errorf("evidence[%d].output 不是本轮任何一次工具返回的子串(本轮记录过: %s)",
-				i, strings.Join(g.recordedTools(), ", "))
+				i, toolNames(names))
 		}
 	}
 	return nil
 }
 
-// commit 落一条发现。同一清单项一轮只收一条 —— 合并是调用方的事,网关只保证
-// 交出去的东西满足下游(发现文件)的唯一性 invariant,不让两遍报告把整轮写盘搞坏。
+// commit 落一条发现。同一项一轮只收一条,保证交出去的东西满足下游唯一性 invariant。
 func (g *Gateway) commit(f Finding) error {
 	if g.sink == nil {
 		return errors.New("网关未装配发现收集器")
@@ -296,7 +312,12 @@ func (g *Gateway) commit(f Finding) error {
 	g.reported[f.ItemID] = struct{}{}
 	g.mu.Unlock()
 
-	if err := g.sink.Append(f); err != nil {
+	// 串行化只在 Append 上:调用方(整文件读-改-写)不需要自己再加锁,而校验与去重
+	// 不必排在磁盘 IO 后面。
+	g.sinkMu.Lock()
+	err := g.sink.Append(f)
+	g.sinkMu.Unlock()
+	if err != nil {
 		// 收集失败时撤掉标记:本轮还能靠重报成功,而不是把这一项永远锁在「已报」。
 		g.mu.Lock()
 		delete(g.reported, f.ItemID)
@@ -337,14 +358,14 @@ func (g *Gateway) nodeToolHandler(exposed string, d *agentv1.ToolDescriptor) mcp
 		case resp.GetIsError():
 			detail := resp.GetErrorMessage()
 			if detail == "" {
-				detail = resp.GetContentJson()
+				detail = unwrapContentJSON(resp.GetContentJson())
 			}
 			if detail == "" {
 				detail = "插件报告错误但没有给出原因"
 			}
 			return fail(fmt.Sprintf("节点 %s 的工具 %s 报告错误: %s", g.nodeID, exposed, detail))
 		}
-		text := resp.GetContentJson()
+		text := unwrapContentJSON(resp.GetContentJson())
 		g.RecordCall(exposed, text)
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil
 	}
@@ -363,19 +384,23 @@ func (g *Gateway) recorded(output string) bool {
 	return false
 }
 
-// recordedTools 列出本轮记录过的工具名,只用于把「你引用的东西我这儿没有」
-// 讲清楚一点:模型看到自己调过哪些工具,才好决定引用哪一段原文。
-func (g *Gateway) recordedTools() []string {
+// recordedTools 返回本轮记录过的工具名:集合用于校验 evidence.tool,列表用于错误文案。
+func (g *Gateway) recordedTools() (map[string]struct{}, []string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	seen := make(map[string]struct{}, len(g.records))
+	set := make(map[string]struct{}, len(g.records))
 	for _, r := range g.records {
-		seen[r.tool] = struct{}{}
+		set[r.tool] = struct{}{}
 	}
-	if len(seen) == 0 {
-		return []string{"(无,本轮还没调用过任何工具)"}
+	return set, slices.Sorted(maps.Keys(set))
+}
+
+// toolNames 把空集合也渲染成一句人话,错误文案不留空白。
+func toolNames(names []string) string {
+	if len(names) == 0 {
+		return "(无,本轮还没调用过任何工具)"
 	}
-	return slices.Sorted(maps.Keys(seen))
+	return strings.Join(names, ", ")
 }
 
 func (g *Gateway) isClosed() bool {
@@ -386,8 +411,7 @@ func (g *Gateway) isClosed() bool {
 
 func (g *Gateway) sortedItemIDs() []string { return slices.Sorted(maps.Keys(g.items)) }
 
-// toolPrefix 是节点工具名的前缀:客户端只看得到名字,前缀是它辨认「哪台机器」的唯一线索。
-// 严格压成字母数字下划线,与工具名本身的字符集分开 —— 前缀要能当标识符读。
+// toolPrefix 是节点工具名前缀:客户端只看得到名字,前缀是它辨认「哪台机器」的唯一线索。
 func (g *Gateway) toolPrefix() string {
 	var b strings.Builder
 	for _, r := range g.nodeID {
@@ -404,7 +428,9 @@ func (g *Gateway) toolPrefix() string {
 	return b.String()
 }
 
-// uniqueToolName 处理两个插件暴露同名工具的情况:先补插件段,仍有冲突就加序号。
+// uniqueToolName 处理同名工具:先补插件段,仍有冲突就加序号。序号先让出位数再拼,
+// 否则满长 base 每次截断都回到自己;用尽返回空串由调用方跳过 —— 少一个工具好过两个
+// 不同工具顶同一个名字(调用会打到错的插件上)。
 func uniqueToolName(prefix, pluginID, toolName string, used map[string]struct{}) string {
 	base := clipName(prefix + "_" + sanitizeName(toolName))
 	if _, clash := used[base]; !clash {
@@ -414,12 +440,14 @@ func uniqueToolName(prefix, pluginID, toolName string, used map[string]struct{})
 	if _, clash := used[base]; !clash {
 		return base
 	}
-	for i := 2; ; i++ {
-		candidate := clipName(fmt.Sprintf("%s_%d", base, i))
+	for i := 2; i < maxToolNameSuffix; i++ {
+		suffix := fmt.Sprintf("_%d", i)
+		candidate := clipNameN(base, maxToolNameLen-len(suffix)) + suffix
 		if _, clash := used[candidate]; !clash {
 			return candidate
 		}
 	}
+	return ""
 }
 
 // sanitizeName 把标识符压进 MCP 工具名允许的字符集(字母、数字与 _ - .)。
@@ -437,15 +465,40 @@ func sanitizeName(s string) string {
 }
 
 // clipName 截到 MCP 工具名上限。截断后仍可能重名,重名由调用方的序号兜底。
-func clipName(name string) string {
-	if len(name) <= maxToolNameLen {
+func clipName(name string) string { return clipNameN(name, maxToolNameLen) }
+
+// clipNameN 按给定上限截断;名字里的非 ASCII 已被压成 "_",不会截断在多字节字符中间。
+func clipNameN(name string, limit int) string {
+	if len(name) <= limit {
 		return name
 	}
-	return name[:maxToolNameLen]
+	return name[:limit]
 }
 
-// nodeInputSchema 决定工具的入参 schema:节点给的对象 schema 原样用,其余(空、
-// 坏 JSON、非 object)退回空对象 —— 坏 schema 不该让整轮巡检起不来,参数照旧透传。
+// unwrapContentJSON 把节点回的 MCP content 信封拆成模型能读的原文。
+//
+// 真实链路上 ContentJson 是 [{"type":"text","text":"..."}]:原样交给模型会让多行原文以转义
+// 形式出现,模型照抄的真换行反而不是它的子串。只有全是 text 块才拼接,否则退回整个信封。
+func unwrapContentJSON(contentJSON string) string {
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(contentJSON), &blocks); err != nil || len(blocks) == 0 {
+		return contentJSON
+	}
+	var b strings.Builder
+	for _, blk := range blocks {
+		if blk.Type != "text" {
+			return contentJSON
+		}
+		b.WriteString(blk.Text)
+	}
+	return b.String()
+}
+
+// nodeInputSchema 用节点给的对象 schema,其余(空、坏 JSON、非 object)退回空对象:
+// 坏 schema 不该让整轮巡检起不来。
 func nodeInputSchema(raw string) any {
 	if strings.TrimSpace(raw) == "" {
 		return json.RawMessage(objectSchema)

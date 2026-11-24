@@ -7,6 +7,7 @@ package patrol_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -89,13 +90,34 @@ func (f *fakeFleet) lastCall(t *testing.T) fakeCall {
 }
 
 // memSink 是发现收集器;"没有新增 finding" 是硬校验失败时唯一有意义的断言。
+// delay 用来放大「两个 Append 同时在写」的窗口,maxParallel 就是网关串行化契约的探针。
 type memSink struct {
 	mu       sync.Mutex
 	findings []patrol.Finding
 	err      error
+
+	callsMu     sync.Mutex
+	inFlight    int
+	maxInFlight int
+	delay       time.Duration
 }
 
 func (s *memSink) Append(f patrol.Finding) error {
+	s.callsMu.Lock()
+	s.inFlight++
+	if s.inFlight > s.maxInFlight {
+		s.maxInFlight = s.inFlight
+	}
+	s.callsMu.Unlock()
+	defer func() {
+		s.callsMu.Lock()
+		s.inFlight--
+		s.callsMu.Unlock()
+	}()
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
@@ -103,6 +125,12 @@ func (s *memSink) Append(f patrol.Finding) error {
 	}
 	s.findings = append(s.findings, f)
 	return nil
+}
+
+func (s *memSink) maxParallel() int {
+	s.callsMu.Lock()
+	defer s.callsMu.Unlock()
+	return s.maxInFlight
 }
 
 func (s *memSink) setErr(err error) {
@@ -168,12 +196,17 @@ func resultText(t *testing.T, res *mcp.CallToolResult) string {
 	return b.String()
 }
 
-// reportArgs 拼一份 report_finding 入参;evidence 的 output 由调用方给。
+// reportArgs 拼一份 report_finding 入参;evidence 的 output 由调用方给,工具名默认
+// 用测试里人工 RecordCall 的 "shell_exec"。
 func reportArgs(itemID, severity string, outputs ...string) map[string]any {
+	return reportArgsForTool("shell_exec", itemID, severity, outputs...)
+}
+
+func reportArgsForTool(tool, itemID, severity string, outputs ...string) map[string]any {
 	evidence := make([]map[string]any, 0, len(outputs))
 	for _, out := range outputs {
 		evidence = append(evidence, map[string]any{
-			"tool":       "shell_exec",
+			"tool":       tool,
 			"input":      `{"command":"df -h"}`,
 			"output":     out,
 			"returncode": 0,
@@ -341,31 +374,67 @@ func TestGateway_ReportFinding_SinkFailureAllowsRetry(t *testing.T) {
 	}
 }
 
-// 空串是任何文本的子串 —— 不单独拒掉就是「零证据也能过」的后门。
-func TestGateway_ReportFinding_RejectsEmptyEvidenceOutput(t *testing.T) {
+// 空串与纯空白都是任何文本的子串 —— 不单独拒掉就是「零证据也能过」的后门。
+func TestGateway_ReportFinding_RejectsBlankEvidenceOutput(t *testing.T) {
+	for _, blank := range []string{"", " \t ", "\n"} {
+		sink := &memSink{}
+		g := newGateway(t, testItems, &fakeFleet{}, sink)
+		s := connect(t, g.Handler())
+		// 记录里确实含这些空白字符:子串判定会放它们过去,只能靠 TrimSpace 拦。
+		g.RecordCall("shell_exec", "df -h\n \t \n")
+
+		res := callTool(t, s, "report_finding", reportArgs("disk-health", patrol.SeverityWarning, blank))
+		if !res.IsError {
+			t.Fatalf("空白证据 %q 必须被拒,实际放行:%s", blank, resultText(t, res))
+		}
+		if got := len(sink.all()); got != 0 {
+			t.Fatalf("空白证据 %q 的发现不能进 sink,实际进了 %d 条", blank, got)
+		}
+	}
+}
+
+// evidence.tool 是模型自报的,不核对就能把「另一件工具」的原文挂到这条结论下。
+func TestGateway_ReportFinding_RejectsUnrecordedTool(t *testing.T) {
 	sink := &memSink{}
 	g := newGateway(t, testItems, &fakeFleet{}, sink)
 	s := connect(t, g.Handler())
 	g.RecordCall("shell_exec", "df -h\n")
 
-	res := callTool(t, s, "report_finding", reportArgs("disk-health", patrol.SeverityWarning, ""))
-
+	res := callTool(t, s, "report_finding",
+		reportArgsForTool("never_called", "disk-health", patrol.SeverityWarning, "df -h"))
 	if !res.IsError {
-		t.Fatalf("空证据必须被拒,实际放行:%s", resultText(t, res))
+		t.Fatalf("没调用过的工具名必须被拒,实际放行:%s", resultText(t, res))
 	}
 	if got := len(sink.all()); got != 0 {
-		t.Fatalf("空证据的发现不能进 sink,实际进了 %d 条", got)
+		t.Fatalf("工具名不实的发现不能进 sink,实际进了 %d 条", got)
 	}
 }
 
-func TestGateway_ReportFinding_AllowsEmptyEvidence(t *testing.T) {
+// 「有问题」不带证据等于凭空报警:空数组不是「没有异议」,是放空了举证责任。
+func TestGateway_ReportFinding_RejectsProblemWithoutEvidence(t *testing.T) {
 	sink := &memSink{}
 	g := newGateway(t, testItems, &fakeFleet{}, sink)
 	s := connect(t, g.Handler())
 
-	res := callTool(t, s, "report_finding", reportArgs("disk-health", patrol.SeverityWarning))
+	res := callTool(t, s, "report_finding", reportArgs("disk-health", patrol.SeverityCritical))
+	if !res.IsError {
+		t.Fatalf("problem 发现不带证据必须被拒,实际放行:%s", resultText(t, res))
+	}
+	if got := len(sink.all()); got != 0 {
+		t.Fatalf("无证据的 problem 不能进 sink,实际进了 %d 条", got)
+	}
+}
+
+func TestGateway_ReportFinding_AllowsOKWithoutEvidence(t *testing.T) {
+	sink := &memSink{}
+	g := newGateway(t, testItems, &fakeFleet{}, sink)
+	s := connect(t, g.Handler())
+
+	args := reportArgs("disk-health", patrol.SeverityInfo)
+	args["status"] = patrol.StatusOK
+	res := callTool(t, s, "report_finding", args)
 	if res.IsError {
-		t.Fatalf("不带证据的发现应当放行(ok 项就是什么都没看到),实际被拒:%s", resultText(t, res))
+		t.Fatalf("ok 项允许零证据(本来就没有异常输出可贴),实际被拒:%s", resultText(t, res))
 	}
 	if got := len(sink.all()); got != 1 {
 		t.Fatalf("期望 1 条发现,实际 %d 条", got)
@@ -404,11 +473,123 @@ func TestGateway_NodeToolExposedAndArgumentsPassThrough(t *testing.T) {
 		t.Fatalf("参数没有原样透传: %+v", call)
 	}
 
-	// 真调用返回的内容同样进证据池:模型可以引用刚看到的那段原文。
+	// 真调用返回的内容同样进证据池:模型可以引用刚看到的那段原文(工具名用暴露名)。
 	report := callTool(t, s, "report_finding",
-		reportArgs("disk-health", patrol.SeverityWarning, "/dev/vda1 40G 3G 35G 9%"))
+		reportArgsForTool("lab_a_shell_exec", "disk-health", patrol.SeverityWarning, "/dev/vda1 40G 3G 35G 9%"))
 	if report.IsError {
 		t.Fatalf("引用节点原文证据必须放行:%s", resultText(t, report))
+	}
+}
+
+// 真实链路的 ContentJson 是 MCP content 信封;网关必须交解包后的原文,否则模型
+// 照抄的真换行不是信封 JSON 的子串(被误拒),邮件里贴出来的也是 \n 转义串。
+func TestGateway_NodeToolUnwrapsContentEnvelope(t *testing.T) {
+	const inner = "df -h\nFilesystem Size Used Avail Use%\n/dev/vda1 40G 3G 35G 9% /\n"
+	envelope, err := json.Marshal([]map[string]string{
+		{"type": "text", "text": inner},
+		{"type": "text", "text": "(exit 0)\n"},
+	})
+	if err != nil {
+		t.Fatalf("拼信封失败: %v", err)
+	}
+	sink := &memSink{}
+	f := &fakeFleet{
+		tools: []agentv1.ToolDescriptor{shellToolDesc()},
+		resp:  &agentv1.CallToolResponse{ContentJson: string(envelope)},
+	}
+	g := newGateway(t, testItems, f, sink)
+	s := connect(t, g.Handler())
+
+	res := callTool(t, s, "lab_a_shell_exec", rawJSON(`{"command":"df -h"}`))
+	if res.IsError {
+		t.Fatalf("节点调用应当成功:%s", resultText(t, res))
+	}
+	if got, want := resultText(t, res), inner+"(exit 0)\n"; got != want {
+		t.Fatalf("模型应当看到解包后的原文\n got=%q\nwant=%q", got, want)
+	}
+
+	// 证据用真换行的多行原文(不是 JSON 转义形态),必须过。
+	line := "/dev/vda1 40G 3G 35G 9% /"
+	report := callTool(t, s, "report_finding",
+		reportArgsForTool("lab_a_shell_exec", "disk-health", patrol.SeverityWarning, line))
+	if report.IsError {
+		t.Fatalf("引用解包后的原文必须放行:%s", resultText(t, report))
+	}
+	finding := sink.all()[0]
+	if got := finding.Evidence[0].Output; got != line {
+		t.Fatalf("落库的证据应当是解包后的原文,实际 %q", got)
+	}
+}
+
+// 两条不同项的并发报告都得进 sink:sink 的串行由网关负责(实现方不该自己加锁)。
+func TestGateway_ConcurrentReportsBothRecorded(t *testing.T) {
+	sink := &memSink{delay: 20 * time.Millisecond}
+	g := newGateway(t, testItems, &fakeFleet{}, sink)
+	s := connect(t, g.Handler())
+	g.RecordCall("shell_exec", "df -h\n")
+
+	resCh := make(chan *mcp.CallToolResult, 2)
+	callErr := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, item := range []string{"disk-health", "service-failed"} {
+		wg.Add(1)
+		go func(item string) {
+			defer wg.Done()
+			res, err := s.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      "report_finding",
+				Arguments: reportArgs(item, patrol.SeverityWarning, "df -h"),
+			})
+			if err != nil {
+				callErr <- err
+				return
+			}
+			resCh <- res
+		}(item)
+	}
+	wg.Wait()
+	close(resCh)
+	close(callErr)
+
+	for err := range callErr {
+		t.Fatalf("并发调用在协议层失败: %v", err)
+	}
+	for res := range resCh {
+		if res.IsError {
+			t.Fatalf("并发报告不该有一条被拒:%s", resultText(t, res))
+		}
+	}
+	if got := len(sink.all()); got != 2 {
+		t.Fatalf("期望 sink 收到 2 条发现,实际 %d 条", got)
+	}
+	if got := sink.maxParallel(); got != 1 {
+		t.Fatalf("sink.Append 被并发调用了(%d 条同时在写):网关必须串行化,实现方不该自己加锁", got)
+	}
+}
+
+// 满长工具名撞名时,去重必须收敛:截断后不能回到同一个名字(否则序号循环永不结束)。
+func TestGateway_DuplicateToolNamesDoNotHang(t *testing.T) {
+	// 插件名与工具名同前缀:两级 base 截断后撞成同一个名字,必然落到序号分支。
+	longTool := func() agentv1.ToolDescriptor {
+		return agentv1.ToolDescriptor{
+			PluginId:        strings.Repeat("t", 10),
+			ToolName:        strings.Repeat("t", 40),
+			InputSchemaJson: `{"type":"object"}`,
+			ReadOnly:        true,
+		}
+	}
+	f := &fakeFleet{tools: []agentv1.ToolDescriptor{longTool(), longTool()}}
+	g := patrol.NewGateway(strings.Repeat("n", 120), testItems, f, &memSink{})
+	t.Cleanup(func() { _ = g.Close() })
+
+	done := make(chan error, 1)
+	go func() { done <- g.Prepare() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Prepare 失败: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("工具名去重没有收敛:满长名字下疑似死循环")
 	}
 }
 
