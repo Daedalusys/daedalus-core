@@ -86,15 +86,14 @@ A7 是本次返工的核心回归点：修复前，节点不可达的一轮会�
 
 **不能证明**：
 
-- 计划里 F1（failed 单元）/ F2（0.0.0.0 监听）/ F4a（/var/log 刷屏）/ F5（chronyd 停止）/
-  N1（崩溃循环 + StartLimit）/ N2（journal 灌 40MiB）/ N3（root 监听 18081）的逐项检出。
-  本轮清单只有 4 项，不覆盖这些轴；要复现需要按故障类型扩清单，属于巡检内容设计，
-  不是链路问题。
 - 镜像内安装：单元随镜像落位、`daedalus-patrol.timer` 的调度、`ProtectSystem=strict`
   沙箱下 opencode（Bun）能否启动 —— 这些要等镜像构建（CI），本机 CPU 缺 x86-64-v3
   跑不了镜像。
 - systemd 单元的 root 形态（`StateDirectory=`、`LoadCredential=`、`HOME` 只读挂载）。
 - 多节点：只跑了 `lab-a` 一台。
+
+> 逐项检出矩阵后来补上了：见 `matrix/README.md`（9 项故障清单，全故障 / 复跑 / 清故障 /
+> 恢复 / 稳态五轮，含 3 封邮件原文）。本节「不能证明」里的逐项检出一条已由该目录覆盖。
 
 ## 6. 现场命令
 

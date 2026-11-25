@@ -1,0 +1,58 @@
+[patrol]
+interval = "30m"
+node_timeout = "10m"
+
+[patrol.ai_client]
+command = ["opencode", "--standalone", "run", "--auto", "--format", "json"]
+
+[patrol.smtp]
+host = "127.0.0.1"
+port = 2530
+from = "patrol@daedalus.local"
+to = ["ops@daedalus.local"]
+starttls = false
+
+[[checklist.item]]
+id = "failed-units"
+prompt = "用 shell_exec 运行 systemctl --failed --no-legend --no-pager。输出里有任意一行就报 problem（证据贴该输出原文），输出为空就报 ok。"
+severity = "warning"
+
+[[checklist.item]]
+id = "rogue-listen-18080"
+prompt = "用 shell_exec 运行 ss -ltnp | grep ':18080'。有输出就报 problem（证据贴输出原文，含进程名），没有输出就报 ok。"
+severity = "critical"
+
+[[checklist.item]]
+id = "root-listen-18081"
+prompt = "用 shell_exec 运行 ss -ltnp | grep ':18081'。没有输出就报 ok；有输出就再用 shell_exec 运行 ps -o user,pid,cmd -p <pid> 查明属主与命令行，只要该监听属于 root 就报 problem（证据必须包含 ss 与 ps 两段原文）。"
+severity = "critical"
+
+[[checklist.item]]
+id = "big-tmp-file"
+prompt = "用 shell_exec 运行 ls -lh /tmp/lab-fault-big.bin。命令成功（文件存在）就报 problem 并贴输出原文；报 No such file 就报 ok。"
+severity = "warning"
+
+[[checklist.item]]
+id = "app-log-errors"
+prompt = "用 shell_exec 运行 grep -cE 'ERROR|FATAL' /var/log/lab-fault-app.log。命令失败或计数为 0 就报 ok；计数大于 0 就报 problem，证据贴 grep -c 的输出原文。"
+severity = "warning"
+
+[[checklist.item]]
+id = "journal-disk-errors"
+prompt = "用 shell_exec 运行 journalctl -p err --no-pager -n 200。输出里若含 I/O error 或 DISK FAILURE，就报 problem 并贴包含该关键字的原文行；否则报 ok。"
+severity = "critical"
+
+[[checklist.item]]
+id = "time-sync"
+prompt = "用 shell_exec 运行 systemctl is-active chronyd。输出是 active 就报 ok；其它输出就报 problem 并贴输出原文。"
+severity = "warning"
+
+[[checklist.item]]
+id = "crash-loop"
+prompt = "用 shell_exec 运行 journalctl -u lab-fault-crash --no-pager -n 50。输出里若含 'Start request repeated too quickly' 或 'status=78'，就报 problem（证据必须贴出解释失败原因的那几行原文）；否则报 ok。"
+severity = "critical"
+
+[[checklist.item]]
+id = "bulk-journal-readable"
+prompt = "用 shell_exec 运行 journalctl -t lab-fault-bulk --no-pager -n 4000。命令能正常返回就报 ok（这一项只关心大量普通文本不会中断巡检、不要把它当成问题），命令报错或无返回才报 problem 并贴错误原文。"
+severity = "info"

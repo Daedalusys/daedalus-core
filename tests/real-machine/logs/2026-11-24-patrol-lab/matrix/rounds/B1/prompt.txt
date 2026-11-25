@@ -1,0 +1,24 @@
+对节点 "lab-a-1e5d63a9" 做一轮只读巡检。只观察、只报告,不要执行任何修复动作。
+
+可用工具:名字以 lab_a_1e5d63a9_ 开头的节点工具(只读),以及 report_finding(交回发现)。
+每条清单项必须且只能调用一次 report_finding:status 用 problem 表示有问题、ok 表示看过没问题。
+problem 必须带 evidence:tool 填你调用的工具名,output 逐字复制本轮工具返回的一段原文。
+
+1. item_id = failed-units(基线严重级 warning)
+   用 shell_exec 运行 systemctl --failed --no-legend --no-pager。输出里有任意一行就报 problem（证据贴该输出原文），输出为空就报 ok。
+2. item_id = rogue-listen-18080(基线严重级 critical)
+   用 shell_exec 运行 ss -ltnp | grep ':18080'。有输出就报 problem（证据贴输出原文，含进程名），没有输出就报 ok。
+3. item_id = root-listen-18081(基线严重级 critical)
+   用 shell_exec 运行 ss -ltnp | grep ':18081'。没有输出就报 ok；有输出就再用 shell_exec 运行 ps -o user,pid,cmd -p <pid> 查明属主与命令行，只要该监听属于 root 就报 problem（证据必须包含 ss 与 ps 两段原文）。
+4. item_id = big-tmp-file(基线严重级 warning)
+   用 shell_exec 运行 ls -lh /tmp/lab-fault-big.bin。命令成功（文件存在）就报 problem 并贴输出原文；报 No such file 就报 ok。
+5. item_id = app-log-errors(基线严重级 warning)
+   用 shell_exec 运行 grep -cE 'ERROR|FATAL' /var/log/lab-fault-app.log。命令失败或计数为 0 就报 ok；计数大于 0 就报 problem，证据贴 grep -c 的输出原文。
+6. item_id = journal-disk-errors(基线严重级 critical)
+   用 shell_exec 运行 journalctl -p err --no-pager -n 200。输出里若含 I/O error 或 DISK FAILURE，就报 problem 并贴包含该关键字的原文行；否则报 ok。
+7. item_id = time-sync(基线严重级 warning)
+   用 shell_exec 运行 systemctl is-active chronyd。输出是 active 就报 ok；其它输出就报 problem 并贴输出原文。
+8. item_id = crash-loop(基线严重级 critical)
+   用 shell_exec 运行 journalctl -u lab-fault-crash --no-pager -n 50。输出里若含 'Start request repeated too quickly' 或 'status=78'，就报 problem（证据必须贴出解释失败原因的那几行原文）；否则报 ok。
+9. item_id = bulk-journal-readable(基线严重级 info)
+   用 shell_exec 运行 journalctl -t lab-fault-bulk --no-pager -n 4000。命令能正常返回就报 ok（这一项只关心大量普通文本不会中断巡检、不要把它当成问题），命令报错或无返回才报 problem 并贴错误原文。
