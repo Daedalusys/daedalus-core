@@ -64,6 +64,9 @@ CA 由本轮现场自签（同一张 CA 签服务端证书与客户端证书）�
 | A6 | journal-only 磁盘错误（F4b：`logger -p kern.err "I/O error, dev vdb, sector 2048 op 0x0"` + `DISK FAILURE …`） | 新增 1（journal-disk-errors），证据是 journal 原文 | 新增 1 · 邮件 1；邮件正文含 `DISK FAILURE predicted on /dev/vdb, array degraded, 3 of 5 members offline` | `mails/004.eml` |
 | A7 | `systemctl stop daedalus-agent`（节点不可达） | 本轮 exit 1；只报巡检失败，**不得**把上一轮两项误报「恢复」 | `新增 1 · 恶化 0 · 恢复 0 · 持续 2`；邮件只有「新增 patrol-self-check」；状态仍保留 service-health 与 journal-disk-errors | `mails/005.eml` |
 | A8 | `systemctl start daedalus-agent` | 恢复 1（patrol-self-check），旧问题不重报「新增」 | 恢复 1 · 持续 2 · 邮件 1 | `mails/006.eml` |
+| A7b | 再次 `stop daedalus-agent`（A7 的复跑） | 同 A7 | 同 A7（新增 1 · 恢复 0 · 持续 2，exit 1，邮件 1） | `mails/007.eml` |
+| A8b | 再次 `start daedalus-agent`（A8 的复跑） | 同 A8 | 同 A8（恢复 1 · 持续 2，邮件 1） | `mails/008.eml` |
+| A7b / A8b | 把 A7 / A8 再跑一遍（停 agent → 起 agent） | 与 A7 / A8 同形，证明可重复 | 失败轮 `新增 1 · 恢复 0 · 持续 2`；恢复轮 `恢复 1 · 持续 2` | `mails/007.eml` / `mails/008.eml` |
 
 A7 是本次返工的核心回归点：修复前，节点不可达的一轮会把上一轮所有活跃项算成「恢复」
 并覆盖状态；修复后失败轮只写「上一轮活跃项 ∪ 本轮 self-check」，邮件里不会出现假恢复。

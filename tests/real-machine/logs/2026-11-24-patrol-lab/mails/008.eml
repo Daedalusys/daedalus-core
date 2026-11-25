@@ -1,0 +1,15 @@
+From: patrol@daedalus.local
+To: ops@daedalus.local
+Subject: =?UTF-8?q?[Daedalus]_lab-a-1e5d63a9_=E5=B7=A1=E6=A3=80=EF=BC=9A=E6=96=B0?= =?UTF-8?q?=E5=A2=9E_0_=C2=B7_=E6=81=B6=E5=8C=96_0_=C2=B7_=E6=81=A2?= =?UTF-8?q?=E5=A4=8D_1?=
+Date: Wed, 25 Nov 2026 09:28:54 +0800
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+== 恢复 (1) ==
+
+* patrol-self-check [warning] 节点不可达,本轮没有拿到工具面: 拉取节点 lab-a-1e5d63a9 的工具清单失败: rpc error: code = Unavailable desc = connection error: desc = "transport: authentication handshake failed: read tcp 127.0.0.1:55640->127.0.0.1:9443: read: connection reset by peer"
+  工具: patrol
+  返回码: 0
+  证据原文:
+拉取节点 lab-a-1e5d63a9 的工具清单失败: rpc error: code = Unavailable desc = connection error: desc = "transport: authentication handshake failed: read tcp 127.0.0.1:55640->127.0.0.1:9443: read: connection reset by peer"

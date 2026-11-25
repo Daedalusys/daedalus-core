@@ -1,0 +1,1 @@
+daedalus-patrol: 本轮巡检失败: 拉取节点 lab-a-1e5d63a9 的工具清单失败: rpc error: code = Unavailable desc = connection error: desc = "transport: authentication handshake failed: read tcp 127.0.0.1:55640->127.0.0.1:9443: read: connection reset by peer"

@@ -1,0 +1,4 @@
+tag=A7b rc=1 secs=0 mails=1
+daedalus-patrol: 节点 lab-a-1e5d63a9 开始一轮巡检
+本轮变化:新增 1 · 恶化 0 · 恢复 0 · 持续 2
+daedalus-patrol: 本轮巡检失败: 拉取节点 lab-a-1e5d63a9 的工具清单失败: rpc error: code = Unavailable desc = connection error: desc = "transport: authentication handshake failed: read tcp 127.0.0.1:55640->127.0.0.1:9443: read: connection reset by peer"

@@ -4,18 +4,12 @@
     "item_id": "journal-disk-errors",
     "status": "problem",
     "severity": "critical",
-    "summary": "journal 错误日志出现 DISK FAILURE 预测 (/dev/vdb 阵列降级,5 个成员中 3 个离线) 及 vdb 的 I/O error;另有 bootc 启动失败与 sshd 9443 连接失败。",
+    "summary": "err 日志含 DISK FAILURE 预测(/dev/vdb 阵列降级,5 个成员中 3 个离线)及 I/O error,最高严重级",
     "evidence": [
       {
         "tool": "lab_a_1e5d63a9_shell_exec",
-        "input": "{\"command\": \"journalctl\", \"args\": [\"-p\", \"err\", \"--no-pager\", \"-n\", \"200\"]}",
-        "output": "Nov 25 01:20:20 lab-a lab-fault[16532]: DISK FAILURE predicted on /dev/vdb, array degraded, 3 of 5 members offline",
-        "returncode": 0
-      },
-      {
-        "tool": "lab_a_1e5d63a9_shell_exec",
-        "input": "{\"command\": \"journalctl\", \"args\": [\"-p\", \"err\", \"--no-pager\", \"-n\", \"200\"]}",
-        "output": "Nov 25 01:20:20 lab-a lab-fault[16533]: I/O error, dev vdb, sector 2048 op 0x0",
+        "input": "{\"command\":\"journalctl\",\"args\":[\"-p\",\"err\",\"--no-pager\",\"-n\",\"200\"]}",
+        "output": "DISK FAILURE predicted on /dev/vdb",
         "returncode": 0
       }
     ]
@@ -25,18 +19,12 @@
     "item_id": "service-health",
     "status": "problem",
     "severity": "warning",
-    "summary": "systemctl --failed 报告 2 个失败单元: bootc-fetch-apply-updates.service (loaded/failed) 与 lab-fault-crash.service (not-found/failed)。",
+    "summary": "systemctl --failed 返回 2 个失败单元:bootc-fetch-apply-updates.service 启动失败,lab-fault-crash.service 为 not-found 的失败残留单元",
     "evidence": [
       {
         "tool": "lab_a_1e5d63a9_shell_exec",
-        "input": "{\"command\": \"systemctl\", \"args\": [\"--failed\", \"--no-legend\", \"--no-pager\"]}",
-        "output": "● bootc-fetch-apply-updates.service loaded    failed failed Apply bootc updates",
-        "returncode": 0
-      },
-      {
-        "tool": "lab_a_1e5d63a9_shell_exec",
-        "input": "{\"command\": \"systemctl\", \"args\": [\"--failed\", \"--no-legend\", \"--no-pager\"]}",
-        "output": "● lab-fault-crash.service           not-found failed failed lab-fault-crash.service",
+        "input": "{\"command\":\"systemctl\",\"args\":[\"--failed\",\"--no-legend\",\"--no-pager\"]}",
+        "output": "not-found failed failed lab-fault-crash.service",
         "returncode": 0
       }
     ]
