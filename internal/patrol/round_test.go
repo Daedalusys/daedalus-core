@@ -8,6 +8,7 @@ package patrol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -87,6 +88,12 @@ func (m *mailSpy) count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.subjects)
+}
+
+func (m *mailSpy) setErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.err = err
 }
 
 func (m *mailSpy) lastBody() string {
@@ -562,11 +569,17 @@ func TestRunner_ExecPassesPromptAndWritesRoundDir(t *testing.T) {
 	}
 
 	changes, err := r.Run(context.Background())
-	if err != nil {
-		t.Fatalf("echo 正常退出的一轮不该失败: %v", err)
+	// echo 只回显,不交任何发现:成功退出但清单一项都没覆盖,按失败轮处理。
+	if err == nil {
+		t.Fatal("客户端没交任何发现时必须判本轮失败")
 	}
-	if len(changes.Added)+len(changes.Worsened)+len(changes.Recovered)+len(changes.Ongoing) != 0 {
-		t.Fatalf("没报发现的一轮不该有变化: %+v", changes)
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
+		t.Fatalf("缺项必须落成巡检级发现: %+v", changes)
+	}
+	for _, want := range []string{"disk-health", "log-health"} {
+		if !strings.Contains(changes.Added[0].Summary, want) {
+			t.Errorf("self-check 必须点名缺失项 %q: %s", want, changes.Added[0].Summary)
+		}
 	}
 
 	dir := roundDir(t, r.Config.RoundRoot)
@@ -768,5 +781,169 @@ func TestSelfCheckFinding_CarriesErrorText(t *testing.T) {
 	got := appendSelfCheck([]Finding{{ItemID: SelfCheckItemID, Node: "lab-a"}, {ItemID: "disk-health"}}, f)
 	if len(got) != 2 || got[len(got)-1].Summary != f.Summary {
 		t.Fatalf("追加巡检级发现后形状不对: %+v", got)
+	}
+}
+
+// newRoundRunner 装配一份各用例共用的 Runner;state/round 目录隔离在 root 下。
+func newRoundRunner(t *testing.T, root string, fleet Fleet, mail Sender) *Runner {
+	t.Helper()
+	return &Runner{
+		Config: RunConfig{
+			ChecklistPath: writeChecklist(t, twoItemChecklist),
+			StatePath:     filepath.Join(root, "state", roundTestNode+".json"),
+			RoundRoot:     filepath.Join(root, "round"),
+			NodeID:        roundTestNode,
+			AICommand:     []string{"opencode", "run"},
+			NodeTimeout:   30 * time.Second,
+		},
+		Fleet: fleet,
+		Mail:  mail,
+		Now:   func() time.Time { return time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC) },
+	}
+}
+
+func TestRunner_MissingChecklistItemFailsRound(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	mail := &mailSpy{}
+	r := newRoundRunner(t, root, &roundFleet{tools: []agentv1.ToolDescriptor{serviceTool()}, output: "ok\n"}, mail)
+	// 只报两项里的一项:少报等于没观测,不能算恢复。
+	r.runAI = newFakeAIClient(t, roundTestNode, []aiReport{
+		{itemID: "disk-health", status: StatusOK, severity: SeverityWarning, summary: "磁盘正常"},
+	})
+
+	changes, err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("清单项没报全必须判本轮失败")
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
+		t.Fatalf("缺项必须落成巡检级发现: %+v", changes)
+	}
+	if !strings.Contains(changes.Added[0].Summary, "log-health") {
+		t.Errorf("self-check 必须点名缺失项: %s", changes.Added[0].Summary)
+	}
+	if len(changes.Recovered) != 0 {
+		t.Fatalf("缺项不能被当成恢复: %+v", changes.Recovered)
+	}
+	// 失败轮不采信客户端的部分结论:状态只有 self-check。
+	st, err := LoadState(r.Config.StatePath)
+	if err != nil {
+		t.Fatalf("读状态失败: %v", err)
+	}
+	if len(st) != 1 {
+		t.Fatalf("失败轮状态应只有 self-check: %+v", st)
+	}
+	if _, ok := st[SelfCheckItemID]; !ok {
+		t.Fatalf("状态里缺 self-check: %+v", st)
+	}
+}
+
+func TestRunner_FailedRoundKeepsPreviousProblems(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	mail := &mailSpy{}
+	fleet := &roundFleet{tools: []agentv1.ToolDescriptor{serviceTool()}, output: "nginx.service failed\n"}
+	r := newRoundRunner(t, root, fleet, mail)
+	r.runAI = newFakeAIClient(t, roundTestNode, []aiReport{
+		{itemID: "disk-health", status: StatusProblem, severity: SeverityWarning, summary: "根分区余量 3%", evidence: true},
+		{itemID: "log-health", status: StatusOK, severity: SeverityInfo, summary: "日志无异常"},
+	})
+
+	// 第一轮:新增一个真问题。
+	changes, err := r.Run(context.Background())
+	if err != nil || len(changes.Added) != 1 || changes.Added[0].ItemID != "disk-health" {
+		t.Fatalf("第一轮应新增 disk-health: changes=%+v err=%v", changes, err)
+	}
+
+	// 第二轮:节点不可达。上一轮的问题必须保持活跃,不能被算成恢复。
+	fleet.listErr = status.Error(codes.Unavailable, "fleet: 节点 lab-a 未注册")
+	r.Now = func() time.Time { return time.Date(2026, 11, 25, 9, 30, 0, 0, time.UTC) }
+	changes, err = r.Run(context.Background())
+	if err == nil {
+		t.Fatal("节点不可达必须判本轮失败")
+	}
+	if len(changes.Recovered) != 0 {
+		t.Fatalf("失败轮不能产出恢复: %+v", changes.Recovered)
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
+		t.Fatalf("失败轮应新增 self-check: %+v", changes.Added)
+	}
+	var sawOld bool
+	for _, f := range changes.Ongoing {
+		if f.ItemID == "disk-health" {
+			sawOld = true
+		}
+	}
+	if !sawOld {
+		t.Fatalf("上一轮的问题必须仍在持续项里: %+v", changes.Ongoing)
+	}
+	if got := mail.count(); got != 2 {
+		t.Fatalf("失败轮也要发信(新增 self-check),累计 %d 封", got)
+	}
+	st, err := LoadState(r.Config.StatePath)
+	if err != nil {
+		t.Fatalf("读状态失败: %v", err)
+	}
+	if _, ok := st["disk-health"]; !ok {
+		t.Fatalf("失败轮不能覆盖上一轮活跃项: %+v", st)
+	}
+
+	// 第三轮:恢复连通且仍然有问题。旧问题应继续「持续」,而不是又变成新增;
+	// self-check 消失才算恢复。
+	fleet.listErr = nil
+	r.Now = func() time.Time { return time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC) }
+	changes, err = r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("第三轮不该失败: %v", err)
+	}
+	if len(changes.Added) != 0 {
+		t.Fatalf("同一问题不能重新变成新增: %+v", changes.Added)
+	}
+	if len(changes.Recovered) != 1 || changes.Recovered[0].ItemID != SelfCheckItemID {
+		t.Fatalf("self-check 消失才算恢复: %+v", changes.Recovered)
+	}
+	if got := mail.count(); got != 3 {
+		t.Fatalf("self-check 恢复应发一封信,累计 %d 封", got)
+	}
+}
+
+func TestRunner_MailFailureKeepsStateAndResends(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	mail := &mailSpy{}
+	mail.setErr(errors.New("smtp: connection refused"))
+	r := newRoundRunner(t, root, &roundFleet{tools: []agentv1.ToolDescriptor{serviceTool()}, output: "nginx.service failed\n"}, mail)
+	r.runAI = newFakeAIClient(t, roundTestNode, []aiReport{
+		{itemID: "disk-health", status: StatusProblem, severity: SeverityWarning, summary: "根分区余量 3%", evidence: true},
+		{itemID: "log-health", status: StatusOK, severity: SeverityInfo, summary: "日志无异常"},
+	})
+
+	// 投递失败:本轮报错,状态不前进(否则下一轮会把它当持续项,邮件永久丢)。
+	changes, err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("投递失败必须让本轮报错")
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != "disk-health" {
+		t.Fatalf("本轮变化应仍是新增: %+v", changes)
+	}
+	if _, statErr := os.Stat(r.Config.StatePath); !os.IsNotExist(statErr) {
+		t.Fatalf("投递失败时不该写状态文件,stat err=%v", statErr)
+	}
+
+	// 下一轮投递恢复:同一变化再次作为新增发出。
+	mail.setErr(nil)
+	r.Now = func() time.Time { return time.Date(2026, 11, 25, 9, 30, 0, 0, time.UTC) }
+	changes, err = r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("投递恢复后不该失败: %v", err)
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != "disk-health" {
+		t.Fatalf("上一轮没发出去的变化必须重发为新增: %+v", changes)
+	}
+	if got := mail.count(); got != 1 {
+		t.Fatalf("投递恢复后应发出 1 封,实际 %d", got)
 	}
 }

@@ -30,6 +30,12 @@ BindReadOnlyPaths=-/root/.config/opencode:/var/lib/daedalus-patrol/home/.config/
 LoadCredential=smtp-username:/etc/credstore/smtp-username
 LoadCredential=smtp-password:/etc/credstore/smtp-password
 
+# 一轮的最长寿命:必须大于 patrol.toml 里 node_timeout 的默认值(10m),否则正常轮次
+# 会被 systemd 杀掉;又必须有界 —— oneshot 挂死会让单元一直 active,而 timer 的
+# OnUnitActiveSec 从上次激活起算,卡住的单元会让后续轮次永远不触发。
+TimeoutStartSec=15min
+TimeoutStopSec=30s
+
 # 沙箱基线(与能力服务器同款)。不设 MemoryDenyWriteExecute:AI 客户端是 JIT 运行时,
 # 禁止写可执行内存会让它起不来。
 ProtectSystem=strict

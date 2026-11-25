@@ -8,6 +8,7 @@
 
 [patrol]
 interval = "30m"
+# node_timeout 只约束 AI 客户端的执行时长;网关在本机,投递有自己的连接时限。
 node_timeout = "10m"
 
 [patrol.ai_client]

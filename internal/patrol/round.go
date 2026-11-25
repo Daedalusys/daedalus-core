@@ -1,10 +1,8 @@
 // round.go 编排一轮巡检:清单 → 网关 → AI 客户端 → 分类 → 发信 → 状态。
 //
-// 只读纪律:节点侧只暴露只读工具,AI 客户端唯一的写出口是网关的 report_finding;
-// 本文件不发起任何修复动作。
-//
-// 失败也是发现:节点不可达、AI 客户端失败或超时、清单解析失败都产出一条巡检级发现
-// (SelfCheckItemID)并照常走分类与投递 —— 静默的空轮次会让人以为机器健康。
+// 只读纪律:节点侧只暴露只读工具,AI 客户端唯一的写出口是网关的 report_finding。
+// 失败也是发现:节点不可达、客户端失败或超时、清单解析失败、成功退出却没交齐清单项,
+// 都产出一条巡检级发现(SelfCheckItemID)并照常投递 —— 静默的空轮次会让人以为机器健康。
 package patrol
 
 import (
@@ -14,12 +12,15 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,8 +29,10 @@ const (
 	// 这一条由编排层直接追加。
 	SelfCheckItemID = "patrol-self-check"
 
-	// defaultNodeTimeout 是一轮(含 AI 客户端)的兜底时限;patrol.toml 可覆盖。
+	// defaultNodeTimeout 是 AI 客户端的兜底执行时限;patrol.toml 可覆盖。
 	defaultNodeTimeout = 10 * time.Minute
+	// shutdownTimeout 是收摊时等 handler 结束的时限(客户端已退出,正常毫秒级)。
+	shutdownTimeout = 10 * time.Second
 
 	findingsFileName = "findings.jsonl"
 	promptFileName   = "prompt.txt"
@@ -39,14 +42,16 @@ const (
 	// 没有占位符时提示词追加为最后一个位置参数(opencode run 的提示词就是位置参数)。
 	promptPlaceholder = "{prompt}"
 	roundTimeLayout   = "20060102T150405Z"
-	// roundDirAttempts 是同一秒内重跑的目录后缀尝试次数(定时器 30 分钟一轮,
-	// 撞秒只可能来自人工重跑)。
-	roundDirAttempts = 10
-	tokenBytes       = 32
-	// roundDirMode / roundFileMode:轮次目录里有本轮令牌与工具返回原文,同机不可读。
+	roundDirAttempts  = 10
+	tokenBytes        = 32
+
+	// 轮次目录里有本轮令牌与工具返回原文,同机不可读。
 	roundDirMode  = 0o700
 	roundFileMode = 0o600
 )
+
+// errIncompleteRound 标记「客户端正常退出,但本轮发现没覆盖全部启用项」。
+var errIncompleteRound = errors.New("本轮发现没有覆盖全部启用的清单项")
 
 // RunConfig 是一轮巡检的全部输入。Zero 值不可用:除 NodeTimeout 外都必填。
 type RunConfig struct {
@@ -59,19 +64,19 @@ type RunConfig struct {
 	NodeID    string
 	// AICommand 是 AI 客户端命令;命令里可写 {prompt} 占位符。
 	AICommand []string
-	// NodeTimeout 是一轮的整体时限,零值回落 defaultNodeTimeout。
+	// NodeTimeout 只约束 AI 客户端的执行时长,零值回落 defaultNodeTimeout;
+	// 网关起停与投递不在其内(前者在本机,后者有 SMTP 连接时限)。
 	NodeTimeout time.Duration
 }
 
 // Runner 跑一轮巡检。Fleet 是节点调用面(fleet.ToolCaller 满足它),
-// Mail 是投递面(mailer.Sender 满足它);两者都可以为 nil,但那样这一轮只落盘不发信。
+// Mail 是投递面(mailer.Sender 满足它);两者都可以为 nil,那样这一轮只落盘不发信。
 type Runner struct {
 	Config RunConfig
 	Fleet  Fleet
 	Mail   Sender
 	// Now 是时钟注入缝;零值用 time.Now。
 	Now func() time.Time
-
 	// runAI 是 AI 客户端的执行缝;零值走真实子进程(execAI)。
 	runAI aiClientRunner
 }
@@ -104,13 +109,8 @@ func (r *Runner) Run(ctx context.Context) (Changes, error) {
 
 	checklist, err := LoadChecklist(r.Config.ChecklistPath, r.Config.NodeID)
 	if err != nil {
-		dir, dirErr := r.createRoundDir()
-		if dirErr != nil {
-			return Changes{}, errors.Join(err, dirErr)
-		}
-		return r.finish(ctx, dir, []Finding{selfCheckFinding(r.Config.NodeID, "清单解析失败", err)}, err)
+		return r.roundFailed(ctx, "清单解析失败", err)
 	}
-
 	items := EnabledItems(checklist.Items)
 	if len(items) == 0 {
 		// 没有清单项就没有一轮巡检:不起网关、不拉客户端、不发信。
@@ -122,11 +122,31 @@ func (r *Runner) Run(ctx context.Context) (Changes, error) {
 		return Changes{}, err
 	}
 	findings, failure := r.inspect(ctx, dir, items)
-	if failure != nil {
-		findings = appendSelfCheck(findings, selfCheckFinding(r.Config.NodeID, failure.summary, failure.cause))
-		return r.finish(ctx, dir, findings, failure.cause)
+	if failure == nil {
+		// 成功轮也要核对覆盖:少报一项会被四分类当成「恢复」,那是假恢复。
+		if missing := missingItems(items, findings); len(missing) > 0 {
+			failure = &roundFailure{
+				summary: fmt.Sprintf("AI 客户端没交齐全清单项(缺:%s)", strings.Join(missing, ", ")),
+				cause:   errIncompleteRound,
+			}
+		}
 	}
-	return r.finish(ctx, dir, findings, nil)
+	if failure == nil {
+		return r.finish(ctx, dir, findings, nil, nil)
+	}
+	self := selfCheckFinding(r.Config.NodeID, failure.summary, failure.cause)
+	findings = appendSelfCheck(findings, self)
+	return r.finish(ctx, dir, findings, &self, failure.cause)
+}
+
+// roundFailed 把巡检自身的失败收成一条发现,并走同一条收尾路径。
+func (r *Runner) roundFailed(ctx context.Context, summary string, cause error) (Changes, error) {
+	dir, err := r.createRoundDir()
+	if err != nil {
+		return Changes{}, errors.Join(cause, err)
+	}
+	self := selfCheckFinding(r.Config.NodeID, summary, cause)
+	return r.finish(ctx, dir, []Finding{self}, &self, cause)
 }
 
 // inspect 起网关、跑客户端、收本轮发现。节点不可达时不再拉客户端:对着空工具面
@@ -146,7 +166,7 @@ func (r *Runner) inspect(ctx context.Context, dir string, items []Item) ([]Findi
 		return nil, &roundFailure{"节点不可达,本轮没有拿到工具面", err}
 	}
 
-	srv, endpoint, err := serveGateway(g)
+	srv, endpoint, serveErr, err := serveGateway(g)
 	if err != nil {
 		return nil, &roundFailure{"网关监听失败", err}
 	}
@@ -163,42 +183,97 @@ func (r *Runner) inspect(ctx context.Context, dir string, items []Item) ([]Findi
 
 	runCtx, cancel := context.WithTimeout(ctx, r.nodeTimeout())
 	defer cancel()
-	spec := aiClientRun{ConfigPath: cfgPath, Prompt: prompt, Dir: dir}
-	runErr := r.aiRunner()(runCtx, spec)
+	runErr := r.aiRunner()(runCtx, aiClientRun{ConfigPath: cfgPath, Prompt: prompt, Dir: dir})
 
-	// 先封网关再停监听:客户端已退出,这里只为消掉迟到的请求 —— 快照必须在
-	// 不可能再有 Append 之后取,否则一轮发现会漏掉或与快照竞争。
+	// 收摊顺序:等 handler 收尾 → 封网关(拒新发现)→ 取快照。客户端已退出,
+	// Shutdown 正常毫秒级返回,独立时限只防迟到的长连接。
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	_ = srv.Shutdown(shutCtx)
+	shutCancel()
 	_ = g.Close()
-	_ = srv.Close()
+	serveFailure := <-serveErr
+
 	if runErr != nil {
 		return buf.snapshot(), &roundFailure{"AI 客户端失败", runErr}
+	}
+	if serveFailure != nil && !errors.Is(serveFailure, http.ErrServerClosed) {
+		return buf.snapshot(), &roundFailure{"网关监听中断", fmt.Errorf("http.Serve: %w", serveFailure)}
 	}
 	return buf.snapshot(), nil
 }
 
 // finish 是本轮的唯一收尾:落发现 → 读回 → 分类 → 发信 → 写状态。
-// 投递失败不写状态:下一轮拿旧状态再算一次,邮件才有重发机会。
-func (r *Runner) finish(ctx context.Context, dir string, findings []Finding, roundErr error) (Changes, error) {
+//
+// self 非 nil 表示失败轮:本轮没有观测,不能把「本轮没出现」当成恢复,状态也不覆盖
+// 上一轮的活跃项。投递失败一律不写状态 —— 下一轮重算才能重发。
+func (r *Runner) finish(ctx context.Context, dir string, findings []Finding, self *Finding, roundErr error) (Changes, error) {
 	path := filepath.Join(dir, findingsFileName)
 	if err := WriteFindings(path, findings); err != nil {
-		return Changes{}, err
+		return Changes{}, errors.Join(roundErr, err)
 	}
 	stored, err := ReadFindings(path)
 	if err != nil {
-		return Changes{}, err
+		return Changes{}, errors.Join(roundErr, err)
 	}
 	prev, err := LoadState(r.Config.StatePath)
 	if err != nil {
-		return Changes{}, err
+		return Changes{}, errors.Join(roundErr, err)
 	}
-	changes := Classify(prev, stored)
+
+	var changes Changes
+	var next map[string]Finding
+	if self != nil {
+		changes = failureChanges(prev, *self)
+		next = failureState(prev, *self)
+	} else {
+		changes = Classify(prev, stored)
+		next = ActiveFindings(stored)
+	}
 	if err := r.notify(ctx, changes); err != nil {
-		return changes, err
+		return changes, errors.Join(roundErr, err)
 	}
-	if err := SaveState(r.Config.StatePath, ActiveFindings(stored)); err != nil {
-		return changes, err
+	if err := SaveState(r.Config.StatePath, next); err != nil {
+		return changes, errors.Join(roundErr, err)
 	}
 	return changes, roundErr
+}
+
+// failureChanges 只保留「上一轮活跃项仍活跃」与「self-check 若是新发现」。
+// 失败轮没有观测,把缺席算成恢复会让同一封邮件既报新增又报全部旧问题恢复。
+func failureChanges(prev map[string]Finding, self Finding) Changes {
+	var ch Changes
+	for _, id := range slices.Sorted(maps.Keys(prev)) {
+		ch.Ongoing = append(ch.Ongoing, prev[id])
+	}
+	if _, ok := prev[self.ItemID]; !ok {
+		ch.Added = append(ch.Added, self)
+	}
+	return ch
+}
+
+// failureState 保留上一轮活跃项并合入 self-check(同名覆盖):下一轮成功时
+// 旧问题仍是持续,不会又变成新增;self-check 消失才算恢复。
+func failureState(prev map[string]Finding, self Finding) map[string]Finding {
+	next := make(map[string]Finding, len(prev)+1)
+	maps.Copy(next, prev)
+	next[self.ItemID] = self
+	return next
+}
+
+// missingItems 返回清单里没有任何发现覆盖的 item_id(清单顺序)。网关已拒重复,
+// 所以只查缺项。
+func missingItems(items []Item, findings []Finding) []string {
+	seen := make(map[string]struct{}, len(findings))
+	for _, f := range findings {
+		seen[f.ItemID] = struct{}{}
+	}
+	var missing []string
+	for _, it := range items {
+		if _, ok := seen[it.ID]; !ok {
+			missing = append(missing, it.ID)
+		}
+	}
+	return missing
 }
 
 // notify 走统一的 Notify:空变化不发信,那条判断只该有一处。
@@ -214,19 +289,17 @@ func (r *Runner) notify(ctx context.Context, changes Changes) error {
 	return nil
 }
 
-// serveGateway 在回环上开一个随机端口,由本进程持有监听(网关不做任何进程的父进程)。
-func serveGateway(g *Gateway) (*http.Server, string, error) {
+// serveGateway 在回环上开随机端口;返回的 channel 收到 Serve 的结局(缓冲 1)。
+func serveGateway(g *Gateway) (*http.Server, string, <-chan error, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, "", fmt.Errorf("监听 127.0.0.1 失败: %w", err)
+		return nil, "", nil, fmt.Errorf("监听 127.0.0.1 失败: %w", err)
 	}
-	srv := &http.Server{
-		Handler:           g.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	go func() { _ = srv.Serve(ln) }()
-	// 监听地址是 127.0.0.1:<port>;令牌走 Authorization 头,不拼进 URL(会进日志)。
-	return srv, "http://" + ln.Addr().String() + "/mcp", nil
+	srv := &http.Server{Handler: g.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ln) }()
+	// 令牌走 Authorization 头,不拼进 URL(会进日志)。
+	return srv, "http://" + ln.Addr().String() + "/mcp", done, nil
 }
 
 // aiRunner 返回本轮使用的执行器:测试注入优先,否则走真实子进程。
@@ -302,8 +375,7 @@ func newRoundToken() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-// buildPrompt 把清单项拼成提示词。tools 是提示级建议,不是强制白名单 ——
-// 强制「某一项只能用某几个工具」需要额外协议,本轮不做。
+// buildPrompt 把清单项拼成提示词。tools 是提示级建议,不是强制白名单。
 func buildPrompt(nodeID string, items []Item) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "对节点 %q 做一轮只读巡检。只观察、只报告,不要执行任何修复动作。\n\n", nodeID)
@@ -333,8 +405,7 @@ func selfCheckFinding(nodeID, summary string, cause error) Finding {
 	}
 }
 
-// appendSelfCheck 保证巡检级发现唯一:清单里若恰好有同名项(清单规则允许这个 id),
-// 巡检自身的失败优先 —— 同一项一轮只能有一条发现,否则整轮落盘失败。
+// appendSelfCheck 保证巡检级发现唯一:清单里若恰好有同名项,巡检自身的失败优先。
 func appendSelfCheck(findings []Finding, self Finding) []Finding {
 	out := make([]Finding, 0, len(findings)+1)
 	for _, f := range findings {
@@ -345,17 +416,23 @@ func appendSelfCheck(findings []Finding, self Finding) []Finding {
 	return append(out, self)
 }
 
-// findingBuffer 是网关的发现收集器:网关保证 Append 串行,一轮结束后一次性写盘。
+// findingBuffer 是网关的发现收集器。网关保证 Append 串行,收摊时仍可能与迟到的
+// handler 交错 —— 加锁让快照与 Append 不可能并发。
 type findingBuffer struct {
+	mu       sync.Mutex
 	findings []Finding
 }
 
 func (b *findingBuffer) Append(f Finding) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.findings = append(b.findings, f)
 	return nil
 }
 
 func (b *findingBuffer) snapshot() []Finding {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return append([]Finding(nil), b.findings...)
 }
 

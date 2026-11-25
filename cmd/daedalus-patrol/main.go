@@ -40,7 +40,7 @@ const (
 	// defaultStateDir / defaultRoundRoot 与单元的 StateDirectory 同根。
 	defaultStateDir  = "/var/lib/daedalus-patrol/state"
 	defaultRoundRoot = "/var/lib/daedalus-patrol/round"
-	// defaultNodeTimeout 是一轮(含 AI 客户端)的兜底时限。
+	// defaultNodeTimeout 是 AI 客户端的兜底执行时限(不含网关起停与投递)。
 	defaultNodeTimeout = 10 * time.Minute
 	// SMTP 凭据来自 systemd 凭据目录;文件可为空(免密投递是合法形态)。
 	credentialsDirEnv      = "CREDENTIALS_DIRECTORY"
