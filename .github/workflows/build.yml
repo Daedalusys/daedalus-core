@@ -875,10 +875,35 @@ jobs:
       actions: read
     steps:
       - name: Checkout repository
+        id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # 自托管 runner 走的是跨境链路:一次 fetch 可能连续 60 秒零字节(2026-11-25
+        # 两次实测),actions/checkout 里那个 git 会被低速看门狗直接判死。这里把
+        # 失败让出来,交给下一步内联重试;成功时那一步自动跳过。
+        continue-on-error: true
         with:
           persist-credentials: false
           path: daedalus-core
+
+      - name: Checkout 重试(自托管 runner 的跨境链路会间歇断流)
+        if: steps.checkout.outcome == 'failure'
+        shell: bash
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            rm -rf daedalus-core
+            if git init -q daedalus-core &&
+               git -C daedalus-core remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" &&
+               git -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
+               git -C daedalus-core checkout -q --detach FETCH_HEAD; then
+              echo "checkout 成功(第 ${attempt} 次)"
+              exit 0
+            fi
+            echo "checkout 第 ${attempt} 次失败,10s 后重试" >&2
+            sleep 10
+          done
+          echo "checkout 三次都失败" >&2
+          exit 1
 
       - name: Download qcow2 artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -957,10 +982,35 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
+        id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # 自托管 runner 走的是跨境链路:一次 fetch 可能连续 60 秒零字节(2026-11-25
+        # 两次实测),actions/checkout 里那个 git 会被低速看门狗直接判死。这里把
+        # 失败让出来,交给下一步内联重试;成功时那一步自动跳过。
+        continue-on-error: true
         with:
           persist-credentials: false
           path: daedalus-core
+
+      - name: Checkout 重试(自托管 runner 的跨境链路会间歇断流)
+        if: steps.checkout.outcome == 'failure'
+        shell: bash
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            rm -rf daedalus-core
+            if git init -q daedalus-core &&
+               git -C daedalus-core remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" &&
+               git -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
+               git -C daedalus-core checkout -q --detach FETCH_HEAD; then
+              echo "checkout 成功(第 ${attempt} 次)"
+              exit 0
+            fi
+            echo "checkout 第 ${attempt} 次失败,10s 后重试" >&2
+            sleep 10
+          done
+          echo "checkout 三次都失败" >&2
+          exit 1
 
       - name: "KVM: boot -> bootc switch -> bootc rollback"
         # 脚本自己会派生一次性 verify 镜像(复刻 78-dev-user.sh 的凭据注入)——
@@ -1052,10 +1102,35 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
+        id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # 自托管 runner 走的是跨境链路:一次 fetch 可能连续 60 秒零字节(2026-11-25
+        # 两次实测),actions/checkout 里那个 git 会被低速看门狗直接判死。这里把
+        # 失败让出来,交给下一步内联重试;成功时那一步自动跳过。
+        continue-on-error: true
         with:
           persist-credentials: false
           path: daedalus-core
+
+      - name: Checkout 重试(自托管 runner 的跨境链路会间歇断流)
+        if: steps.checkout.outcome == 'failure'
+        shell: bash
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            rm -rf daedalus-core
+            if git init -q daedalus-core &&
+               git -C daedalus-core remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" &&
+               git -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
+               git -C daedalus-core checkout -q --detach FETCH_HEAD; then
+              echo "checkout 成功(第 ${attempt} 次)"
+              exit 0
+            fi
+            echo "checkout 第 ${attempt} 次失败,10s 后重试" >&2
+            sleep 10
+          done
+          echo "checkout 三次都失败" >&2
+          exit 1
 
       - name: "ISO: derive payload -> generic-iso -> live SSH 自证 + 无人值守装机"
         shell: bash
@@ -1221,10 +1296,35 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
+        id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # 自托管 runner 走的是跨境链路:一次 fetch 可能连续 60 秒零字节(2026-11-25
+        # 两次实测),actions/checkout 里那个 git 会被低速看门狗直接判死。这里把
+        # 失败让出来,交给下一步内联重试;成功时那一步自动跳过。
+        continue-on-error: true
         with:
           persist-credentials: false
           path: daedalus-core
+
+      - name: Checkout 重试(自托管 runner 的跨境链路会间歇断流)
+        if: steps.checkout.outcome == 'failure'
+        shell: bash
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            rm -rf daedalus-core
+            if git init -q daedalus-core &&
+               git -C daedalus-core remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" &&
+               git -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
+               git -C daedalus-core checkout -q --detach FETCH_HEAD; then
+              echo "checkout 成功(第 ${attempt} 次)"
+              exit 0
+            fi
+            echo "checkout 第 ${attempt} 次失败,10s 后重试" >&2
+            sleep 10
+          done
+          echo "checkout 三次都失败" >&2
+          exit 1
 
       - name: "Guest probes: systemd sandbox / audit inode / destructive / fs guard / readonly / inventory / copilot / bootc install+upgrade / blueprint-ui / host bootc / first run"
         # 十一个探针串行跑:共享一个 VERIFY_WORK 目录 —— 首个探针派生一次性 verify
