@@ -91,11 +91,46 @@ func startSMTPCatcher(t *testing.T) *smtpCatcher {
 	return c
 }
 
+// 自签证书是进程级的:x509 的系统根池在第一次加载后就固定下来,每个用例各造一份
+// 证书会让 `go test -count>1` 的第二次运行拿旧根池验新证书而假失败。
+var (
+	tlsCertOnce sync.Once
+	tlsCert     tls.Certificate
+	tlsCAPath   string
+	tlsCertDir  string
+)
+
+// TestMain 负责清理进程级证书目录。
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if tlsCertDir != "" {
+		_ = os.RemoveAll(tlsCertDir)
+	}
+	os.Exit(code)
+}
+
+// tlsTestCert 返回整个测试进程共用的自签证书与 CA 文件路径。
+func tlsTestCert(t *testing.T) (tls.Certificate, string) {
+	t.Helper()
+	tlsCertOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "mailer-tls-")
+		if err != nil {
+			t.Fatalf("创建测试证书目录失败: %v", err)
+		}
+		tlsCertDir = dir
+		tlsCert, tlsCAPath = selfSignedCertIn(t, dir)
+	})
+	if tlsCAPath == "" {
+		t.Fatal("测试证书未生成")
+	}
+	return tlsCert, tlsCAPath
+}
+
 // startTLSMTPCatcher 起一个宣告 STARTTLS 与 AUTH 的抓取器。自签证书经 SSL_CERT_FILE
 // 交给进程默认根池:不改投递实现,也不在生产代码里留测试用的信任开关。
 func startTLSMTPCatcher(t *testing.T) *smtpCatcher {
 	t.Helper()
-	cert, caPath := selfSignedCert(t)
+	cert, caPath := tlsTestCert(t)
 	t.Setenv("SSL_CERT_FILE", caPath)
 
 	c := startSMTPCatcher(t)
@@ -271,8 +306,8 @@ func testSender(c *smtpCatcher) *mailer.Sender {
 	}}
 }
 
-// selfSignedCert 生成 127.0.0.1 的自签证书,并把证书写进临时文件返回给调用方当根池。
-func selfSignedCert(t *testing.T) (tls.Certificate, string) {
+// selfSignedCertIn 生成 127.0.0.1 的自签证书,把证书写进 dir 当根池。
+func selfSignedCertIn(t *testing.T, dir string) (tls.Certificate, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -304,7 +339,7 @@ func selfSignedCert(t *testing.T) (tls.Certificate, string) {
 		t.Fatalf("加载自签证书失败: %v", err)
 	}
 
-	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	caPath := filepath.Join(dir, "ca.pem")
 	if err := os.WriteFile(caPath, certPEM, 0o600); err != nil {
 		t.Fatalf("写临时 CA 失败: %v", err)
 	}
