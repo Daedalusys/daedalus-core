@@ -59,7 +59,7 @@ const (
 var errIncompleteRound = errors.New("本轮发现没有覆盖全部启用的清单项")
 
 // errNoToolCalls 标记「客户端正常退出,但一次节点工具都没调」:没有观测就没有结论。
-var errNoToolCalls = errors.New("本轮没有调用任何节点工具")
+var errNoToolCalls = errors.New("本轮没有成功调用任何节点工具")
 
 // roundKeep 是每节点保留的轮次目录数(30 分钟一轮约等于 25 小时)。轮次目录里
 // 有生成的客户端配置(可能内联 provider 凭据),不设上限会让密钥无限期留存。
@@ -453,13 +453,16 @@ func buildPrompt(nodeID string, items []Item) string {
 // selfCheckFinding 把巡检自身的失败变成一条发现。证据是对端错误的原文
 // (巡检自己的事实,不是模型的转述),因此不过网关那道「工具返回子串」校验。
 func selfCheckFinding(nodeID, summary string, cause error) Finding {
+	// errors.Join 的 Error() 用换行连接各条 cause;原样拼进摘要会把邮件的一行
+	// 撕成两行(运维侧看到的是断行,不是一个结论)。
+	detail := strings.ReplaceAll(cause.Error(), "\n", "; ")
 	return Finding{
 		Node:     nodeID,
 		ItemID:   SelfCheckItemID,
 		Status:   StatusProblem,
 		Severity: SeverityWarning,
-		Summary:  summary + ": " + cause.Error(),
-		Evidence: []Evidence{{Tool: "patrol", Output: cause.Error()}},
+		Summary:  summary + ": " + detail,
+		Evidence: []Evidence{{Tool: "patrol", Output: detail}},
 	}
 }
 

@@ -1189,6 +1189,9 @@ func TestRunner_MissingItemsAndNoToolCallsBothReported(t *testing.T) {
 	if !strings.Contains(summary, "log-health") || !strings.Contains(summary, "没有任何观测") {
 		t.Fatalf("摘要要同时点名缺项与「没有观测」,实际:%q", summary)
 	}
+	if strings.ContainsAny(summary, "\n\r") {
+		t.Fatalf("self-check 摘要必须是单行(errors.Join 的换行要压平),实际:%q", summary)
+	}
 }
 
 // 轮次目录只保留最近 keep 个:旧目录里有生成的客户端配置(可能内联凭据),

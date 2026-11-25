@@ -30,15 +30,24 @@ ExecStart=/usr/local/bin/daedalus-patrol run --node ${DAEDALUS_PATROL_NODE}
 # 现场表现为「所有节点都未注册」。
 StateDirectory=daedalus-patrol daedalus
 Environment=HOME=/var/lib/daedalus-patrol/home
+# 客户端建的文件里可能有节点工具返回的原文(会话库、日志):umask 收紧到 0077,
+# 让它们与轮次目录一样「同机不可读」。不给 StateDirectoryMode —— 同一个
+# StateDirectory 里的 daedalus 目录要留给别的组件(1777 的子目录要能被遍历),
+# 收紧父目录会把它们一起锁死。
+UMask=0077
+# 客户端的数据目录每轮重建:会话库与日志没有跨轮价值,留着只会无界增长
+# (auth.json 每次都重新拷贝,旧副本也不会残留)。每轮重建也让「数据目录必须可写」
+# 这件事收敛成本单元自己建的目录,不受上一次运行留下的状态影响。
+ExecStartPre=/bin/rm -rf /var/lib/daedalus-patrol/home/.local/share/opencode
 ExecStartPre=/bin/mkdir -p /var/lib/daedalus-patrol/home/.config /var/lib/daedalus-patrol/home/.local/share/opencode
 # 全局配置只读挂载:客户端要读 model / provider / 插件清单,但不该改宿主的配置。
 # 注意 provider 块里的内联 apiKey 会被 CLI 抄进轮次目录(轮次目录 0700,只保留最近
 # 50 轮);不想留这份副本就把凭据放 auth.json,provider 只写 baseURL。
 BindReadOnlyPaths=-/root/.config/opencode:/var/lib/daedalus-patrol/home/.config/opencode
 # 凭据(auth.json)在宿主的数据目录里。整目录不能只读挂(见上),所以把凭据文件
-# 复制进单元自己的可写数据目录;源文件不存在时忽略 —— 用内联 provider 凭据的部署没有它。
-ExecStartPre=-/bin/cp -f /root/.local/share/opencode/auth.json /var/lib/daedalus-patrol/home/.local/share/opencode/auth.json
-ExecStartPre=-/bin/chmod 600 /var/lib/daedalus-patrol/home/.local/share/opencode/auth.json
+# 复制进单元自己的可写数据目录。源文件不存在不算错(用内联 provider 凭据的部署
+# 没有它);但源在而复制失败要报错 —— 那种情况必须被看见,不能降级成匿名投递。
+ExecStartPre=/bin/sh -c 'if [ -f /root/.local/share/opencode/auth.json ]; then /bin/cp -f /root/.local/share/opencode/auth.json /var/lib/daedalus-patrol/home/.local/share/opencode/auth.json || exit 1; /bin/chmod 600 /var/lib/daedalus-patrol/home/.local/share/opencode/auth.json; fi' 
 
 # SMTP 凭据经凭据目录传递,内容可以为空(免密投递)。文件缺失时本单元拒绝启动 ——
 # 凭据缺失要被看见,而不是悄悄换成匿名投递。
