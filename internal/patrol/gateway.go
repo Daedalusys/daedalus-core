@@ -412,9 +412,13 @@ func (g *Gateway) isClosed() bool {
 func (g *Gateway) sortedItemIDs() []string { return slices.Sorted(maps.Keys(g.items)) }
 
 // toolPrefix 是节点工具名前缀:客户端只看得到名字,前缀是它辨认「哪台机器」的唯一线索。
-func (g *Gateway) toolPrefix() string {
+func (g *Gateway) toolPrefix() string { return nodeToolPrefix(g.nodeID) }
+
+// nodeToolPrefix 把节点 id 压成工具名前缀。提示词里要告诉客户端「工具以哪个前缀开头」,
+// 与网关暴露工具用的是同一份规则。
+func nodeToolPrefix(nodeID string) string {
 	var b strings.Builder
-	for _, r := range g.nodeID {
+	for _, r := range nodeID {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
 			b.WriteRune(r)

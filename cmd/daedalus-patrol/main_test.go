@@ -5,11 +5,14 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	sdkversion "github.com/Daedalusys/daedalus-sdk/version"
+
+	"github.com/Daedalusys/daedalus-core/internal/patrol"
 )
 
 func TestRun_Dispatch(t *testing.T) {
@@ -66,20 +69,6 @@ func TestRun_Dispatch(t *testing.T) {
 			wantOut:  []string{"disk-health", "disabled-one", "kvm-storage", "停用"},
 		},
 		{
-			name:     "run 只列启用项",
-			argv:     []string{"run", "--config", cfg, "--node", "lab-a"},
-			wantCode: exitOK,
-			wantOut:  []string{"disk-health", "kvm-storage"},
-			denyOut:  []string{"disabled-one"},
-		},
-		{
-			name:     "run 未知节点只跑全局启用项",
-			argv:     []string{"run", "--config", cfg, "--node", "lab-zzz"},
-			wantCode: exitOK,
-			wantOut:  []string{"disk-health"},
-			denyOut:  []string{"kvm-storage", "disabled-one"},
-		},
-		{
 			name:     "run 缺 --node 是用法错误",
 			argv:     []string{"run", "--config", cfg},
 			wantCode: exitUsage,
@@ -106,7 +95,7 @@ func TestRun_Dispatch(t *testing.T) {
 			name:     "清单文件不存在是运行期错误",
 			argv:     []string{"run", "--config", filepath.Join("testdata", "no-such-file.toml"), "--node", "lab-a"},
 			wantCode: exitRuntime,
-			wantErr:  []string{"清单"},
+			wantErr:  []string{"读取配置失败"},
 		},
 		{
 			name:     "未知旗标是用法错误",
@@ -150,5 +139,39 @@ func TestRun_Dispatch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRun_UnregisteredNodeFailsButRecordsFinding(t *testing.T) {
+	// 节点未注册就是节点不可达:本轮按运行期失败退出,但巡检级发现必须落盘 ——
+	// 「这台机器这轮没查成」也要有证据。SMTP 未配置,投递失败同样在本轮暴露。
+	t.Setenv("DAEDALUS_FLEET_DIR", t.TempDir())
+	roundRoot := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"run",
+		"--config", filepath.Join("testdata", "patrol.toml"),
+		"--node", "lab-a",
+		"--state-dir", t.TempDir(),
+		"--round-root", roundRoot,
+	}, &stdout, &stderr)
+	if code != exitRuntime {
+		t.Fatalf("退出码 = %d,期望 %d;stdout=%q stderr=%q", code, exitRuntime, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "本轮巡检失败") {
+		t.Errorf("stderr 必须点明本轮失败:\n%s", stderr.String())
+	}
+
+	found, err := filepath.Glob(filepath.Join(roundRoot, "*", "findings.jsonl"))
+	if err != nil || len(found) != 1 {
+		t.Fatalf("期望 1 份发现文件,实际 %v(err=%v)", found, err)
+	}
+	data, err := os.ReadFile(found[0])
+	if err != nil {
+		t.Fatalf("读发现文件失败: %v", err)
+	}
+	if !strings.Contains(string(data), patrol.SelfCheckItemID) {
+		t.Errorf("发现文件里必须有巡检级发现:\n%s", data)
 	}
 }
