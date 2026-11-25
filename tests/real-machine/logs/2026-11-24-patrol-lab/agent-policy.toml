@@ -1,0 +1,5 @@
+# 协调方靶场策略:只开巡检需要的只读面(写工具即使写进来也会被 ReadOnlyHint 闸掉)。
+[remote_tools]
+"daedalus.shell"   = ["shell_exec"]
+"daedalus.service" = ["service.query", "service.list"]
+"daedalus.fs"      = ["read_file", "list_dir"]

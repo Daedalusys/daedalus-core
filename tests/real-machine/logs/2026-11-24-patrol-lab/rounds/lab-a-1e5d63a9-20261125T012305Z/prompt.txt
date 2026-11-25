@@ -1,0 +1,14 @@
+对节点 "lab-a-1e5d63a9" 做一轮只读巡检。只观察、只报告,不要执行任何修复动作。
+
+可用工具:名字以 lab_a_1e5d63a9_ 开头的节点工具(只读),以及 report_finding(交回发现)。
+每条清单项必须且只能调用一次 report_finding:status 用 problem 表示有问题、ok 表示看过没问题。
+problem 必须带 evidence:tool 填你调用的工具名,output 逐字复制本轮工具返回的一段原文。
+
+1. item_id = service-health(基线严重级 warning)
+   用 shell_exec 运行 systemctl --failed --no-legend --no-pager。输出里有任意一行就报 problem（证据贴该输出原文），输出为空就报 ok。
+2. item_id = disk-health(基线严重级 warning)
+   用 shell_exec 运行 df -h /tmp。Use% 超过 85% 就报 problem（贴原文），否则报 ok。
+3. item_id = fault-file(基线严重级 warning)
+   用 shell_exec 运行 ls -lh /tmp/lab-fault-big.bin。命令成功（文件存在）就报 problem 并贴输出原文；报 No such file 就报 ok。
+4. item_id = journal-disk-errors(基线严重级 critical)
+   用 shell_exec 运行 journalctl -p err --no-pager -n 200。输出里若含 I/O error 或 DISK FAILURE，就报 problem 并贴包含该关键字的原文行；否则报 ok。

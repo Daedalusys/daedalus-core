@@ -1,0 +1,9 @@
+agent_id: lab-a
+control_plane_addr: https://control.daedalusys.local:7443
+cert_path: /etc/daedalus-agent/tls/agent.pem
+key_path: /etc/daedalus-agent/tls/agent.key
+ca_path: /etc/daedalus-agent/tls/ca.pem
+ca_key_path: /etc/daedalus-agent/tls/ca.key
+data_dir: /var/lib/daedalus-agent
+audit_dir: /var/log/daedalus-agent
+policy_path: /etc/daedalus-agent/policy.toml

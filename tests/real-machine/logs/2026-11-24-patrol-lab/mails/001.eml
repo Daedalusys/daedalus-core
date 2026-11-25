@@ -1,0 +1,36 @@
+From: patrol@daedalus.local
+To: ops@daedalus.local
+Subject: =?UTF-8?q?[Daedalus]_lab-a-1e5d63a9_=E5=B7=A1=E6=A3=80=EF=BC=9A=E6=96=B0?= =?UTF-8?q?=E5=A2=9E_1_=C2=B7_=E6=81=B6=E5=8C=96_0_=C2=B7_=E6=81=A2?= =?UTF-8?q?=E5=A4=8D_0?=
+Date: Wed, 25 Nov 2026 09:13:00 +0800
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+== 新增 (1) ==
+
+* service-health [warning] 2 个服务处于 failed 状态:bootc-fetch-apply-updates.service 与 lab-fault-crash.service(shell_exec 不允许 systemctl,改用 service_list 只读枚举确认)
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"systemctl","args":["--failed","--no-legend","--no-pager"]}
+  返回码: 1
+  证据原文:
+Unknown command verb 'systemctl'.
+  工具: lab_a_1e5d63a9_service.list
+  参数: {"filter":"*"}
+  返回码: 0
+  证据原文:
+    "name": "lab-fault-crash.service",
+    "desired_state": "",
+    "properties": {
+      "ActiveState": "failed",
+      "LoadState": "not-found",
+      "SubState": "failed"
+  工具: lab_a_1e5d63a9_service.list
+  参数: {"filter":"*"}
+  返回码: 0
+  证据原文:
+    "name": "bootc-fetch-apply-updates.service",
+    "desired_state": "",
+    "properties": {
+      "ActiveState": "failed",
+      "LoadState": "loaded",
+      "SubState": "failed"

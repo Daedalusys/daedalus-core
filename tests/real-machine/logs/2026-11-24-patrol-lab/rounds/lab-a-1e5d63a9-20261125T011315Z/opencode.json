@@ -1,0 +1,132 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permissions": [
+    {
+      "action": "*",
+      "resource": "*",
+      "effect": "deny"
+    },
+    {
+      "action": "patrol-node_*",
+      "resource": "*",
+      "effect": "allow"
+    }
+  ],
+  "mcp": {
+    "servers": {
+      "patrol-node": {
+        "type": "remote",
+        "url": "http://127.0.0.1:40009/mcp",
+        "oauth": false,
+        "codemode": false,
+        "headers": {
+          "Authorization": "Bearer b027c170d3128b233d39a97f49d8a7859d54fe508b89b99b88358d10d8281a92"
+        }
+      }
+    }
+  },
+  "model": "aigw-main/code-deep",
+  "small_model": "aigw-sub/code-fast",
+  "provider": {
+    "aigw-main": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "AI Gateway (main agent)",
+      "options": {
+        "baseURL": "http://llm.team.home.arpa/v1",
+        "apiKey": "sk-gw-63d3a410df9290d56cb05995047f56beb70de870914e710e",
+        "headers": {
+          "x-gw-agent": "omo-main"
+        }
+      },
+      "models": {
+        "code-deep": {
+          "name": "code-deep (weighted routing)",
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 400000,
+            "output": 128000
+          }
+        },
+        "code-fast": {
+          "name": "code-fast (weighted routing)",
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 150000,
+            "output": 128000
+          }
+        },
+        "code-reverse": {
+          "name": "code-reverse (weighted routing)",
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 400000,
+            "output": 128000
+          }
+        }
+      }
+    },
+    "aigw-sub": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "AI Gateway (sub agents)",
+      "options": {
+        "baseURL": "http://llm.team.home.arpa/v1",
+        "apiKey": "sk-gw-deef6be248bdb6091ba784a98f29a0716394057f93e5ec19",
+        "headers": {
+          "x-gw-agent": "omo-sub"
+        }
+      },
+      "models": {
+        "code-deep": {
+          "name": "code-deep (weighted routing)",
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        },
+        "code-fast": {
+          "name": "code-fast (weighted routing)",
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        }
+      }
+    },
+    "RainBowGate": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "RainbowGate",
+      "options": {
+        "baseURL": "https://rainbowgate.top/v1"
+      },
+      "models": {
+        "mimo-v2.6-flash": {
+          "name": "mimo-v2.6-flash",
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 32768,
+            "output": 4096
+          }
+        }
+      }
+    },
+    "Rinkoai": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Rinkoai",
+      "options": {
+        "baseURL": "https://api.rinko.ai/v1"
+      },
+      "models": {
+        "deepseek-v4.1-flash": {
+          "name": "deepseek-v4.1-flash",
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 1000000,
+            "output": 65536
+          }
+        }
+      }
+    }
+  }
+}

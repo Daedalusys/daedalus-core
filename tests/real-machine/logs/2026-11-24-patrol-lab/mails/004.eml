@@ -1,0 +1,16 @@
+From: patrol@daedalus.local
+To: ops@daedalus.local
+Subject: =?UTF-8?q?[Daedalus]_lab-a-1e5d63a9_=E5=B7=A1=E6=A3=80=EF=BC=9A=E6=96=B0?= =?UTF-8?q?=E5=A2=9E_1_=C2=B7_=E6=81=B6=E5=8C=96_0_=C2=B7_=E6=81=A2?= =?UTF-8?q?=E5=A4=8D_0?=
+Date: Wed, 25 Nov 2026 09:20:50 +0800
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+== 新增 (1) ==
+
+* journal-disk-errors [critical] journal 中出现 DISK FAILURE 预测(/dev/vdb 阵列降级,5 盘中 3 盘离线)与 vdb 的 I/O error。
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"journalctl","args":["-p","err","--no-pager","-n","200"]}
+  返回码: 0
+  证据原文:
+Nov 25 01:20:20 lab-a lab-fault[16532]: DISK FAILURE predicted on /dev/vdb, array degraded, 3 of 5 members offline

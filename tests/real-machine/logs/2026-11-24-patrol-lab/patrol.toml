@@ -1,0 +1,33 @@
+[patrol]
+interval = "30m"
+node_timeout = "10m"
+
+[patrol.ai_client]
+command = ["opencode", "--standalone", "run", "--auto", "--format", "json"]
+
+[patrol.smtp]
+host = "127.0.0.1"
+port = 2529
+from = "patrol@daedalus.local"
+to = ["ops@daedalus.local"]
+starttls = false
+
+[[checklist.item]]
+id = "service-health"
+prompt = "用 shell_exec 运行 systemctl --failed --no-legend --no-pager。输出里有任意一行就报 problem（证据贴该输出原文），输出为空就报 ok。"
+severity = "warning"
+
+[[checklist.item]]
+id = "disk-health"
+prompt = "用 shell_exec 运行 df -h /tmp。Use% 超过 85% 就报 problem（贴原文），否则报 ok。"
+severity = "warning"
+
+[[checklist.item]]
+id = "fault-file"
+prompt = "用 shell_exec 运行 ls -lh /tmp/lab-fault-big.bin。命令成功（文件存在）就报 problem 并贴输出原文；报 No such file 就报 ok。"
+severity = "warning"
+
+[[checklist.item]]
+id = "journal-disk-errors"
+prompt = "用 shell_exec 运行 journalctl -p err --no-pager -n 200。输出里若含 I/O error 或 DISK FAILURE，就报 problem 并贴包含该关键字的原文行；否则报 ok。"
+severity = "critical"

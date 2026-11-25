@@ -1,0 +1,16 @@
+From: patrol@daedalus.local
+To: ops@daedalus.local
+Subject: =?UTF-8?q?[Daedalus]_lab-a-1e5d63a9_=E5=B7=A1=E6=A3=80=EF=BC=9A=E6=96=B0?= =?UTF-8?q?=E5=A2=9E_0_=C2=B7_=E6=81=B6=E5=8C=96_0_=C2=B7_=E6=81=A2?= =?UTF-8?q?=E5=A4=8D_1?=
+Date: Wed, 25 Nov 2026 09:19:59 +0800
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+== 恢复 (1) ==
+
+* fault-file [warning] /tmp/lab-fault-big.bin 存在，1.2G，属主 daedalus，时间 Nov 25 01:14
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: ls -lh /tmp/lab-fault-big.bin
+  返回码: 0
+  证据原文:
+-rw-r--r--. 1 daedalus daedalus 1.2G Nov 25 01:14 /tmp/lab-fault-big.bin
