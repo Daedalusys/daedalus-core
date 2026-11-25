@@ -74,6 +74,9 @@ type smtpCatcher struct {
 	mu    sync.Mutex
 	seen  []string         // 收到过的命令动词,便于断言「没走到投递」
 	cert  *tls.Certificate // 非空时宣告并支持 STARTTLS/AUTH
+	// quitReply 非空时用它回应 QUIT(默认 221):用来验证「投递已完成后退出失败」
+	// 不会把送达改判成失败。
+	quitReply string
 }
 
 func startSMTPCatcher(t *testing.T) *smtpCatcher {
@@ -204,6 +207,10 @@ func (c *smtpCatcher) handle(rawConn net.Conn) {
 		case "NOOP":
 			reply("250 2.0.0 Ok")
 		case "QUIT":
+			if c.quitReply != "" {
+				reply(c.quitReply)
+				return
+			}
 			reply("221 2.0.0 Bye")
 			return
 		default:
@@ -430,8 +437,17 @@ func TestSender_Send_StartTLSAndAuth(t *testing.T) {
 	if !slices.Contains(catcher.commands(), "STARTTLS") {
 		t.Errorf("投递应走过 STARTTLS,实际命令: %v", catcher.commands())
 	}
+	if slices.Index(catcher.commands(), "STARTTLS") > slices.Index(catcher.commands(), "AUTH") {
+		t.Errorf("STARTTLS 必须先于 AUTH(否则凭据会明文上线),实际命令: %v", catcher.commands())
+	}
 	if !slices.Contains(catcher.commands(), "AUTH") {
 		t.Errorf("配了凭据就应认证,实际命令: %v", catcher.commands())
+	}
+	// AUTH 必须在 STARTTLS 之后:顺序反过来会把凭据以明文送出去。
+	cmds := catcher.commands()
+	startTLS, auth := slices.Index(cmds, "STARTTLS"), slices.Index(cmds, "AUTH")
+	if startTLS < 0 || auth < 0 || auth < startTLS {
+		t.Errorf("AUTH 必须发生在 STARTTLS 之后,实际命令: %v", cmds)
 	}
 }
 
@@ -451,5 +467,29 @@ func TestSender_Send_RefusesPlaintextCredentials(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "凭据") {
 		t.Errorf("错误应点明拒绝投递凭据,实际: %v", err)
+	}
+}
+
+// DATA 收尾成功后 QUIT 失败:信已经被对方收下,投递必须算成功 —— 报错会让调用方
+// 重发同一封通知(收件人收到两遍)。
+func TestSender_Send_QuitFailureAfterDeliveryIsNotAnError(t *testing.T) {
+	catcher := startSMTPCatcher(t)
+	catcher.quitReply = "500 5.5.1 不聊了"
+
+	s := &mailer.Sender{Config: mailer.Config{
+		Host: catcher.host(),
+		Port: catcher.port(),
+		From: "patrol@example.com",
+		To:   []string{"ops@example.com"},
+	}}
+	if err := s.Send(context.Background(), "主题", "正文"); err != nil {
+		t.Fatalf("DATA 已收尾,QUIT 失败不应算投递失败: %v", err)
+	}
+	got, ok := catcher.received()
+	if !ok {
+		t.Fatal("抓取器没收到邮件")
+	}
+	if !strings.Contains(got.data, "正文") {
+		t.Errorf("邮件正文缺内容:\n%s", got.data)
 	}
 }

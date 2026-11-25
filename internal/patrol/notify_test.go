@@ -70,10 +70,11 @@ func TestFormatMail_ThreeGroups(t *testing.T) {
 	ch := mailFixture()
 	subject, body := patrol.FormatMail("lab-a", ch)
 
-	for _, want := range []string{"lab-a", "新增 1", "恶化 1", "恢复 1"} {
-		if !strings.Contains(subject, want) {
-			t.Errorf("主题 %q 缺少 %q", subject, want)
-		}
+	// 整串钉住:前缀、全角冒号、` · ` 分隔符与「零组也要列出」都是收件人扫邮件时
+	// 依赖的形态,改坏任何一个都不该只是「子串还在」。
+	wantSubject := "[Daedalus] lab-a 巡检：新增 1 · 恶化 1 · 恢复 1"
+	if subject != wantSubject {
+		t.Errorf("主题 = %q, want %q", subject, wantSubject)
 	}
 
 	// 组标题与组顺序都钉住:邮件是给人按固定顺序扫的。
