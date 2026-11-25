@@ -38,6 +38,10 @@ UMask=0077
 # 客户端的数据目录每轮重建:会话库与日志没有跨轮价值,留着只会无界增长
 # (auth.json 每次都重新拷贝,旧副本也不会残留)。每轮重建也让「数据目录必须可写」
 # 这件事收敛成本单元自己建的目录,不受上一次运行留下的状态影响。
+# home 本身可能是 systemd 建 bind 目标点时顺手建的(0755,不受本单元 umask 影响):
+# 显式收紧一次,别让别的本机用户能穿过它去读 .config/opencode（宿主的全局配置里
+# 可能有内联 apiKey）。只 chmod home,不碰挂载点内部 —— 那会把模式改到宿主源目录上。
+ExecStartPre=/bin/chmod 700 /var/lib/daedalus-patrol/home
 ExecStartPre=/bin/rm -rf /var/lib/daedalus-patrol/home/.local/share/opencode
 ExecStartPre=/bin/mkdir -p /var/lib/daedalus-patrol/home/.config /var/lib/daedalus-patrol/home/.local/share/opencode
 # 全局配置只读挂载:客户端要读 model / provider / 插件清单,但不该改宿主的配置。
