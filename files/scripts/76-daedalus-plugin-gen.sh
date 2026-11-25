@@ -56,8 +56,9 @@ CAPS="fs shell pkg sysinfo service blueprint dupe diskclean organize trace proc 
 #   audit / audit-rotate / env / host-controller —— core 服务本体;
 #   blueprint-ui —— daedalus.blueprint 二进制的**另一种模式**(`daedalus-blueprint ui`,
 #   常驻监听 127.0.0.1:8787 供人看蓝图);它与 MCP 那一条共用同一份业务函数,但本身
-#   不经 manifest 渲染(ExecStart 写死在单元里),故同样必须排除,否则反向集合永远不等。
-CORE_UNITS="audit audit-rotate env host-controller blueprint-ui"
+#   不经 manifest 渲染(ExecStart 写死在单元里),故同样必须排除,否则反向集合永远不等;
+#   patrol —— 巡检 oneshot(core 自带二进制,不挂任何插件 manifest)。
+CORE_UNITS="audit audit-rotate env host-controller blueprint-ui patrol"
 
 fail() { echo "76-daedalus-plugin-gen: 错误: $*" >&2; exit 1; }
 

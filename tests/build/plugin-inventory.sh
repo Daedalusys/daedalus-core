@@ -14,7 +14,8 @@ set -euo pipefail
 # core 自身的单元不是插件,集合比对时必须排除,否则永远不等:
 #   daedalus-audit / daedalus-audit-rotate / daedalus-env / daedalus-host-controller
 #   daedalus-blueprint-ui —— daedalus.blueprint 二进制的常驻 UI 模式(非 manifest 渲染)
-CORE_UNITS="audit audit-rotate env host-controller blueprint-ui"
+#   daedalus-patrol —— core 巡检 oneshot(不挂任何插件 manifest)
+CORE_UNITS="audit audit-rotate env host-controller blueprint-ui patrol"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CAPS_SRC="$ROOT/files/scripts/76-daedalus-plugin-gen.sh"
 # 第三/四份来源的兄弟仓根。兄弟仓缺失(如单仓 clone)时两份各自降级为 NOTE,不失败。

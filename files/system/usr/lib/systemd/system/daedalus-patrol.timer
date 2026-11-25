@@ -1,0 +1,15 @@
+[Unit]
+Description=Daedalus 巡检定时器(默认不启用)
+
+[Timer]
+# 巡检周期以本单元为准:patrol.toml 的 [patrol].interval 只作配置参考,没有任何代码
+# 读它 —— systemd 是唯一调度者,两处口径不互相漂移。
+OnBootSec=10min
+OnUnitActiveSec=30m
+AccuracySec=1min
+Unit=daedalus-patrol.service
+
+[Install]
+# 镜像只安装单元,不 enable:巡检默认关闭,由运维显式
+# `systemctl enable --now daedalus-patrol.timer` 开启。
+WantedBy=timers.target

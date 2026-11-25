@@ -1,9 +1,8 @@
 // Package patrol 实现巡检子系统:清单模型、发现模型、跨轮状态、变化四分类,
-// 以及把一台机器的只读工具面开给 AI 客户端的一轮 MCP 网关。
+// 把一台机器的只读工具面开给 AI 客户端的一轮 MCP 网关,以及一轮的编排。
 //
-// 除网关那层 HTTP/MCP 之外,本包不碰网络与子进程 —— AI 客户端编排与 SMTP 传输
-// 在别处接入(本包只把变化渲染成邮件);数据面只有「读配置 / 算变化 / 落盘」三类动作,
-// 便于单独钉住语义。
+// 网关在同一进程内开回环 HTTP 监听;一轮编排(round.go)会 exec AI 客户端并读轮次目录。
+// SMTP 传输仍由装配层提供 —— 本包只把变化渲染成邮件,不解析也不验证投递参数。
 package patrol
 
 import (
@@ -109,6 +108,17 @@ func copyChecklist(c Checklist) Checklist {
 		}
 	}
 	return Checklist{Items: items}
+}
+
+// EnabledItems 过滤掉停用项:清单是配置,跑不跑看开关。
+func EnabledItems(items []Item) []Item {
+	out := make([]Item, 0, len(items))
+	for _, it := range items {
+		if it.Enabled {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 // LoadChecklist 读配置并返回某节点视角的合并清单 —— 一轮巡检的输入。
