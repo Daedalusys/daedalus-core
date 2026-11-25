@@ -12,7 +12,11 @@ interval = "30m"
 node_timeout = "10m"
 
 [patrol.ai_client]
-command = ["opencode", "--standalone", "run", "--auto", "--agent", "inspector", "--format", "json"]
+# 命令由运维定,换客户端不改代码。示例用 opencode:
+# 「除 MCP 工具外全部 deny」靠生成的客户端配置里的 permissions 数组(deny * → allow patrol-node_*),
+# 与 opencode 的版本语义绑定 —— 客户端需支持 V2 的 permissions 数组(用旧版 permission 的不行)。
+# 这里不写 --agent:默认 agent 名在客户端侧才存在,写死一个不存在的名字只会让它回落默认并打警告。
+command = ["opencode", "--standalone", "run", "--auto", "--format", "json"]
 
 [patrol.smtp]
 host = ""
