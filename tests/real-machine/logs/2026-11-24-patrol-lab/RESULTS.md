@@ -102,5 +102,9 @@ A7 是本次返工的核心回归点：修复前，节点不可达的一轮会�
 - 连节点：`gssh.sh 9601 '<cmd>'`（ProxyCommand 经 `Masterwet_Server` 跳板）。
 - 抓邮件：`smtp-sink.py <outdir> <port>`。
 
-`rounds/` 下每轮保留 `findings.jsonl` 与 `prompt.txt`；AI 客户端的 stdout 日志（每轮约
-200 KB）没有入库，正文只留结论所需的邮件与发现。
+`rounds/` 下每轮保留 `findings.jsonl`、`prompt.txt`、客户端 stdout/stderr 日志与当轮客户端
+配置 `opencode.json`。日志每轮约 100 KB，10 轮合计约 500 KB。
+
+`opencode.json` 里的 `apiKey` 与 `Authorization: Bearer <本轮令牌>` 已脱敏成 `REDACTED`：
+客户端配置会内联模型凭据与本轮网关令牌，直接入库等于把凭据发到公开仓库。下次采集时
+先脱敏再入库（`sed -E 's/("apiKey": ")[^"]*"/\1REDACTED"/; s/("Authorization": "Bearer )[^"]*/\1REDACTED/'`）。
