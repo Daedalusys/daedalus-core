@@ -827,6 +827,16 @@ func TestSelfCheckFinding_CarriesErrorText(t *testing.T) {
 	if len(f.Evidence) != 1 || !strings.Contains(f.Evidence[0].Output, "未注册") {
 		t.Fatalf("证据必须是错误原文: %+v", f.Evidence)
 	}
+	// 证据保留原文(多行也在),摘要压成一行:摘要进邮件是「一行一条」。
+	multi := selfCheckFinding("lab-a", "本轮不完整", errors.Join(
+		fmt.Errorf("本轮发现没有覆盖全部启用的清单项"),
+		fmt.Errorf("本轮没有成功调用任何节点工具")))
+	if strings.ContainsAny(multi.Summary, "\r\n") {
+		t.Fatalf("巡检级摘要必须单行: %q", multi.Summary)
+	}
+	if !strings.Contains(multi.Evidence[0].Output, "\n") {
+		t.Fatalf("证据要保留原文换行: %q", multi.Evidence[0].Output)
+	}
 	// 清单里若恰好有同名项,巡检自身的失败优先,避免同一轮两条同 id 落盘失败。
 	got := appendSelfCheck([]Finding{{ItemID: SelfCheckItemID, Node: "lab-a"}, {ItemID: "disk-health"}}, f)
 	if len(got) != 2 || got[len(got)-1].Summary != f.Summary {

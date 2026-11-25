@@ -301,7 +301,9 @@ func (g *Gateway) reportFinding(_ context.Context, _ *mcp.CallToolRequest, in re
 		ItemID:   in.ItemID,
 		Status:   in.Status,
 		Severity: in.Severity,
-		Summary:  in.Summary,
+		// 摘要会拼进邮件的 bullet:模型给多行文本就会把一条发现撕成两段。压平放在
+		// 唯一的写入口上,而不是只在巡检级发现那条路径上做一次。
+		Summary: oneLine(in.Summary),
 	}
 	for _, e := range in.Evidence {
 		f.Evidence = append(f.Evidence, Evidence{Tool: e.Tool, Input: e.Input, Output: e.Output, ReturnCode: e.ReturnCode})

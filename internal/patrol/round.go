@@ -452,17 +452,17 @@ func buildPrompt(nodeID string, items []Item) string {
 
 // selfCheckFinding 把巡检自身的失败变成一条发现。证据是对端错误的原文
 // (巡检自己的事实,不是模型的转述),因此不过网关那道「工具返回子串」校验。
+// 摘要压成一行:它要拼进邮件的 bullet,而 errors.Join 的 Error() 用换行连接各条
+// cause,原样拼进去会把一条发现撕成两段。证据侧保留原文 —— findings.jsonl 是 JSON,
+// 换行会被转义,不存在断行问题。
 func selfCheckFinding(nodeID, summary string, cause error) Finding {
-	// errors.Join 的 Error() 用换行连接各条 cause;原样拼进摘要会把邮件的一行
-	// 撕成两行(运维侧看到的是断行,不是一个结论)。
-	detail := strings.ReplaceAll(cause.Error(), "\n", "; ")
 	return Finding{
 		Node:     nodeID,
 		ItemID:   SelfCheckItemID,
 		Status:   StatusProblem,
 		Severity: SeverityWarning,
-		Summary:  summary + ": " + detail,
-		Evidence: []Evidence{{Tool: "patrol", Output: detail}},
+		Summary:  summary + ": " + oneLine(cause.Error()),
+		Evidence: []Evidence{{Tool: "patrol", Output: cause.Error()}},
 	}
 }
 

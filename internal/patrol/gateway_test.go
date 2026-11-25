@@ -281,6 +281,34 @@ func TestGateway_ReportFinding_AcceptsRealEvidence(t *testing.T) {
 	}
 }
 
+// 摘要会拼进邮件的一行一个 bullet:模型给多行文本必须被压平,否则一条发现被撕成两段。
+// 证据不受影响 —— 证据要逐字原文。
+func TestGateway_ReportFinding_FlattensMultilineSummary(t *testing.T) {
+	sink := &memSink{}
+	g := newGateway(t, testItems, &fakeFleet{}, sink)
+	s := connect(t, g.Handler())
+	g.RecordCall("shell_exec", "df -h\n/dev/vda1 40G 3G 35G 9% /\n")
+
+	args := reportArgs("disk-health", patrol.SeverityWarning, "/dev/vda1 40G 3G 35G 9% /")
+	args["summary"] = "根分区余量偏低\n建议清理 /var/log"
+	if res := callTool(t, s, "report_finding", args); res.IsError {
+		t.Fatalf("多行摘要不该被拒,实际被拒:%s", resultText(t, res))
+	}
+	got := sink.all()
+	if len(got) != 1 {
+		t.Fatalf("期望 sink 收到 1 条发现,实际 %d 条", len(got))
+	}
+	if strings.ContainsAny(got[0].Summary, "\n\r") {
+		t.Fatalf("摘要必须压成单行,实际:%q", got[0].Summary)
+	}
+	if !strings.Contains(got[0].Summary, "建议清理") {
+		t.Fatalf("压平不能丢内容,实际:%q", got[0].Summary)
+	}
+	if got[0].Evidence[0].Output != "/dev/vda1 40G 3G 35G 9% /" {
+		t.Fatalf("证据必须逐字原文,实际:%q", got[0].Evidence[0].Output)
+	}
+}
+
 func TestGateway_ReportFinding_SeverityWhitelist(t *testing.T) {
 	sink := &memSink{}
 	g := newGateway(t, testItems, &fakeFleet{}, sink)

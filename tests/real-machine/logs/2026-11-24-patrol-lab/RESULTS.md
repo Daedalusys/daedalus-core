@@ -93,7 +93,7 @@ A7 是本次返工的核心回归点：修复前，节点不可达的一轮会�
 - 镜像内安装：单元随镜像落位、`daedalus-patrol.timer` 的调度、`ProtectSystem=strict`
   沙箱下 opencode（Bun）能否启动 —— 这些要等镜像构建（CI），本机 CPU 缺 x86-64-v3
   跑不了镜像。
-- systemd 单元的 root 形态：`StateDirectory=`、`LoadCredential=`、`HOME` 只读挂载这些
+- systemd 单元的 root 形态：`StateDirectory=`、`LoadCredential=`、`.config` 只读挂载这些
   已由 `unit-smoke/` 覆盖；但**真实二进制在单元里跑**（`ExecStart=daedalus-patrol run`）
   仍未覆盖 —— 影子单元只换掉了 `ExecStart`。
 - 多节点：只跑了 `lab-a` 一台。
