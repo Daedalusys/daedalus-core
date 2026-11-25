@@ -890,19 +890,27 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          for attempt in 1 2 3; do
+          # 两条路各有各的坏法:直连会连续 60 秒零字节(git 的低速看门狗当场判死),
+          # 代理偶尔在 TLS 握手上被对端 reset(2026-11-25 08:32 实测)。交替着试 ——
+          # 偶数次用 `-c http.https://github.com.proxy=` 绕开代理直连,谁通都行。
+          delays=(0 10 20 30 60)
+          for attempt in 1 2 3 4 5; do
+            sleep "${delays[$((attempt-1))]}"
             rm -rf daedalus-core
-            if git init -q daedalus-core &&
+            extra=()
+            if (( attempt % 2 == 0 )); then
+              extra=(-c http.https://github.com.proxy=)
+            fi
+            if git "${extra[@]}" init -q daedalus-core &&
                git -C daedalus-core remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" &&
-               git -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
+               git "${extra[@]}" -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
                git -C daedalus-core checkout -q --detach FETCH_HEAD; then
-              echo "checkout 成功(第 ${attempt} 次)"
+              echo "checkout 成功(第 ${attempt} 次,${extra[*]:-默认路由})"
               exit 0
             fi
-            echo "checkout 第 ${attempt} 次失败,10s 后重试" >&2
-            sleep 10
+            echo "checkout 第 ${attempt} 次失败" >&2
           done
-          echo "checkout 三次都失败" >&2
+          echo "checkout 五次都失败" >&2
           exit 1
 
       - name: Download qcow2 artifact
@@ -997,19 +1005,27 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          for attempt in 1 2 3; do
+          # 两条路各有各的坏法:直连会连续 60 秒零字节(git 的低速看门狗当场判死),
+          # 代理偶尔在 TLS 握手上被对端 reset(2026-11-25 08:32 实测)。交替着试 ——
+          # 偶数次用 `-c http.https://github.com.proxy=` 绕开代理直连,谁通都行。
+          delays=(0 10 20 30 60)
+          for attempt in 1 2 3 4 5; do
+            sleep "${delays[$((attempt-1))]}"
             rm -rf daedalus-core
-            if git init -q daedalus-core &&
+            extra=()
+            if (( attempt % 2 == 0 )); then
+              extra=(-c http.https://github.com.proxy=)
+            fi
+            if git "${extra[@]}" init -q daedalus-core &&
                git -C daedalus-core remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" &&
-               git -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
+               git "${extra[@]}" -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
                git -C daedalus-core checkout -q --detach FETCH_HEAD; then
-              echo "checkout 成功(第 ${attempt} 次)"
+              echo "checkout 成功(第 ${attempt} 次,${extra[*]:-默认路由})"
               exit 0
             fi
-            echo "checkout 第 ${attempt} 次失败,10s 后重试" >&2
-            sleep 10
+            echo "checkout 第 ${attempt} 次失败" >&2
           done
-          echo "checkout 三次都失败" >&2
+          echo "checkout 五次都失败" >&2
           exit 1
 
       - name: "KVM: boot -> bootc switch -> bootc rollback"
@@ -1117,19 +1133,27 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          for attempt in 1 2 3; do
+          # 两条路各有各的坏法:直连会连续 60 秒零字节(git 的低速看门狗当场判死),
+          # 代理偶尔在 TLS 握手上被对端 reset(2026-11-25 08:32 实测)。交替着试 ——
+          # 偶数次用 `-c http.https://github.com.proxy=` 绕开代理直连,谁通都行。
+          delays=(0 10 20 30 60)
+          for attempt in 1 2 3 4 5; do
+            sleep "${delays[$((attempt-1))]}"
             rm -rf daedalus-core
-            if git init -q daedalus-core &&
+            extra=()
+            if (( attempt % 2 == 0 )); then
+              extra=(-c http.https://github.com.proxy=)
+            fi
+            if git "${extra[@]}" init -q daedalus-core &&
                git -C daedalus-core remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" &&
-               git -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
+               git "${extra[@]}" -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
                git -C daedalus-core checkout -q --detach FETCH_HEAD; then
-              echo "checkout 成功(第 ${attempt} 次)"
+              echo "checkout 成功(第 ${attempt} 次,${extra[*]:-默认路由})"
               exit 0
             fi
-            echo "checkout 第 ${attempt} 次失败,10s 后重试" >&2
-            sleep 10
+            echo "checkout 第 ${attempt} 次失败" >&2
           done
-          echo "checkout 三次都失败" >&2
+          echo "checkout 五次都失败" >&2
           exit 1
 
       - name: "ISO: derive payload -> generic-iso -> live SSH 自证 + 无人值守装机"
@@ -1311,19 +1335,27 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          for attempt in 1 2 3; do
+          # 两条路各有各的坏法:直连会连续 60 秒零字节(git 的低速看门狗当场判死),
+          # 代理偶尔在 TLS 握手上被对端 reset(2026-11-25 08:32 实测)。交替着试 ——
+          # 偶数次用 `-c http.https://github.com.proxy=` 绕开代理直连,谁通都行。
+          delays=(0 10 20 30 60)
+          for attempt in 1 2 3 4 5; do
+            sleep "${delays[$((attempt-1))]}"
             rm -rf daedalus-core
-            if git init -q daedalus-core &&
+            extra=()
+            if (( attempt % 2 == 0 )); then
+              extra=(-c http.https://github.com.proxy=)
+            fi
+            if git "${extra[@]}" init -q daedalus-core &&
                git -C daedalus-core remote add origin "https://github.com/${GITHUB_REPOSITORY}.git" &&
-               git -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
+               git "${extra[@]}" -C daedalus-core fetch -q --depth=1 --no-tags origin "${GITHUB_SHA}" &&
                git -C daedalus-core checkout -q --detach FETCH_HEAD; then
-              echo "checkout 成功(第 ${attempt} 次)"
+              echo "checkout 成功(第 ${attempt} 次,${extra[*]:-默认路由})"
               exit 0
             fi
-            echo "checkout 第 ${attempt} 次失败,10s 后重试" >&2
-            sleep 10
+            echo "checkout 第 ${attempt} 次失败" >&2
           done
-          echo "checkout 三次都失败" >&2
+          echo "checkout 五次都失败" >&2
           exit 1
 
       - name: "Guest probes: systemd sandbox / audit inode / destructive / fs guard / readonly / inventory / copilot / bootc install+upgrade / blueprint-ui / host bootc / first run"
