@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +56,13 @@ const (
 
 // errIncompleteRound 标记「客户端正常退出,但本轮发现没覆盖全部启用项」。
 var errIncompleteRound = errors.New("本轮发现没有覆盖全部启用的清单项")
+
+// errNoToolCalls 标记「客户端正常退出,但一次节点工具都没调」:没有观测就没有结论。
+var errNoToolCalls = errors.New("本轮没有调用任何节点工具")
+
+// roundKeep 是每节点保留的轮次目录数(30 分钟一轮约等于 25 小时)。轮次目录里
+// 有生成的客户端配置(可能内联 provider 凭据),不设上限会让密钥无限期留存。
+const roundKeep = 50
 
 // RunConfig 是一轮巡检的全部输入。Zero 值不可用:除 NodeTimeout 外都必填。
 type RunConfig struct {
@@ -125,13 +133,19 @@ func (r *Runner) Run(ctx context.Context) (Changes, error) {
 	if err != nil {
 		return Changes{}, err
 	}
-	findings, failure := r.inspect(ctx, dir, items)
+	findings, toolCalls, failure := r.inspect(ctx, dir, items)
 	if failure == nil {
 		// 成功轮也要核对覆盖:少报一项会被四分类当成「恢复」,那是假恢复。
 		if missing := missingItems(items, findings); len(missing) > 0 {
 			failure = &roundFailure{
 				summary: fmt.Sprintf("AI 客户端没交齐全清单项(缺:%s)", strings.Join(missing, ", ")),
 				cause:   errIncompleteRound,
+			}
+		} else if toolCalls == 0 {
+			// 项都报了、一次工具都没调:那些 ok 不是查出来的,是本轮没有观测。
+			failure = &roundFailure{
+				summary: "AI 客户端一次节点工具都没调,本轮没有任何观测",
+				cause:   errNoToolCalls,
 			}
 		}
 	}
@@ -155,34 +169,38 @@ func (r *Runner) roundFailed(ctx context.Context, summary string, cause error) (
 
 // inspect 起网关、跑客户端、收本轮发现。节点不可达时不再拉客户端:对着空工具面
 // 下结论只会产出无证据的噪音。
-func (r *Runner) inspect(ctx context.Context, dir string, items []Item) ([]Finding, *roundFailure) {
+func (r *Runner) inspect(ctx context.Context, dir string, items []Item) ([]Finding, int, *roundFailure) {
 	buf := &findingBuffer{}
 	g := NewGateway(r.Config.NodeID, items, r.Fleet, buf)
 	defer func() { _ = g.Close() }()
 
 	token, err := newRoundToken()
 	if err != nil {
-		return nil, &roundFailure{"本轮令牌生成失败", err}
+		return nil, 0, &roundFailure{"本轮令牌生成失败", err}
 	}
 	g.SetToken(token)
 
 	if err := g.Prepare(); err != nil {
-		return nil, &roundFailure{"节点不可达,本轮没有拿到工具面", err}
+		summary := "节点不可达,本轮没有拿到工具面"
+		if errors.Is(err, ErrNoRemoteTools) {
+			summary = "节点没有可远程调用的只读工具,本轮无法观测"
+		}
+		return nil, 0, &roundFailure{summary, err}
 	}
 
 	srv, endpoint, serveErr, err := serveGateway(g)
 	if err != nil {
-		return nil, &roundFailure{"网关监听失败", err}
+		return nil, 0, &roundFailure{"网关监听失败", err}
 	}
 	defer func() { _ = srv.Close() }()
 
 	cfgPath, err := WriteAIClientConfig(dir, endpoint, token)
 	if err != nil {
-		return nil, &roundFailure{"生成 AI 客户端配置失败", err}
+		return nil, 0, &roundFailure{"生成 AI 客户端配置失败", err}
 	}
 	prompt := buildPrompt(r.Config.NodeID, items)
 	if err := os.WriteFile(filepath.Join(dir, promptFileName), []byte(prompt), roundFileMode); err != nil {
-		return nil, &roundFailure{"写本轮提示词失败", err}
+		return nil, 0, &roundFailure{"写本轮提示词失败", err}
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, r.nodeTimeout())
@@ -194,16 +212,18 @@ func (r *Runner) inspect(ctx context.Context, dir string, items []Item) ([]Findi
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	_ = srv.Shutdown(shutCtx)
 	shutCancel()
+	// 计数必须在 Close 之前取:Close 会把证据池(连带调用记录)清掉。
+	calls := g.CallCount()
 	_ = g.Close()
 	serveFailure := <-serveErr
 
 	if runErr != nil {
-		return buf.snapshot(), &roundFailure{"AI 客户端失败", runErr}
+		return buf.snapshot(), calls, &roundFailure{"AI 客户端失败", runErr}
 	}
 	if serveFailure != nil && !errors.Is(serveFailure, http.ErrServerClosed) {
-		return buf.snapshot(), &roundFailure{"网关监听中断", fmt.Errorf("http.Serve: %w", serveFailure)}
+		return buf.snapshot(), calls, &roundFailure{"网关监听中断", fmt.Errorf("http.Serve: %w", serveFailure)}
 	}
-	return buf.snapshot(), nil
+	return buf.snapshot(), calls, nil
 }
 
 // finish 是本轮的唯一收尾:落发现 → 读回 → 分类 → 发信 → 写状态。
@@ -505,6 +525,7 @@ func (r *Runner) createRoundDir() (string, error) {
 		}
 		err := os.Mkdir(dir, roundDirMode)
 		if err == nil {
+			pruneRoundDirs(r.Config.RoundRoot, r.Config.NodeID, roundKeep)
 			return dir, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
@@ -512,6 +533,56 @@ func (r *Runner) createRoundDir() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("轮次目录 %s 已存在且加序号仍冲突", base)
+}
+
+// pruneRoundDirs 只保留最近 keep 个本节点的轮次目录。目录名以 UTC 时间戳结尾,
+// 字典序即时间序;别的节点的现场不碰。清理失败不影响本轮 —— 留一堆旧目录比
+// 因为清理失败停掉巡检轻得多。
+func pruneRoundDirs(root, nodeID string, keep int) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() && isRoundDirName(e.Name(), nodeID) {
+			names = append(names, e.Name())
+		}
+	}
+	if len(names) <= keep {
+		return
+	}
+	slices.Sort(names)
+	for _, name := range names[:len(names)-keep] {
+		_ = os.RemoveAll(filepath.Join(root, name))
+	}
+}
+
+// isRoundDirName 核对 name 是否真是本节点的轮次目录:<node>-<UTC 时间戳>[-<序号>]。
+// 只看字符串前缀不够 —— 节点 A 的 id 可能是节点 B 的 id 加一段后缀,
+// 「A-」会连 B 的现场一起算进来,清理时就把别人的证据删了。
+func isRoundDirName(name, nodeID string) bool {
+	rest, ok := strings.CutPrefix(name, nodeID+"-")
+	if !ok {
+		return false
+	}
+	const stampLen = len("20060102T150405")
+	if len(rest) < stampLen+1 || rest[stampLen] != 'Z' {
+		return false
+	}
+	if _, err := time.Parse("20060102T150405", rest[:stampLen]); err != nil {
+		return false
+	}
+	tail := rest[stampLen+1:]
+	if tail == "" {
+		return true
+	}
+	seq, ok := strings.CutPrefix(tail, "-")
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(seq)
+	return err == nil && n >= 2 && n < roundDirAttempts
 }
 
 func (r *Runner) now() time.Time {

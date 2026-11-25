@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -177,15 +179,62 @@ func newFakeAIClient(t *testing.T, nodeID string, reports []aiReport) aiClientRu
 				"severity": rep.severity,
 				"summary":  rep.summary,
 			}
+			// 真实模型报 ok 之前也查过机器:每次都调一次节点工具,只有报问题
+			// 时才把返回原文当证据贴上去。「一次都没调过」的形态由
+			// newFakeAIClientNoTools 单独覆盖。
+			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: nodeTool})
+			if err != nil {
+				t.Fatalf("调用节点工具 %s 失败: %v", nodeTool, err)
+			}
+			text := textOf(t, res)
 			if rep.evidence {
-				res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: nodeTool})
-				if err != nil {
-					t.Fatalf("调用节点工具 %s 失败: %v", nodeTool, err)
-				}
-				text := textOf(t, res)
 				args["evidence"] = []map[string]any{{"tool": nodeTool, "output": text}}
 			}
-			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: reportFindingTool, Arguments: args})
+			res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: reportFindingTool, Arguments: args})
+			if err != nil || res.IsError {
+				t.Fatalf("report_finding(%s) 失败: err=%v result=%s", rep.itemID, err, textOf(t, res))
+			}
+		}
+		return nil
+	}
+}
+
+// newFakeAIClientNoTools 造一个只交结论、不查机器的客户端:每项都报 ok,
+// 一次节点工具都不调。这是「静默的空轮次」的形状,本轮必须判失败。
+func newFakeAIClientNoTools(t *testing.T, nodeID string, reports []aiReport) aiClientRunner {
+	t.Helper()
+	return func(ctx context.Context, spec aiClientRun) error {
+		cfg, err := readAIClientConfig(spec.ConfigPath)
+		if err != nil {
+			t.Fatalf("读本轮客户端配置失败: %v", err)
+		}
+		server := cfg.MCP.Servers[aiServerName]
+		token, ok := strings.CutPrefix(server.Headers["Authorization"], "Bearer ")
+		if !ok || token == "" {
+			t.Fatalf("MCP server 没带本轮令牌: %+v", server.Headers)
+		}
+		session, err := mcp.NewClient(&mcp.Implementation{Name: "patrol-round-test", Version: "0"}, nil).
+			Connect(ctx, &mcp.StreamableClientTransport{
+				Endpoint:             server.URL,
+				HTTPClient:           &http.Client{Transport: bearerTransport{token: token}},
+				DisableStandaloneSSE: true,
+				MaxRetries:           -1,
+			}, nil)
+		if err != nil {
+			t.Fatalf("连接本轮网关失败: %v", err)
+		}
+		defer func() { _ = session.Close() }()
+
+		for _, rep := range reports {
+			res, err := session.CallTool(ctx, &mcp.CallToolParams{
+				Name: reportFindingTool,
+				Arguments: map[string]any{
+					"item_id":  rep.itemID,
+					"status":   rep.status,
+					"severity": rep.severity,
+					"summary":  rep.summary,
+				},
+			})
 			if err != nil || res.IsError {
 				t.Fatalf("report_finding(%s) 失败: err=%v result=%s", rep.itemID, err, textOf(t, res))
 			}
@@ -1031,3 +1080,118 @@ func TestRunner_CorruptStateQuarantinedAndRoundContinues(t *testing.T) {
 		t.Fatalf("持续项不该重复发信,实际累计 %d 封", got)
 	}
 }
+
+// 节点可达但零个只读工具:本轮必须失败并落一条 self-check —— 否则模型只剩
+// report_finding,每项都能报无证据的 ok,轮次以「全绿」收尾,把「没查」写成「健康」。
+func TestRunner_NodeWithoutReadOnlyToolsFails(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	mail := &mailSpy{}
+	r := &Runner{
+		Config: RunConfig{
+			ChecklistPath: writeChecklist(t, twoItemChecklist),
+			StatePath:     filepath.Join(root, "state", roundTestNode+".json"),
+			RoundRoot:     filepath.Join(root, "round"),
+			NodeID:        roundTestNode,
+			AICommand:     []string{"opencode", "run"},
+			NodeTimeout:   30 * time.Second,
+		},
+		Fleet: &roundFleet{}, // 零工具
+		Mail:  mail,
+	}
+	r.runAI = func(context.Context, aiClientRun) error {
+		t.Error("没有工具面时不该拉起 AI 客户端")
+		return nil
+	}
+
+	changes, err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("零工具节点必须让本轮失败,不能以全绿收尾")
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
+		t.Fatalf("失败轮应只报一条 self-check: %+v", changes)
+	}
+	if got := mail.count(); got != 1 {
+		t.Fatalf("失败也要发信,实际 %d 封", got)
+	}
+}
+
+// 一次节点工具都没调就交齐了 ok:这不是「查过了」,本轮必须按失败处理。
+func TestRunner_RoundWithoutToolCallsFails(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	mail := &mailSpy{}
+	r := &Runner{
+		Config: RunConfig{
+			ChecklistPath: writeChecklist(t, twoItemChecklist),
+			StatePath:     filepath.Join(root, "state", roundTestNode+".json"),
+			RoundRoot:     filepath.Join(root, "round"),
+			NodeID:        roundTestNode,
+			AICommand:     []string{"opencode", "run"},
+			NodeTimeout:   30 * time.Second,
+		},
+		Fleet: &roundFleet{tools: []agentv1.ToolDescriptor{serviceTool()}, output: "nginx.service failed\n"},
+		Mail:  mail,
+	}
+	// 两项都报 ok,但一次节点工具都没调:没有观测就没有结论。
+	r.runAI = newFakeAIClientNoTools(t, roundTestNode, []aiReport{
+		{itemID: "disk-health", status: StatusOK, severity: SeverityWarning, summary: "没查,但看着正常"},
+		{itemID: "log-health", status: StatusOK, severity: SeverityInfo, summary: "没查,但看着正常"},
+	})
+
+	changes, err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("零工具调用的轮次必须失败:ok 不能无观测地得出")
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
+		t.Fatalf("失败轮应只报一条 self-check: %+v", changes)
+	}
+}
+
+// 轮次目录只保留最近 keep 个:旧目录里有生成的客户端配置(可能内联凭据),
+// 不能无限期留存。前缀不同的节点目录不能被误删。
+func TestPruneRoundDirsKeepsNewestAndIgnoresOtherNodes(t *testing.T) {
+	root := t.TempDir()
+	mk := func(name string) {
+		t.Helper()
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatalf("建目录 %s 失败: %v", name, err)
+		}
+	}
+	for _, ts := range []string{"090000", "090100", "090200", "090300", "090400"} {
+		mk(roundTestNode + "-20261125T" + ts + "Z")
+	}
+	mk("other-node-20261125T090000Z")
+	// 节点 id 可能把本节点 id 当成短横线前缀:只按 "lab-a-" 前缀清理会连它的
+	// 现场一起删掉,所以这里必须按「时间戳 + 可选序号」的整段形状核对。
+	mk("lab-a-1aaa-20261125T090000Z")
+	mk("lab-a-notes")
+
+	pruneRoundDirs(root, roundTestNode, 2)
+
+	left, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("读目录失败: %v", err)
+	}
+	var got []string
+	for _, e := range left {
+		got = append(got, e.Name())
+	}
+	sort.Strings(got)
+	want := []string{
+		"lab-a-1aaa-20261125T090000Z",
+		"lab-a-20261125T090300Z",
+		"lab-a-20261125T090400Z",
+		"lab-a-notes",
+		"other-node-20261125T090000Z",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("保留结果 = %v, want %v", got, want)
+	}
+}
+
+// 节点可达但没有可远程调用的只读工具(白名单为空):本轮必须失败。
+// 否则模型只剩 report_finding,每项都能报无证据的 ok,轮次以「全绿」收尾 ——
+// 那正是「静默的空轮次让人以为机器健康」。

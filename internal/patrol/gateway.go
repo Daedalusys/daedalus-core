@@ -42,6 +42,11 @@ const objectSchema = `{"type":"object"}`
 // falseHint 给 ToolAnnotations 的 *bool 字段取址(SDK 不导出取址助手)。
 var falseHint = false
 
+// ErrNoRemoteTools 表示节点可达但没有暴露任何可远程调用的只读工具:
+// 策略白名单为空,或插件都没自报 ReadOnlyHint。这种节点「本轮查不了任何东西」,
+// 必须当失败处理 —— 让模型对着空工具面逐项报 ok,等于把「没查」写成「健康」。
+var ErrNoRemoteTools = errors.New("节点没有暴露任何可远程调用的只读工具")
+
 // Fleet 是网关用到的节点调用面;fleet.ToolCaller 直接满足它。
 // 放行判定(远程白名单 ∩ 插件自报只读)在节点侧已经判过,网关不再判第二遍。
 type Fleet interface {
@@ -81,6 +86,9 @@ type Gateway struct {
 	server   *mcp.Server
 	declared []agentv1.ToolDescriptor
 	toolErr  error
+	// exposed 是本轮真正暴露给模型的节点工具数。它是「有没有观测面」的唯一判据:
+	// 声明了工具但全被过滤掉(非只读、重名、名字空)同样等于零工具。
+	exposed int
 }
 
 // callRecord 是一份网关交给客户端的工具返回原文;证据只能是其中某一份的子串。
@@ -108,6 +116,14 @@ func NewGateway(nodeID string, items []Item, fleet Fleet, sink FindingSink) *Gat
 // 只应出现在测试或单机演练里 —— 生产监听面由巡检二进制决定。
 func (g *Gateway) SetToken(token string) { g.token = token }
 
+// CallCount 返回本轮已记录的节点工具调用次数。一轮一次都没调,说明没有任何观测:
+// 那些「ok」结论不是查出来的,是编出来的。
+func (g *Gateway) CallCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.records)
+}
+
 // RecordCall 记一次工具返回供证据校验:记的必须是客户端看到的那份原文。
 func (g *Gateway) RecordCall(tool, output string) {
 	g.mu.Lock()
@@ -122,7 +138,14 @@ func (g *Gateway) RecordCall(tool, output string) {
 // 就该记成一条发现,静默空手开局会让「这台机器这轮没查」消失。
 func (g *Gateway) Prepare() error {
 	g.ensureServer()
-	return g.toolErr
+	if g.toolErr != nil {
+		return g.toolErr
+	}
+	if g.exposed == 0 {
+		return fmt.Errorf("%w:节点 %s(策略白名单为空,或插件都没自报只读)",
+			ErrNoRemoteTools, g.nodeID)
+	}
+	return nil
 }
 
 // Handler 返回本轮 MCP 端点。设了令牌就套上令牌中间件,没设就是裸端点。
@@ -200,9 +223,13 @@ func (g *Gateway) buildServer() *mcp.Server {
 		g.toolErr = errors.New("网关未装配 Fleet,本轮没有节点工具")
 	default:
 		tools, err := g.fleet.ListTools(context.Background(), g.nodeID)
-		if err != nil {
+		switch {
+		case err != nil:
 			g.toolErr = fmt.Errorf("拉取节点 %s 的工具清单失败: %w", g.nodeID, err)
-		} else {
+		case len(tools) == 0:
+			g.toolErr = fmt.Errorf("%w:节点 %s(策略白名单为空,或插件都没自报只读)",
+				ErrNoRemoteTools, g.nodeID)
+		default:
 			g.declared = tools
 		}
 	}
@@ -221,11 +248,18 @@ func (g *Gateway) buildServer() *mcp.Server {
 		if d.ToolName == "" {
 			continue
 		}
+		// 只读是节点侧判过的,这里不再判第二遍策略;但传输契约上「ListTools 只回
+		// 只读工具」本身要成立 —— 节点侧哪天回归了,core 不能替写工具背书。
+		// 这是一道自检,不是第二事实源:被跳过的工具在节点侧本来就调不通。
+		if !d.ReadOnly {
+			continue
+		}
 		exposed := uniqueToolName(g.toolPrefix(), d.PluginId, d.ToolName, used)
 		if exposed == "" {
 			continue
 		}
 		used[exposed] = struct{}{}
+		g.exposed++
 		srv.AddTool(&mcp.Tool{
 			Name:        exposed,
 			Description: fmt.Sprintf("Read-only tool %s.%s on node %s. %s", d.PluginId, d.ToolName, g.nodeID, d.Description),

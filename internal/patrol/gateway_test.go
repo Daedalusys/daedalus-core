@@ -758,3 +758,38 @@ func slicesContains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// 节点可达但一个只读工具都没有(白名单为空 / 插件未自报只读):本轮必须失败。
+// 否则模型只剩 report_finding,每一项都能报无证据的 ok,轮次以「全绿」收尾 ——
+// 那正是「静默的空轮次让人以为机器健康」。
+func TestGateway_PrepareFailsWhenNodeExposesNoTools(t *testing.T) {
+	g := newGateway(t, testItems, &fakeFleet{}, &memSink{})
+	if err := g.Prepare(); err == nil {
+		t.Fatal("零工具节点必须让本轮失败,不能以全绿收尾")
+	}
+}
+
+// 只读是节点侧的判定;这里只做传输契约自检 —— agent 哪天漏放行一个写工具,
+// core 不该替它背书。
+func TestGateway_DoesNotExposeNonReadOnlyTools(t *testing.T) {
+	f := &fakeFleet{tools: []agentv1.ToolDescriptor{{
+		PluginId:        "daedalus.shell",
+		ToolName:        "write_file",
+		InputSchemaJson: `{"type":"object"}`,
+		ReadOnly:        false,
+	}}}
+	g := newGateway(t, testItems, f, &memSink{})
+	if err := g.Prepare(); err == nil {
+		t.Fatal("唯一工具是写工具时应按零工具失败")
+	}
+	s := connect(t, g.Handler())
+	listed, err := s.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("列工具失败: %v", err)
+	}
+	for _, tool := range listed.Tools {
+		if tool.Name == "lab_a_write_file" {
+			t.Fatalf("非只读工具不该暴露给模型: %+v", listed.Tools)
+		}
+	}
+}
