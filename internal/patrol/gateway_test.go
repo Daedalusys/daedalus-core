@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -280,6 +281,34 @@ func TestGateway_ReportFinding_AcceptsRealEvidence(t *testing.T) {
 	}
 }
 
+// 摘要会拼进邮件的一行一个 bullet:模型给多行文本必须被压平,否则一条发现被撕成两段。
+// 证据不受影响 —— 证据要逐字原文。
+func TestGateway_ReportFinding_FlattensMultilineSummary(t *testing.T) {
+	sink := &memSink{}
+	g := newGateway(t, testItems, &fakeFleet{}, sink)
+	s := connect(t, g.Handler())
+	g.RecordCall("shell_exec", "df -h\n/dev/vda1 40G 3G 35G 9% /\n")
+
+	args := reportArgs("disk-health", patrol.SeverityWarning, "/dev/vda1 40G 3G 35G 9% /")
+	args["summary"] = "根分区余量偏低\n建议清理 /var/log"
+	if res := callTool(t, s, "report_finding", args); res.IsError {
+		t.Fatalf("多行摘要不该被拒,实际被拒:%s", resultText(t, res))
+	}
+	got := sink.all()
+	if len(got) != 1 {
+		t.Fatalf("期望 sink 收到 1 条发现,实际 %d 条", len(got))
+	}
+	if strings.ContainsAny(got[0].Summary, "\n\r") {
+		t.Fatalf("摘要必须压成单行,实际:%q", got[0].Summary)
+	}
+	if !strings.Contains(got[0].Summary, "建议清理") {
+		t.Fatalf("压平不能丢内容,实际:%q", got[0].Summary)
+	}
+	if got[0].Evidence[0].Output != "/dev/vda1 40G 3G 35G 9% /" {
+		t.Fatalf("证据必须逐字原文,实际:%q", got[0].Evidence[0].Output)
+	}
+}
+
 func TestGateway_ReportFinding_SeverityWhitelist(t *testing.T) {
 	sink := &memSink{}
 	g := newGateway(t, testItems, &fakeFleet{}, sink)
@@ -407,6 +436,25 @@ func TestGateway_ReportFinding_RejectsUnrecordedTool(t *testing.T) {
 	}
 	if got := len(sink.all()); got != 0 {
 		t.Fatalf("工具名不实的发现不能进 sink,实际进了 %d 条", got)
+	}
+}
+
+// 客户端把网关工具显示成 <server>_<网关名>,模型照抄这个名字是最自然的写法;
+// 只认网关名会让每轮都白费几次重试(靶场上每轮 4 次),所以两种写法都要认。
+func TestGateway_ReportFinding_AcceptsClientVisibleToolName(t *testing.T) {
+	sink := &memSink{}
+	g := newGateway(t, testItems, &fakeFleet{}, sink)
+	s := connect(t, g.Handler())
+	g.RecordCall("shell_exec", "df -h\n")
+
+	visible := patrol.ActionName("patrol-node", "shell_exec")
+	res := callTool(t, s, "report_finding",
+		reportArgsForTool(visible, "disk-health", patrol.SeverityWarning, "df -h"))
+	if res.IsError {
+		t.Fatalf("客户端可见的工具名 %q 应当被接受,实际被拒:%s", visible, resultText(t, res))
+	}
+	if got := len(sink.all()); got != 1 {
+		t.Fatalf("带证据的发现应进 sink,实际进了 %d 条", got)
 	}
 }
 
@@ -757,4 +805,97 @@ func slicesContains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// 节点可达但一个只读工具都没有(白名单为空 / 插件未自报只读):本轮必须失败。
+// 否则模型只剩 report_finding,每一项都能报无证据的 ok,轮次以「全绿」收尾 ——
+// 那正是「静默的空轮次让人以为机器健康」。
+func TestGateway_PrepareFailsWhenNodeExposesNoTools(t *testing.T) {
+	g := newGateway(t, testItems, &fakeFleet{}, &memSink{})
+	if err := g.Prepare(); !errors.Is(err, patrol.ErrNoRemoteTools) {
+		t.Fatalf("零工具节点必须以 ErrNoRemoteTools 失败,实际 err=%v", err)
+	}
+}
+
+// 只读是节点侧的判定;这里只做传输契约自检 —— agent 哪天漏放行一个写工具,
+// core 不该替它背书。
+func TestGateway_DoesNotExposeNonReadOnlyTools(t *testing.T) {
+	f := &fakeFleet{tools: []agentv1.ToolDescriptor{
+		{
+			PluginId:        "daedalus.shell",
+			ToolName:        "write_file",
+			InputSchemaJson: `{"type":"object"}`,
+			ReadOnly:        false,
+		},
+		{
+			PluginId:        "daedalus.shell",
+			ToolName:        "read_file",
+			InputSchemaJson: `{"type":"object"}`,
+			ReadOnly:        true,
+		},
+	}}
+	g := newGateway(t, testItems, f, &memSink{})
+	if err := g.Prepare(); err != nil {
+		t.Fatalf("有只读工具时本轮应当能起,实际 err=%v", err)
+	}
+	s := connect(t, g.Handler())
+	listed, err := s.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("列工具失败: %v", err)
+	}
+	var names []string
+	for _, tool := range listed.Tools {
+		names = append(names, tool.Name)
+	}
+	// 工具面 = 那一个只读工具 + 网关自己的 report_finding。
+	if len(names) != 2 || !slices.Contains(names, "lab_a_read_file") {
+		t.Fatalf("只该暴露那一个只读工具,实际 %v", names)
+	}
+	if slices.Contains(names, "lab_a_write_file") {
+		t.Fatalf("非只读工具不该暴露给模型: %v", names)
+	}
+}
+
+// 只剩写工具时等价于零工具面:模型没有可观测的面,本轮必须失败。
+func TestGateway_PrepareFailsWhenOnlyNonReadOnlyTools(t *testing.T) {
+	f := &fakeFleet{tools: []agentv1.ToolDescriptor{{
+		PluginId:        "daedalus.shell",
+		ToolName:        "write_file",
+		InputSchemaJson: `{"type":"object"}`,
+		ReadOnly:        false,
+	}}}
+	g := newGateway(t, testItems, f, &memSink{})
+	if err := g.Prepare(); !errors.Is(err, patrol.ErrNoRemoteTools) {
+		t.Fatalf("只剩写工具时必须以 ErrNoRemoteTools 失败,实际 err=%v", err)
+	}
+}
+
+// 失败的调用不算「有观测」:工具全坏或全被白名单拒绝时,模型对着错误文案报 ok
+// 仍然是没查过。失败文案本身仍留在证据池里 —— 节点超时也是可以上报的观测。
+func TestGateway_CallCountOnlyCountsSuccessfulCalls(t *testing.T) {
+	f := &fakeFleet{tools: []agentv1.ToolDescriptor{{
+		PluginId:        "daedalus.service",
+		ToolName:        "service_list",
+		InputSchemaJson: `{"type":"object"}`,
+		ReadOnly:        true,
+	}}, callErr: errors.New("节点超时")}
+	g := newGateway(t, testItems, f, &memSink{})
+	if err := g.Prepare(); err != nil {
+		t.Fatalf("有只读工具时不该在 Prepare 失败: %v", err)
+	}
+	s := connect(t, g.Handler())
+
+	res := callTool(t, s, "lab_a_service_list", map[string]any{})
+	if !res.IsError {
+		t.Fatalf("节点调用失败必须如实回 IsError: %s", resultText(t, res))
+	}
+	if got := g.CallCount(); got != 0 {
+		t.Fatalf("失败调用不能算成功观测,CallCount=%d", got)
+	}
+
+	res = callTool(t, s, "report_finding",
+		reportArgsForTool("lab_a_service_list", "disk-health", patrol.SeverityWarning, "节点超时"))
+	if res.IsError {
+		t.Fatalf("失败文案应当可以作证据,实际被拒:%s", resultText(t, res))
+	}
 }

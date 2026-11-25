@@ -4,7 +4,10 @@
 // 去重与邮件分组都靠它,不靠模型措辞。
 package patrol
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // 发现状态词表。problem 是「这一项有问题」,ok 是「这一轮看过,没问题」。
 const (
@@ -29,6 +32,12 @@ type Finding struct {
 	Severity string     `json:"severity"`
 	Summary  string     `json:"summary"`
 	Evidence []Evidence `json:"evidence,omitempty"`
+}
+
+// oneLine 把多行文本压成一行。摘要要拼进邮件的一行一个 bullet,换行会把一条发现
+// 撕成两段;证据不能这样处理 —— 证据必须是对端原文,由调用方保证。
+func oneLine(s string) string {
+	return strings.NewReplacer("\r\n", "; ", "\n", "; ", "\r", "; ").Replace(s)
 }
 
 // Changes 是一轮巡检相对上一轮的变化。前三类才是「变化」,持续项不进邮件。

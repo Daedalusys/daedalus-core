@@ -1,0 +1,50 @@
+From: patrol@daedalus.local
+To: ops@daedalus.local
+Subject: =?UTF-8?q?[Daedalus]_lab-a-1e5d63a9_=E5=B7=A1=E6=A3=80=EF=BC=9A=E6=96=B0?= =?UTF-8?q?=E5=A2=9E_0_=C2=B7_=E6=81=B6=E5=8C=96_0_=C2=B7_=E6=81=A2?= =?UTF-8?q?=E5=A4=8D_3?=
+Date: Wed, 25 Nov 2026 10:23:01 +0800
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+== 恢复 (3) ==
+
+* failed-units [warning] systemctl --failed 列出 1 个失败单元 bootc-fetch-apply-updates.service（loaded failed failed）。
+  工具: patrol-node_lab_a_1e5d63a9_shell_exec
+  参数: {"command":"systemctl","args":["--failed","--no-legend","--no-pager"]}
+  返回码: 0
+  证据原文:
+● bootc-fetch-apply-updates.service loaded failed failed Apply bootc updates
+
+* rogue-listen-18080 [critical] 0.0.0.0:18080 存在监听，属主 root，进程为 python3 -m http.server 18080。注：ss 被命令白名单拒绝，改用 /proc/net/tcp 与 ps 取证。
+  工具: patrol-node_lab_a_1e5d63a9_shell_exec
+  参数: {"command":"cat","args":["/proc/net/tcp"]}
+  返回码: 0
+  证据原文:
+00000000:46A0 00000000:0000 0A
+  工具: patrol-node_lab_a_1e5d63a9_shell_exec
+  参数: {"command":"ps","args":["-o","user,pid,cmd","-p","18307"]}
+  返回码: 0
+  证据原文:
+root       18307 /usr/bin/python3 -m http.server 18080 --bind 0.0.0.0
+  工具: patrol-node_lab_a_1e5d63a9_shell_exec
+  参数: {"command":"ss","args":["-ltnp"]}
+  返回码: 126
+  证据原文:
+Command 'ss' is not in ALLOW_COMMANDS allowlist.
+
+* root-listen-18081 [critical] 0.0.0.0:18081 由 root 属主的 python3 -m http.server 监听（PID 18321）。注：ss 被白名单拒绝，用 /proc/net/tcp + ps 取证。
+  工具: patrol-node_lab_a_1e5d63a9_shell_exec
+  参数: {"command":"cat","args":["/proc/net/tcp"]}
+  返回码: 0
+  证据原文:
+00000000:46A1 00000000:0000 0A
+  工具: patrol-node_lab_a_1e5d63a9_shell_exec
+  参数: {"command":"ps","args":["-o","user,pid,cmd","-p","18321"]}
+  返回码: 0
+  证据原文:
+root       18321 /usr/bin/python3 -m http.server 18081 --bind 0.0.0.0
+  工具: patrol-node_lab_a_1e5d63a9_shell_exec
+  参数: {"command":"ss","args":["-ltnp"]}
+  返回码: 126
+  证据原文:
+Command 'ss' is not in ALLOW_COMMANDS allowlist.

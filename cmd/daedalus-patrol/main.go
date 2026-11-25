@@ -42,6 +42,9 @@ const (
 	defaultRoundRoot = "/var/lib/daedalus-patrol/round"
 	// defaultNodeTimeout 是 AI 客户端的兜底执行时限(不含网关起停与投递)。
 	defaultNodeTimeout = 10 * time.Minute
+	// unitStartTimeout 与 daedalus-patrol.service 的 TimeoutStartSec 对齐。
+	// systemd 到点会 SIGTERM 整轮,所以 node_timeout 必须留出收尾余量。
+	unitStartTimeout = 15 * time.Minute
 	// SMTP 凭据来自 systemd 凭据目录;文件可为空(免密投递是合法形态)。
 	credentialsDirEnv      = "CREDENTIALS_DIRECTORY"
 	smtpUsernameCredential = "smtp-username"
@@ -194,6 +197,12 @@ func nodeTimeout(raw string) (time.Duration, error) {
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("巡检配置的 node_timeout %q 必须为正", raw)
+	}
+	// 留 3 分钟给网关起停、发信与落状态:systemd 的 TimeoutStartSec 才是硬边界。
+	if d > unitStartTimeout-3*time.Minute {
+		return 0, fmt.Errorf(
+			"巡检配置的 node_timeout %q 过大:单元的 TimeoutStartSec 是 %s,超时会被 systemd 提前终止本轮(要更长轮次请同时改单元)",
+			raw, unitStartTimeout)
 	}
 	return d, nil
 }

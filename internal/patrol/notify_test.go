@@ -70,10 +70,11 @@ func TestFormatMail_ThreeGroups(t *testing.T) {
 	ch := mailFixture()
 	subject, body := patrol.FormatMail("lab-a", ch)
 
-	for _, want := range []string{"lab-a", "新增 1", "恶化 1", "恢复 1"} {
-		if !strings.Contains(subject, want) {
-			t.Errorf("主题 %q 缺少 %q", subject, want)
-		}
+	// 整串钉住:前缀、全角冒号、` · ` 分隔符与「零组也要列出」都是收件人扫邮件时
+	// 依赖的形态,改坏任何一个都不该只是「子串还在」。
+	wantSubject := "[Daedalus] lab-a 巡检：新增 1 · 恶化 1 · 恢复 1"
+	if subject != wantSubject {
+		t.Errorf("主题 = %q, want %q", subject, wantSubject)
 	}
 
 	// 组标题与组顺序都钉住:邮件是给人按固定顺序扫的。
@@ -190,5 +191,29 @@ func TestNotify_PropagatesSendError(t *testing.T) {
 	})
 	if !errors.Is(err, wantErr) {
 		t.Errorf("投递错误应原样返回,实际 %v", err)
+	}
+}
+
+// 节点名拿不到(空串)时主题退化成没有前缀,而不是出现两个空格或丢掉整段。
+func TestFormatMail_EmptyNodeKeepsSubjectReadable(t *testing.T) {
+	subject, body := patrol.FormatMail("", mailFixture())
+	want := "[Daedalus] 巡检：新增 1 · 恶化 1 · 恢复 1"
+	if subject != want {
+		t.Errorf("空节点名的主题 = %q,want %q", subject, want)
+	}
+	if body == "" {
+		t.Error("空节点名不该影响正文")
+	}
+}
+
+// 有变化却没装配投递函数:必须报错而不是 panic —— panic 会把这一轮的
+// 状态与退出码一起带走。
+func TestNotify_NilSendIsAnErrorNotPanic(t *testing.T) {
+	err := patrol.Notify(mailFixture(), nil)
+	if err == nil {
+		t.Fatal("有变化但 send 为 nil 时应返回错误")
+	}
+	if !strings.Contains(err.Error(), "投递函数") {
+		t.Errorf("错误应点明缺投递函数,实际: %v", err)
 	}
 }

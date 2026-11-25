@@ -20,7 +20,7 @@
         "oauth": false,
         "codemode": false,
         "headers": {
-          "Authorization": "Bearer 3b811feb1b06fbd1897f634fa2a3738d70f17348caf86df31d7c55bd6700605a"
+          "Authorization": "Bearer REDACTED"
         }
       }
     }
@@ -33,7 +33,7 @@
       "name": "AI Gateway (main agent)",
       "options": {
         "baseURL": "http://llm.team.home.arpa/v1",
-        "apiKey": "sk-gw-63d3a410df9290d56cb05995047f56beb70de870914e710e",
+        "apiKey": "REDACTED",
         "headers": {
           "x-gw-agent": "omo-main"
         }
@@ -70,7 +70,7 @@
       "name": "AI Gateway (sub agents)",
       "options": {
         "baseURL": "http://llm.team.home.arpa/v1",
-        "apiKey": "sk-gw-deef6be248bdb6091ba784a98f29a0716394057f93e5ec19",
+        "apiKey": "REDACTED",
         "headers": {
           "x-gw-agent": "omo-sub"
         }

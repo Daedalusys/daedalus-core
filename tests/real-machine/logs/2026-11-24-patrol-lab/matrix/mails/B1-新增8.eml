@@ -1,0 +1,115 @@
+From: patrol@daedalus.local
+To: ops@daedalus.local
+Subject: =?UTF-8?q?[Daedalus]_lab-a-1e5d63a9_=E5=B7=A1=E6=A3=80=EF=BC=9A=E6=96=B0?= =?UTF-8?q?=E5=A2=9E_8_=C2=B7_=E6=81=B6=E5=8C=96_0_=C2=B7_=E6=81=A2?= =?UTF-8?q?=E5=A4=8D_0?=
+Date: Wed, 25 Nov 2026 10:11:20 +0800
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+== 新增 (8) ==
+
+* rogue-listen-18080 [critical] 18080 被 root 的 python3 -m http.server 监听(0.0.0.0)。注: ss 不在命令白名单,改用 ps 取证。
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"ps","args":["-o","user,pid,cmd","-p","17276,17605"]}
+  返回码: 0
+  证据原文:
+root       17276 /usr/bin/python3 -m http.server 18080 --bind 0.0.0.0
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"ss","args":["-ltnp"]}
+  返回码: 126
+  证据原文:
+Command 'ss' is not in ALLOW_COMMANDS allowlist.
+
+* big-tmp-file [warning] /tmp/lab-fault-big.bin 存在,root 属主,1.2G。
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"ls","args":["-lh","/tmp/lab-fault-big.bin"]}
+  返回码: 0
+  证据原文:
+-rw-r--r--. 1 root root 1.2G Nov 25 01:51 /tmp/lab-fault-big.bin
+
+* root-listen-18081 [critical] 18081 由 root 拥有的 python3 -m http.server 监听;属主为 root,按基线判为问题。注: ss 被白名单拒绝,证据为 ps 原文。
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"ps","args":["-o","user,pid,cmd","-p","17276,17605"]}
+  返回码: 0
+  证据原文:
+root       17605 /usr/bin/python3 -m http.server 18081 --bind 0.0.0.0
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"ss","args":["-ltnp"]}
+  返回码: 126
+  证据原文:
+Command 'ss' is not in ALLOW_COMMANDS allowlist.
+
+* app-log-errors [warning] /var/log/lab-fault-app.log 含大量 ERROR 与 FATAL 行。注: grep 不在白名单,改用 read_file 取证。
+  工具: lab_a_1e5d63a9_read_file
+  参数: {"path":"/var/log/lab-fault-app.log"}
+  返回码: 0
+  证据原文:
+2026-11-23T03:21:00Z ERROR app-worker[1] failed to commit transaction: connection reset by peer
+  工具: lab_a_1e5d63a9_read_file
+  参数: {"path":"/var/log/lab-fault-app.log"}
+  返回码: 0
+  证据原文:
+2026-11-23T03:21:01Z FATAL app-worker[1] crater: exiting
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"grep","args":["-cE","ERROR|FATAL","/var/log/lab-fault-app.log"]}
+  返回码: 126
+  证据原文:
+Command 'grep' is not in ALLOW_COMMANDS allowlist.
+
+* journal-disk-errors [critical] journal 错误级日志出现 DISK FAILURE 与 vdb 的 I/O error。
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"journalctl","args":["-p","err","--no-pager","-n","200"]}
+  返回码: 0
+  证据原文:
+Nov 25 01:20:20 lab-a lab-fault[16532]: DISK FAILURE predicted on /dev/vdb, array degraded, 3 of 5 members offline
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"journalctl","args":["-p","err","--no-pager","-n","200"]}
+  返回码: 0
+  证据原文:
+Nov 25 01:20:20 lab-a lab-fault[16533]: I/O error, dev vdb, sector 2048 op 0x0
+
+* time-sync [warning] chronyd 非 active,返回 inactive(exit 3)。
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"systemctl","args":["is-active","chronyd"]}
+  返回码: 3
+  证据原文:
+inactive
+
+* failed-units [warning] 3 个 failed 单元: bootc-fetch-apply-updates、lab-fault-crash、lab-fault-fail。
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"systemctl","args":["--failed","--no-legend","--no-pager"]}
+  返回码: 0
+  证据原文:
+● bootc-fetch-apply-updates.service loaded failed failed Apply bootc updates
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"systemctl","args":["--failed","--no-legend","--no-pager"]}
+  返回码: 0
+  证据原文:
+failed failed lab fault: crash loop with journal-only explanation
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"systemctl","args":["--failed","--no-legend","--no-pager"]}
+  返回码: 0
+  证据原文:
+failed failed lab fault: always fails
+
+* crash-loop [critical] lab-fault-crash 因缺少 /etc/lab-fault-crash.conf 以 status=78/CONFIG 反复退出,触发 Start request repeated too quickly。
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"journalctl","args":["-u","lab-fault-crash","--no-pager","-n","50"]}
+  返回码: 0
+  证据原文:
+lab-fault-crash: cannot open /etc/lab-fault-crash.conf (No such file or directory)
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"journalctl","args":["-u","lab-fault-crash","--no-pager","-n","50"]}
+  返回码: 0
+  证据原文:
+lab-fault-crash: configuration missing, aborting
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"journalctl","args":["-u","lab-fault-crash","--no-pager","-n","50"]}
+  返回码: 0
+  证据原文:
+lab-fault-crash.service: Main process exited, code=exited, status=78/CONFIG
+  工具: lab_a_1e5d63a9_shell_exec
+  参数: {"command":"journalctl","args":["-u","lab-fault-crash","--no-pager","-n","50"]}
+  返回码: 0
+  证据原文:
+lab-fault-crash.service: Start request repeated too quickly.

@@ -6,8 +6,9 @@
 
 **结论先行**：巡检 → 网关 → agent → 插件 → 证据 → 分类 → 邮件这条链路在真机上成立；
 「只有变化才发信」「持续不发」「恢复发一封」「节点不可达不误报恢复」四条硬要求都有
-邮件原文与状态文件佐证。**未覆盖**：计划里 F1/F2/F4a/F5/N1/N2/N3 的逐项检出矩阵
-（原因见末节）。
+邮件原文与状态文件佐证。逐项检出矩阵另见 `matrix/`（9 项故障清单，5 轮，3 封邮件）。
+**仍未覆盖**：镜像内安装与 timer 调度、多节点、真实二进制在单元内运行
+（单元沙箱本身已由 `unit-smoke/` 覆盖，原因见末节）。
 
 ## 1. 靶场拓扑
 
@@ -31,6 +32,9 @@
    `StateDirectory=`、`LoadCredential=`、`ProtectSystem=strict` 这些单元侧行为
    **没有被这条证据覆盖**，只覆盖了 `daedalus-patrol` 二进制本身。单元文件的解析级校验由
    CI 的 `systemd-units` 门禁承担。
+   → 单元沙箱本身后来补上了，见 `unit-smoke/README.md`：在同一个 guest 上用 root 起真实
+   单元的影子单元（只换 `ExecStart` 为探针），覆盖 `StateDirectory=` / `UMask=` /
+   `ExecStartPre` 链 / `BindReadOnlyPaths=` / `LoadCredential=`。
 
 ## 3. 节点侧配置
 
@@ -86,15 +90,16 @@ A7 是本次返工的核心回归点：修复前，节点不可达的一轮会�
 
 **不能证明**：
 
-- 计划里 F1（failed 单元）/ F2（0.0.0.0 监听）/ F4a（/var/log 刷屏）/ F5（chronyd 停止）/
-  N1（崩溃循环 + StartLimit）/ N2（journal 灌 40MiB）/ N3（root 监听 18081）的逐项检出。
-  本轮清单只有 4 项，不覆盖这些轴；要复现需要按故障类型扩清单，属于巡检内容设计，
-  不是链路问题。
 - 镜像内安装：单元随镜像落位、`daedalus-patrol.timer` 的调度、`ProtectSystem=strict`
   沙箱下 opencode（Bun）能否启动 —— 这些要等镜像构建（CI），本机 CPU 缺 x86-64-v3
   跑不了镜像。
-- systemd 单元的 root 形态（`StateDirectory=`、`LoadCredential=`、`HOME` 只读挂载）。
+- systemd 单元的 root 形态：`StateDirectory=`、`LoadCredential=`、`.config` 只读挂载这些
+  已由 `unit-smoke/` 覆盖；但**真实二进制在单元里跑**（`ExecStart=daedalus-patrol run`）
+  仍未覆盖 —— 影子单元只换掉了 `ExecStart`。
 - 多节点：只跑了 `lab-a` 一台。
+
+> 逐项检出矩阵后来补上了：见 `matrix/README.md`（9 项故障清单，全故障 / 复跑 / 清故障 /
+> 恢复 / 稳态五轮，含 3 封邮件原文）。本节「不能证明」里的逐项检出一条已由该目录覆盖。
 
 ## 6. 现场命令
 
@@ -102,5 +107,9 @@ A7 是本次返工的核心回归点：修复前，节点不可达的一轮会�
 - 连节点：`gssh.sh 9601 '<cmd>'`（ProxyCommand 经 `Masterwet_Server` 跳板）。
 - 抓邮件：`smtp-sink.py <outdir> <port>`。
 
-`rounds/` 下每轮保留 `findings.jsonl` 与 `prompt.txt`；AI 客户端的 stdout 日志（每轮约
-200 KB）没有入库，正文只留结论所需的邮件与发现。
+`rounds/` 下每轮保留 `findings.jsonl`、`prompt.txt`、客户端 stdout/stderr 日志与当轮客户端
+配置 `opencode.json`。日志每轮约 100 KB，10 轮合计约 500 KB。
+
+`opencode.json` 里的 `apiKey` 与 `Authorization: Bearer <本轮令牌>` 已脱敏成 `REDACTED`：
+客户端配置会内联模型凭据与本轮网关令牌，直接入库等于把凭据发到公开仓库。下次采集时
+先脱敏再入库（`sed -E 's/("apiKey": ")[^"]*"/\1REDACTED"/; s/("Authorization": "Bearer )[^"]*/\1REDACTED/'`）。

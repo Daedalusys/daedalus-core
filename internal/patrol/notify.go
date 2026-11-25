@@ -6,6 +6,7 @@ package patrol
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -23,6 +24,10 @@ func Notify(changes Changes, send func(subject, body string) error) error {
 	subject, body := FormatMail(nodeOf(changes), changes)
 	if subject == "" {
 		return nil
+	}
+	if send == nil {
+		// 装配漏了投递面时,最坏的结果不是漏发而是 panic 让整轮状态回滚。
+		return errors.New("巡检有变化,但没有装配邮件投递函数")
 	}
 	return send(subject, body)
 }

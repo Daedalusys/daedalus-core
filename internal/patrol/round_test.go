@@ -13,6 +13,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -176,15 +179,62 @@ func newFakeAIClient(t *testing.T, nodeID string, reports []aiReport) aiClientRu
 				"severity": rep.severity,
 				"summary":  rep.summary,
 			}
+			// 真实模型报 ok 之前也查过机器:每次都调一次节点工具,只有报问题
+			// 时才把返回原文当证据贴上去。「一次都没调过」的形态由
+			// newFakeAIClientNoTools 单独覆盖。
+			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: nodeTool})
+			if err != nil {
+				t.Fatalf("调用节点工具 %s 失败: %v", nodeTool, err)
+			}
+			text := textOf(t, res)
 			if rep.evidence {
-				res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: nodeTool})
-				if err != nil {
-					t.Fatalf("调用节点工具 %s 失败: %v", nodeTool, err)
-				}
-				text := textOf(t, res)
 				args["evidence"] = []map[string]any{{"tool": nodeTool, "output": text}}
 			}
-			res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: reportFindingTool, Arguments: args})
+			res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: reportFindingTool, Arguments: args})
+			if err != nil || res.IsError {
+				t.Fatalf("report_finding(%s) 失败: err=%v result=%s", rep.itemID, err, textOf(t, res))
+			}
+		}
+		return nil
+	}
+}
+
+// newFakeAIClientNoTools 造一个只交结论、不查机器的客户端:每项都报 ok,
+// 一次节点工具都不调。这是「静默的空轮次」的形状,本轮必须判失败。
+func newFakeAIClientNoTools(t *testing.T, nodeID string, reports []aiReport) aiClientRunner {
+	t.Helper()
+	return func(ctx context.Context, spec aiClientRun) error {
+		cfg, err := readAIClientConfig(spec.ConfigPath)
+		if err != nil {
+			t.Fatalf("读本轮客户端配置失败: %v", err)
+		}
+		server := cfg.MCP.Servers[aiServerName]
+		token, ok := strings.CutPrefix(server.Headers["Authorization"], "Bearer ")
+		if !ok || token == "" {
+			t.Fatalf("MCP server 没带本轮令牌: %+v", server.Headers)
+		}
+		session, err := mcp.NewClient(&mcp.Implementation{Name: "patrol-round-test", Version: "0"}, nil).
+			Connect(ctx, &mcp.StreamableClientTransport{
+				Endpoint:             server.URL,
+				HTTPClient:           &http.Client{Transport: bearerTransport{token: token}},
+				DisableStandaloneSSE: true,
+				MaxRetries:           -1,
+			}, nil)
+		if err != nil {
+			t.Fatalf("连接本轮网关失败: %v", err)
+		}
+		defer func() { _ = session.Close() }()
+
+		for _, rep := range reports {
+			res, err := session.CallTool(ctx, &mcp.CallToolParams{
+				Name: reportFindingTool,
+				Arguments: map[string]any{
+					"item_id":  rep.itemID,
+					"status":   rep.status,
+					"severity": rep.severity,
+					"summary":  rep.summary,
+				},
+			})
 			if err != nil || res.IsError {
 				t.Fatalf("report_finding(%s) 失败: err=%v result=%s", rep.itemID, err, textOf(t, res))
 			}
@@ -777,6 +827,16 @@ func TestSelfCheckFinding_CarriesErrorText(t *testing.T) {
 	if len(f.Evidence) != 1 || !strings.Contains(f.Evidence[0].Output, "未注册") {
 		t.Fatalf("证据必须是错误原文: %+v", f.Evidence)
 	}
+	// 证据保留原文(多行也在),摘要压成一行:摘要进邮件是「一行一条」。
+	multi := selfCheckFinding("lab-a", "本轮不完整", errors.Join(
+		fmt.Errorf("本轮发现没有覆盖全部启用的清单项"),
+		fmt.Errorf("本轮没有成功调用任何节点工具")))
+	if strings.ContainsAny(multi.Summary, "\r\n") {
+		t.Fatalf("巡检级摘要必须单行: %q", multi.Summary)
+	}
+	if !strings.Contains(multi.Evidence[0].Output, "\n") {
+		t.Fatalf("证据要保留原文换行: %q", multi.Evidence[0].Output)
+	}
 	// 清单里若恰好有同名项,巡检自身的失败优先,避免同一轮两条同 id 落盘失败。
 	got := appendSelfCheck([]Finding{{ItemID: SelfCheckItemID, Node: "lab-a"}, {ItemID: "disk-health"}}, f)
 	if len(got) != 2 || got[len(got)-1].Summary != f.Summary {
@@ -945,5 +1005,273 @@ func TestRunner_MailFailureKeepsStateAndResends(t *testing.T) {
 	}
 	if got := mail.count(); got != 1 {
 		t.Fatalf("投递恢复后应发出 1 封,实际 %d", got)
+	}
+}
+
+// 状态文件损坏时不能永久拒绝巡检:响一声(退出码非 0)、备份原件、按无基线继续,
+// 坏状态留下的「自检」不落进新状态,下一轮就回到正常节奏。
+func TestRunner_CorruptStateQuarantinedAndRoundContinues(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	now := time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC)
+	statePath := filepath.Join(root, "state", roundTestNode+".json")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o750); err != nil {
+		t.Fatalf("建状态目录失败: %v", err)
+	}
+	const corrupt = "{这不是 JSON"
+	if err := os.WriteFile(statePath, []byte(corrupt), 0o600); err != nil {
+		t.Fatalf("写坏状态失败: %v", err)
+	}
+
+	mail := &mailSpy{}
+	r := &Runner{
+		Config: RunConfig{
+			ChecklistPath: writeChecklist(t, twoItemChecklist),
+			StatePath:     statePath,
+			RoundRoot:     filepath.Join(root, "round"),
+			NodeID:        roundTestNode,
+			AICommand:     []string{"opencode", "run"},
+			NodeTimeout:   30 * time.Second,
+		},
+		Fleet: &roundFleet{tools: []agentv1.ToolDescriptor{serviceTool()}, output: "nginx.service failed\n"},
+		Mail:  mail,
+		Now:   func() time.Time { return now },
+	}
+	r.runAI = newFakeAIClient(t, roundTestNode, []aiReport{
+		{itemID: "disk-health", status: StatusProblem, severity: SeverityWarning, summary: "根分区余量 3%", evidence: true},
+		{itemID: "log-health", status: StatusOK, severity: SeverityInfo, summary: "日志无异常"},
+	})
+
+	changes, err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("状态损坏必须让本轮以非 0 退出(要留审计痕迹)")
+	}
+	if len(changes.Added) != 2 {
+		t.Fatalf("没有基线时本轮问题应全部算新增: %+v", changes.Added)
+	}
+	if got := mail.count(); got != 1 {
+		t.Fatalf("状态损坏的一轮仍要发信,实际 %d 封", got)
+	}
+	if body := mail.lastBody(); !strings.Contains(body, "巡检状态损坏") {
+		t.Errorf("邮件必须说明本轮按无基线处理:\n%s", body)
+	}
+
+	backup := statePath + ".corrupt-" + strconv.FormatInt(now.Unix(), 10)
+	if data, readErr := os.ReadFile(backup); readErr != nil || string(data) != corrupt {
+		t.Fatalf("坏状态必须原样备份到 %s: %q (err=%v)", backup, data, readErr)
+	}
+	dir := roundDir(t, filepath.Join(root, "round"))
+	if _, statErr := os.Stat(filepath.Join(dir, stateErrorFileName)); statErr != nil {
+		t.Errorf("轮次目录里必须有状态损坏记录: %v", statErr)
+	}
+
+	st, err := LoadState(statePath)
+	if err != nil {
+		t.Fatalf("重置后的状态必须可读: %v", err)
+	}
+	if _, ok := st["disk-health"]; !ok {
+		t.Errorf("本轮发现应写进新状态: %+v", st)
+	}
+	if _, ok := st[SelfCheckItemID]; ok {
+		t.Errorf("一次性事故不该进状态(否则下一轮会发一封假「恢复」): %+v", st)
+	}
+
+	// 下一轮:同一条发现属于持续项,不再失败也不发信。
+	r.Now = func() time.Time { return now.Add(30 * time.Minute) }
+	changes, err = r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("状态已重置,下一轮不该再失败: %v", err)
+	}
+	if n := len(changes.Added) + len(changes.Worsened) + len(changes.Recovered); n != 0 {
+		t.Fatalf("下一轮不该有变化: %+v", changes)
+	}
+	if got := mail.count(); got != 1 {
+		t.Fatalf("持续项不该重复发信,实际累计 %d 封", got)
+	}
+}
+
+// 节点可达但零个只读工具:本轮必须失败并落一条 self-check —— 否则模型只剩
+// report_finding,每项都能报无证据的 ok,轮次以「全绿」收尾,把「没查」写成「健康」。
+func TestRunner_NodeWithoutReadOnlyToolsFails(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	mail := &mailSpy{}
+	r := &Runner{
+		Config: RunConfig{
+			ChecklistPath: writeChecklist(t, twoItemChecklist),
+			StatePath:     filepath.Join(root, "state", roundTestNode+".json"),
+			RoundRoot:     filepath.Join(root, "round"),
+			NodeID:        roundTestNode,
+			AICommand:     []string{"opencode", "run"},
+			NodeTimeout:   30 * time.Second,
+		},
+		Fleet: &roundFleet{}, // 零工具
+		Mail:  mail,
+	}
+	r.runAI = func(context.Context, aiClientRun) error {
+		t.Error("没有工具面时不该拉起 AI 客户端")
+		return nil
+	}
+
+	changes, err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("零工具节点必须让本轮失败,不能以全绿收尾")
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
+		t.Fatalf("失败轮应只报一条 self-check: %+v", changes)
+	}
+	if got := mail.count(); got != 1 {
+		t.Fatalf("失败也要发信,实际 %d 封", got)
+	}
+}
+
+// 一次节点工具都没调就交齐了 ok:这不是「查过了」,本轮必须按失败处理。
+func TestRunner_RoundWithoutToolCallsFails(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	mail := &mailSpy{}
+	r := &Runner{
+		Config: RunConfig{
+			ChecklistPath: writeChecklist(t, twoItemChecklist),
+			StatePath:     filepath.Join(root, "state", roundTestNode+".json"),
+			RoundRoot:     filepath.Join(root, "round"),
+			NodeID:        roundTestNode,
+			AICommand:     []string{"opencode", "run"},
+			NodeTimeout:   30 * time.Second,
+		},
+		Fleet: &roundFleet{tools: []agentv1.ToolDescriptor{serviceTool()}, output: "nginx.service failed\n"},
+		Mail:  mail,
+	}
+	// 两项都报 ok,但一次节点工具都没调:没有观测就没有结论。
+	r.runAI = newFakeAIClientNoTools(t, roundTestNode, []aiReport{
+		{itemID: "disk-health", status: StatusOK, severity: SeverityWarning, summary: "没查,但看着正常"},
+		{itemID: "log-health", status: StatusOK, severity: SeverityInfo, summary: "没查,但看着正常"},
+	})
+
+	changes, err := r.Run(context.Background())
+	if !errors.Is(err, errNoToolCalls) {
+		t.Fatalf("零工具调用的轮次必须以 errNoToolCalls 失败,实际 err=%v", err)
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
+		t.Fatalf("失败轮应只报一条 self-check: %+v", changes)
+	}
+	if !strings.Contains(changes.Added[0].Summary, "一次节点工具都没成功调用") {
+		t.Fatalf("self-check 摘要必须说清「没有观测」,实际:%q", changes.Added[0].Summary)
+	}
+	if got := mail.count(); got != 1 {
+		t.Fatalf("失败也要发信,实际 %d 封", got)
+	}
+}
+
+// 缺项与「一次都没调」同时成立时两条都要说:只报缺项会把「本轮没有任何观测」盖掉。
+func TestRunner_MissingItemsAndNoToolCallsBothReported(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	r := &Runner{
+		Config: RunConfig{
+			ChecklistPath: writeChecklist(t, twoItemChecklist),
+			StatePath:     filepath.Join(root, "state", roundTestNode+".json"),
+			RoundRoot:     filepath.Join(root, "round"),
+			NodeID:        roundTestNode,
+			AICommand:     []string{"opencode", "run"},
+			NodeTimeout:   30 * time.Second,
+		},
+		Fleet: &roundFleet{tools: []agentv1.ToolDescriptor{serviceTool()}, output: "nginx.service failed\n"},
+		Mail:  &mailSpy{},
+	}
+	// 只报一项、且一次工具都不调。
+	r.runAI = newFakeAIClientNoTools(t, roundTestNode, []aiReport{
+		{itemID: "disk-health", status: StatusOK, severity: SeverityWarning, summary: "没查"},
+	})
+
+	changes, err := r.Run(context.Background())
+	if !errors.Is(err, errIncompleteRound) || !errors.Is(err, errNoToolCalls) {
+		t.Fatalf("两条原因都要在错误链里,实际 err=%v", err)
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
+		t.Fatalf("失败轮应只报一条 self-check: %+v", changes)
+	}
+	summary := changes.Added[0].Summary
+	if !strings.Contains(summary, "log-health") || !strings.Contains(summary, "没有任何观测") {
+		t.Fatalf("摘要要同时点名缺项与「没有观测」,实际:%q", summary)
+	}
+	if strings.ContainsAny(summary, "\n\r") {
+		t.Fatalf("self-check 摘要必须是单行(errors.Join 的换行要压平),实际:%q", summary)
+	}
+}
+
+// 轮次目录只保留最近 keep 个:旧目录里有生成的客户端配置(可能内联凭据),
+// 不能无限期留存。前缀不同的节点目录不能被误删。
+func TestPruneRoundDirsKeepsNewestAndIgnoresOtherNodes(t *testing.T) {
+	root := t.TempDir()
+	mk := func(name string) {
+		t.Helper()
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatalf("建目录 %s 失败: %v", name, err)
+		}
+	}
+	for _, ts := range []string{"090000", "090100", "090200", "090300", "090400"} {
+		mk(roundTestNode + "-20261125T" + ts + "Z")
+	}
+	mk("other-node-20261125T090000Z")
+	// 节点 id 可能把本节点 id 当成短横线前缀:只按 "lab-a-" 前缀清理会连它的
+	// 现场一起删掉,所以这里必须按「时间戳 + 可选序号」的整段形状核对。
+	mk("lab-a-1aaa-20261125T090000Z")
+	mk("lab-a-notes")
+
+	pruneRoundDirs(root, roundTestNode, 2)
+
+	left, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("读目录失败: %v", err)
+	}
+	var got []string
+	for _, e := range left {
+		got = append(got, e.Name())
+	}
+	sort.Strings(got)
+	want := []string{
+		"lab-a-1aaa-20261125T090000Z",
+		"lab-a-20261125T090300Z",
+		"lab-a-20261125T090400Z",
+		"lab-a-notes",
+		"other-node-20261125T090000Z",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("保留结果 = %v, want %v", got, want)
+	}
+}
+
+// 同秒冲突时目录名会带 -2…-10:纯字典序会把 -10 当成最旧,先删掉的就不是最旧的。
+func TestPruneRoundDirsOrdersSameSecondSequenceNumerically(t *testing.T) {
+	root := t.TempDir()
+	base := roundTestNode + "-20261125T090000Z"
+	for _, name := range []string{base, base + "-2", base + "-3", base + "-10"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatalf("建目录 %s 失败: %v", name, err)
+		}
+	}
+	if !isRoundDirName(base+"-10", roundTestNode) {
+		t.Fatalf("第 10 次尝试的目录名 %q 也必须是本节点的轮次目录", base+"-10")
+	}
+
+	pruneRoundDirs(root, roundTestNode, 2)
+
+	left, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("读目录失败: %v", err)
+	}
+	var got []string
+	for _, e := range left {
+		got = append(got, e.Name())
+	}
+	sort.Strings(got)
+	want := []string{base + "-10", base + "-3"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("保留结果 = %v, want %v", got, want)
 	}
 }

@@ -74,6 +74,9 @@ type smtpCatcher struct {
 	mu    sync.Mutex
 	seen  []string         // 收到过的命令动词,便于断言「没走到投递」
 	cert  *tls.Certificate // 非空时宣告并支持 STARTTLS/AUTH
+	// quitReply 非空时用它回应 QUIT(默认 221):用来验证「投递已完成后退出失败」
+	// 不会把送达改判成失败。
+	quitReply string
 }
 
 func startSMTPCatcher(t *testing.T) *smtpCatcher {
@@ -88,11 +91,46 @@ func startSMTPCatcher(t *testing.T) *smtpCatcher {
 	return c
 }
 
+// 自签证书是进程级的:x509 的系统根池在第一次加载后就固定下来,每个用例各造一份
+// 证书会让 `go test -count>1` 的第二次运行拿旧根池验新证书而假失败。
+var (
+	tlsCertOnce sync.Once
+	tlsCert     tls.Certificate
+	tlsCAPath   string
+	tlsCertDir  string
+)
+
+// TestMain 负责清理进程级证书目录。
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if tlsCertDir != "" {
+		_ = os.RemoveAll(tlsCertDir)
+	}
+	os.Exit(code)
+}
+
+// tlsTestCert 返回整个测试进程共用的自签证书与 CA 文件路径。
+func tlsTestCert(t *testing.T) (tls.Certificate, string) {
+	t.Helper()
+	tlsCertOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "mailer-tls-")
+		if err != nil {
+			t.Fatalf("创建测试证书目录失败: %v", err)
+		}
+		tlsCertDir = dir
+		tlsCert, tlsCAPath = selfSignedCertIn(t, dir)
+	})
+	if tlsCAPath == "" {
+		t.Fatal("测试证书未生成")
+	}
+	return tlsCert, tlsCAPath
+}
+
 // startTLSMTPCatcher 起一个宣告 STARTTLS 与 AUTH 的抓取器。自签证书经 SSL_CERT_FILE
 // 交给进程默认根池:不改投递实现,也不在生产代码里留测试用的信任开关。
 func startTLSMTPCatcher(t *testing.T) *smtpCatcher {
 	t.Helper()
-	cert, caPath := selfSignedCert(t)
+	cert, caPath := tlsTestCert(t)
 	t.Setenv("SSL_CERT_FILE", caPath)
 
 	c := startSMTPCatcher(t)
@@ -204,6 +242,10 @@ func (c *smtpCatcher) handle(rawConn net.Conn) {
 		case "NOOP":
 			reply("250 2.0.0 Ok")
 		case "QUIT":
+			if c.quitReply != "" {
+				reply(c.quitReply)
+				return
+			}
 			reply("221 2.0.0 Bye")
 			return
 		default:
@@ -264,8 +306,8 @@ func testSender(c *smtpCatcher) *mailer.Sender {
 	}}
 }
 
-// selfSignedCert 生成 127.0.0.1 的自签证书,并把证书写进临时文件返回给调用方当根池。
-func selfSignedCert(t *testing.T) (tls.Certificate, string) {
+// selfSignedCertIn 生成 127.0.0.1 的自签证书,把证书写进 dir 当根池。
+func selfSignedCertIn(t *testing.T, dir string) (tls.Certificate, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -297,7 +339,7 @@ func selfSignedCert(t *testing.T) (tls.Certificate, string) {
 		t.Fatalf("加载自签证书失败: %v", err)
 	}
 
-	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	caPath := filepath.Join(dir, "ca.pem")
 	if err := os.WriteFile(caPath, certPEM, 0o600); err != nil {
 		t.Fatalf("写临时 CA 失败: %v", err)
 	}
@@ -430,8 +472,17 @@ func TestSender_Send_StartTLSAndAuth(t *testing.T) {
 	if !slices.Contains(catcher.commands(), "STARTTLS") {
 		t.Errorf("投递应走过 STARTTLS,实际命令: %v", catcher.commands())
 	}
+	if slices.Index(catcher.commands(), "STARTTLS") > slices.Index(catcher.commands(), "AUTH") {
+		t.Errorf("STARTTLS 必须先于 AUTH(否则凭据会明文上线),实际命令: %v", catcher.commands())
+	}
 	if !slices.Contains(catcher.commands(), "AUTH") {
 		t.Errorf("配了凭据就应认证,实际命令: %v", catcher.commands())
+	}
+	// AUTH 必须在 STARTTLS 之后:顺序反过来会把凭据以明文送出去。
+	cmds := catcher.commands()
+	startTLS, auth := slices.Index(cmds, "STARTTLS"), slices.Index(cmds, "AUTH")
+	if startTLS < 0 || auth < 0 || auth < startTLS {
+		t.Errorf("AUTH 必须发生在 STARTTLS 之后,实际命令: %v", cmds)
 	}
 }
 
@@ -451,5 +502,29 @@ func TestSender_Send_RefusesPlaintextCredentials(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "凭据") {
 		t.Errorf("错误应点明拒绝投递凭据,实际: %v", err)
+	}
+}
+
+// DATA 收尾成功后 QUIT 失败:信已经被对方收下,投递必须算成功 —— 报错会让调用方
+// 重发同一封通知(收件人收到两遍)。
+func TestSender_Send_QuitFailureAfterDeliveryIsNotAnError(t *testing.T) {
+	catcher := startSMTPCatcher(t)
+	catcher.quitReply = "500 5.5.1 不聊了"
+
+	s := &mailer.Sender{Config: mailer.Config{
+		Host: catcher.host(),
+		Port: catcher.port(),
+		From: "patrol@example.com",
+		To:   []string{"ops@example.com"},
+	}}
+	if err := s.Send(context.Background(), "主题", "正文"); err != nil {
+		t.Fatalf("DATA 已收尾,QUIT 失败不应算投递失败: %v", err)
+	}
+	got, ok := catcher.received()
+	if !ok {
+		t.Fatal("抓取器没收到邮件")
+	}
+	if !strings.Contains(got.data, "正文") {
+		t.Errorf("邮件正文缺内容:\n%s", got.data)
 	}
 }

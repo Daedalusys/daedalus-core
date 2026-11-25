@@ -19,8 +19,8 @@ import (
 	"unicode/utf8"
 )
 
-// dialTimeout 是连接与握手阶段的兜底时限。SMTP 会话没有 ctx 支持,
-// 不设时限就会在对端不说话时一直挂着。
+// dialTimeout 既是建连超时,也是整条 SMTP 会话的读写截止时间:SMTP 会话没有 ctx,
+// 只设建连超时的话,对端在 DATA 阶段不说话仍会把这一轮挂到天荒地老。
 const dialTimeout = 30 * time.Second
 
 // Config 是一次投递需要的全部参数。
@@ -92,9 +92,9 @@ func (s *Sender) Send(ctx context.Context, subject, body string) error {
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("SMTP 结束投递失败: %w", err)
 	}
-	if err := client.Quit(); err != nil {
-		return fmt.Errorf("SMTP 退出会话失败: %w", err)
-	}
+	// DATA 收尾成功就意味着对方已经收下这封信。QUIT 只结束会话,它的失败不能把
+	// 「已投递」改判成失败 —— 调用方会因此重发,收件人就会收到重复通知。
+	_ = client.Quit()
 	return nil
 }
 
@@ -237,7 +237,7 @@ func encodeHeader(v string) string {
 	return mime.QEncoding.Encode("UTF-8", v)
 }
 
-// isASCII 判断字符串是否全是非 ASCII 字节。
+// isASCII 判断字符串是否全部由 ASCII 字节组成(纯 ASCII 的头部不编码,便于人读)。
 func isASCII(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] >= utf8.RuneSelf {
