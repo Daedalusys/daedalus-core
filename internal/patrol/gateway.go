@@ -422,11 +422,16 @@ func (g *Gateway) recorded(output string) bool {
 func (g *Gateway) recordedTools() (map[string]struct{}, []string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	set := make(map[string]struct{}, len(g.records))
+	set := make(map[string]struct{}, len(g.records)*2)
+	canonical := make(map[string]struct{}, len(g.records))
 	for _, r := range g.records {
+		canonical[r.tool] = struct{}{}
 		set[r.tool] = struct{}{}
+		// 模型在会话里看到的是 <server>_<网关名>:要求它自己把前缀摘掉只会换来一轮
+		// 无效重试(靶场上每轮 4 次)。两种写法都认,归属仍是同一个工具。
+		set[ActionName(aiServerName, r.tool)] = struct{}{}
 	}
-	return set, slices.Sorted(maps.Keys(set))
+	return set, slices.Sorted(maps.Keys(canonical))
 }
 
 // toolNames 把空集合也渲染成一句人话,错误文案不留空白。

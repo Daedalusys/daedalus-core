@@ -410,6 +410,25 @@ func TestGateway_ReportFinding_RejectsUnrecordedTool(t *testing.T) {
 	}
 }
 
+// 客户端把网关工具显示成 <server>_<网关名>,模型照抄这个名字是最自然的写法;
+// 只认网关名会让每轮都白费几次重试(靶场上每轮 4 次),所以两种写法都要认。
+func TestGateway_ReportFinding_AcceptsClientVisibleToolName(t *testing.T) {
+	sink := &memSink{}
+	g := newGateway(t, testItems, &fakeFleet{}, sink)
+	s := connect(t, g.Handler())
+	g.RecordCall("shell_exec", "df -h\n")
+
+	visible := patrol.ActionName("patrol-node", "shell_exec")
+	res := callTool(t, s, "report_finding",
+		reportArgsForTool(visible, "disk-health", patrol.SeverityWarning, "df -h"))
+	if res.IsError {
+		t.Fatalf("客户端可见的工具名 %q 应当被接受,实际被拒:%s", visible, resultText(t, res))
+	}
+	if got := len(sink.all()); got != 1 {
+		t.Fatalf("带证据的发现应进 sink,实际进了 %d 条", got)
+	}
+}
+
 // 「有问题」不带证据等于凭空报警:空数组不是「没有异议」,是放空了举证责任。
 func TestGateway_ReportFinding_RejectsProblemWithoutEvidence(t *testing.T) {
 	sink := &memSink{}

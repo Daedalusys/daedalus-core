@@ -435,7 +435,7 @@ func buildPrompt(nodeID string, items []Item) string {
 	fmt.Fprintf(&b, "对节点 %q 做一轮只读巡检。只观察、只报告,不要执行任何修复动作。\n\n", nodeID)
 	fmt.Fprintf(&b, "可用工具:名字以 %s_ 开头的节点工具(只读),以及 report_finding(交回发现)。\n", nodeToolPrefix(nodeID))
 	b.WriteString("每条清单项必须且只能调用一次 report_finding:status 用 problem 表示有问题、ok 表示看过没问题。\n")
-	b.WriteString("problem 必须带 evidence:tool 填你调用的工具名,output 逐字复制本轮工具返回的一段原文。\n\n")
+	fmt.Fprintf(&b, "problem 必须带 evidence:tool 填你调用的工具名(会话里看到的 %s_<名字>,或去掉 %s_ 前缀的 <名字>,两种都认),output 逐字复制本轮工具返回的一段原文。\n\n", aiServerName, aiServerName)
 	for i, it := range items {
 		fmt.Fprintf(&b, "%d. item_id = %s(基线严重级 %s", i+1, it.ID, it.Severity)
 		if len(it.Tools) > 0 {
