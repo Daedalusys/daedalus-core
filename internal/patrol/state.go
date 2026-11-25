@@ -13,11 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // LoadState 读上一轮的活跃发现。状态文件按节点分文件存放,键是 item_id。
-// 文件不存在等于「首轮还没有状态」,不是错误;文件损坏一律报错 ——
-// 把坏状态当成空状态会让下一轮把老问题全报成新增。
+// 文件不存在等于「首轮还没有状态」,不是错误;文件损坏一律报错,由调用方决定
+// 是中止还是留证后重来(round.go 选后者:备份原文件、按无基线继续,不静默清空)。
 func LoadState(path string) (map[string]Finding, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -45,6 +46,17 @@ func LoadState(path string) (map[string]Finding, error) {
 		}
 	}
 	return st, nil
+}
+
+// quarantineState 把损坏的状态文件改名留证,返回备份路径。改名而不是删除:坏文件
+// 本身是排查线索,也可能有人想手工恢复上一轮的活跃项。备份名带时间戳;同一秒里
+// 再次损坏会覆盖上一份坏文件 —— 两份都是坏的,不额外保留。
+func quarantineState(path string, now time.Time) (string, error) {
+	backup := fmt.Sprintf("%s.corrupt-%d", path, now.Unix())
+	if err := os.Rename(path, backup); err != nil {
+		return "", fmt.Errorf("备份损坏的巡检状态 %s 失败: %w", path, err)
+	}
+	return backup, nil
 }
 
 // SaveState 整体替换状态文件。上一轮的键不会残留 —— 状态是「本轮活跃项」的快照,

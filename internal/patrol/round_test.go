@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -945,5 +946,88 @@ func TestRunner_MailFailureKeepsStateAndResends(t *testing.T) {
 	}
 	if got := mail.count(); got != 1 {
 		t.Fatalf("投递恢复后应发出 1 封,实际 %d", got)
+	}
+}
+
+// 状态文件损坏时不能永久拒绝巡检:响一声(退出码非 0)、备份原件、按无基线继续,
+// 坏状态留下的「自检」不落进新状态,下一轮就回到正常节奏。
+func TestRunner_CorruptStateQuarantinedAndRoundContinues(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	now := time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC)
+	statePath := filepath.Join(root, "state", roundTestNode+".json")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o750); err != nil {
+		t.Fatalf("建状态目录失败: %v", err)
+	}
+	const corrupt = "{这不是 JSON"
+	if err := os.WriteFile(statePath, []byte(corrupt), 0o600); err != nil {
+		t.Fatalf("写坏状态失败: %v", err)
+	}
+
+	mail := &mailSpy{}
+	r := &Runner{
+		Config: RunConfig{
+			ChecklistPath: writeChecklist(t, twoItemChecklist),
+			StatePath:     statePath,
+			RoundRoot:     filepath.Join(root, "round"),
+			NodeID:        roundTestNode,
+			AICommand:     []string{"opencode", "run"},
+			NodeTimeout:   30 * time.Second,
+		},
+		Fleet: &roundFleet{tools: []agentv1.ToolDescriptor{serviceTool()}, output: "nginx.service failed\n"},
+		Mail:  mail,
+		Now:   func() time.Time { return now },
+	}
+	r.runAI = newFakeAIClient(t, roundTestNode, []aiReport{
+		{itemID: "disk-health", status: StatusProblem, severity: SeverityWarning, summary: "根分区余量 3%", evidence: true},
+		{itemID: "log-health", status: StatusOK, severity: SeverityInfo, summary: "日志无异常"},
+	})
+
+	changes, err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("状态损坏必须让本轮以非 0 退出(要留审计痕迹)")
+	}
+	if len(changes.Added) != 2 {
+		t.Fatalf("没有基线时本轮问题应全部算新增: %+v", changes.Added)
+	}
+	if got := mail.count(); got != 1 {
+		t.Fatalf("状态损坏的一轮仍要发信,实际 %d 封", got)
+	}
+	if body := mail.lastBody(); !strings.Contains(body, "巡检状态损坏") {
+		t.Errorf("邮件必须说明本轮按无基线处理:\n%s", body)
+	}
+
+	backup := statePath + ".corrupt-" + strconv.FormatInt(now.Unix(), 10)
+	if data, readErr := os.ReadFile(backup); readErr != nil || string(data) != corrupt {
+		t.Fatalf("坏状态必须原样备份到 %s: %q (err=%v)", backup, data, readErr)
+	}
+	dir := roundDir(t, filepath.Join(root, "round"))
+	if _, statErr := os.Stat(filepath.Join(dir, stateErrorFileName)); statErr != nil {
+		t.Errorf("轮次目录里必须有状态损坏记录: %v", statErr)
+	}
+
+	st, err := LoadState(statePath)
+	if err != nil {
+		t.Fatalf("重置后的状态必须可读: %v", err)
+	}
+	if _, ok := st["disk-health"]; !ok {
+		t.Errorf("本轮发现应写进新状态: %+v", st)
+	}
+	if _, ok := st[SelfCheckItemID]; ok {
+		t.Errorf("一次性事故不该进状态(否则下一轮会发一封假「恢复」): %+v", st)
+	}
+
+	// 下一轮:同一条发现属于持续项,不再失败也不发信。
+	r.Now = func() time.Time { return now.Add(30 * time.Minute) }
+	changes, err = r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("状态已重置,下一轮不该再失败: %v", err)
+	}
+	if n := len(changes.Added) + len(changes.Worsened) + len(changes.Recovered); n != 0 {
+		t.Fatalf("下一轮不该有变化: %+v", changes)
+	}
+	if got := mail.count(); got != 1 {
+		t.Fatalf("持续项不该重复发信,实际累计 %d 封", got)
 	}
 }

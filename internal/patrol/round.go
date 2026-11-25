@@ -38,6 +38,9 @@ const (
 	promptFileName   = "prompt.txt"
 	aiStdoutFileName = "ai-client.stdout.log"
 	aiStderrFileName = "ai-client.stderr.log"
+	// stateErrorFileName 记录本轮遇到的状态文件损坏与备份路径:轮次目录是这一轮
+	// 唯一的事后现场,坏状态被重置的原因必须能在这里查到。
+	stateErrorFileName = "state-error.txt"
 	// promptPlaceholder 让 [patrol.ai_client].command 自行决定提示词放在哪个参数上;
 	// 没有占位符时提示词追加为最后一个位置参数(opencode run 的提示词就是位置参数)。
 	promptPlaceholder = "{prompt}"
@@ -100,8 +103,9 @@ type roundFailure struct {
 	cause   error
 }
 
-// Run 跑一轮,返回相对上一轮的变化。error 非 nil 表示本轮没跑完(退出码据此非 0),
-// 但发现、邮件与状态照常落 —— 失败本身也要送到人手里。
+// Run 跑一轮,返回相对上一轮的变化。error 非 nil 表示本轮没跑完,或有需要人处理的
+// 异常(例如状态文件损坏,已备份并重置),但发现、邮件与状态照常落 —— 失败本身也要
+// 送到人手里。
 func (r *Runner) Run(ctx context.Context) (Changes, error) {
 	if err := r.validate(); err != nil {
 		return Changes{}, err
@@ -205,17 +209,42 @@ func (r *Runner) inspect(ctx context.Context, dir string, items []Item) ([]Findi
 // finish 是本轮的唯一收尾:落发现 → 读回 → 分类 → 发信 → 写状态。
 //
 // self 非 nil 表示失败轮:本轮没有观测,不能把「本轮没出现」当成恢复,状态也不覆盖
-// 上一轮的活跃项。投递失败一律不写状态 —— 下一轮重算才能重发。
+// 上一轮的活跃项。投递失败一律不写状态 —— 下一轮重算才能重发。状态文件损坏不走失败
+// 轮:备份原件后按「没有基线」照常分类,不让一次损坏把巡检永久卡死。
 func (r *Runner) finish(ctx context.Context, dir string, findings []Finding, self *Finding, roundErr error) (Changes, error) {
 	path := filepath.Join(dir, findingsFileName)
+
+	prev, err := LoadState(r.Config.StatePath)
+	stateReset := err != nil
+	if stateReset {
+		// 坏状态不能让这台机器永久停摆:原件改名留证,本轮按「没有基线」继续。
+		// 代价是这一轮的活跃项全会被算成新增 —— 宁可多报一遍,也不能因为一次
+		// 损坏就再不巡检;备份文件、轮次目录里的说明与退出码一起把异常留在审计里。
+		backup, backupErr := quarantineState(r.Config.StatePath, r.now())
+		if backupErr != nil {
+			return Changes{}, errors.Join(roundErr, err, backupErr)
+		}
+		audit := fmt.Sprintf("%s 巡检状态损坏,已备份为 %s,本轮按无基线处理:%v\n",
+			r.now().UTC().Format(time.RFC3339), backup, err)
+		if writeErr := os.WriteFile(filepath.Join(dir, stateErrorFileName), []byte(audit), roundFileMode); writeErr != nil {
+			// 留不下审计文件也要把这一轮巡检跑完,但不能吞掉写失败。
+			err = errors.Join(err, writeErr)
+		}
+		prev = map[string]Finding{}
+		note := "巡检状态损坏,已备份为 " + filepath.Base(backup) + ",本轮按无基线处理"
+		if self == nil {
+			findings = appendSelfCheck(findings, selfCheckFinding(r.Config.NodeID, note, err))
+		} else {
+			self.Summary += ";" + note
+			findings = appendSelfCheck(findings, *self)
+		}
+		roundErr = errors.Join(roundErr, err)
+	}
+
 	if err := WriteFindings(path, findings); err != nil {
 		return Changes{}, errors.Join(roundErr, err)
 	}
 	stored, err := ReadFindings(path)
-	if err != nil {
-		return Changes{}, errors.Join(roundErr, err)
-	}
-	prev, err := LoadState(r.Config.StatePath)
 	if err != nil {
 		return Changes{}, errors.Join(roundErr, err)
 	}
@@ -228,6 +257,11 @@ func (r *Runner) finish(ctx context.Context, dir string, findings []Finding, sel
 	} else {
 		changes = Classify(prev, stored)
 		next = ActiveFindings(stored)
+		if stateReset {
+			// 状态损坏是本轮的一次性事故,已经报过;它不是节点健康基线的一部分,
+			// 不落进状态,免得下一轮平白多一封「恢复 patrol-self-check」的邮件。
+			delete(next, SelfCheckItemID)
+		}
 	}
 	if err := r.notify(ctx, changes); err != nil {
 		return changes, errors.Join(roundErr, err)
