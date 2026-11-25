@@ -12,6 +12,10 @@ Type=oneshot
 # fleet 凭证路径(DAEDALUS_FLEET_CLIENT_CERT / _KEY / _CA)同样写在这份 env 文件里;
 # 证书权限决定这一轮能不能连上节点(见 files/system/etc/daedalus/patrol.toml 注释)。
 EnvironmentFile=-/etc/daedalus/patrol.env
+# AI 客户端必须装进 PATH 里的目录(镜像里没有 opencode;要自带客户端就在
+# [patrol.ai_client].command 写绝对路径)。不写死 PATH 时 systemd 的默认值在
+# 不同发行版上不一致,最坏的表现是「找不到 opencode」而不是配置错误。
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/local/bin/daedalus-patrol run --node ${DAEDALUS_PATROL_NODE}
 
 # 轮次目录与跨轮状态都在这里;运行时给 AI 客户端一个可写的 HOME(它要写会话缓存),
@@ -22,8 +26,12 @@ ExecStart=/usr/local/bin/daedalus-patrol run --node ${DAEDALUS_PATROL_NODE}
 # 现场表现为「所有节点都未注册」。
 StateDirectory=daedalus-patrol daedalus
 Environment=HOME=/var/lib/daedalus-patrol/home
-ExecStartPre=/bin/mkdir -p /var/lib/daedalus-patrol/home/.config
+ExecStartPre=/bin/mkdir -p /var/lib/daedalus-patrol/home/.config /var/lib/daedalus-patrol/home/.local/share
+# 客户端的两处状态都可能是凭据所在:配置目录(可能内联 provider)与数据目录
+# (auth.json 等)。两处都只读挂到单元自己的 HOME 下 —— 客户端按默认路径就能找到,
+# 凭据又不会被复制进轮次目录。
 BindReadOnlyPaths=-/root/.config/opencode:/var/lib/daedalus-patrol/home/.config/opencode
+BindReadOnlyPaths=-/root/.local/share/opencode:/var/lib/daedalus-patrol/home/.local/share/opencode
 
 # SMTP 凭据经凭据目录传递,内容可以为空(免密投递)。文件缺失时本单元拒绝启动 ——
 # 凭据缺失要被看见,而不是悄悄换成匿名投递。
@@ -33,6 +41,7 @@ LoadCredential=smtp-password:/etc/credstore/smtp-password
 # 一轮的最长寿命:必须大于 patrol.toml 里 node_timeout 的默认值(10m),否则正常轮次
 # 会被 systemd 杀掉;又必须有界 —— oneshot 挂死会让单元一直 active,而 timer 的
 # OnUnitActiveSec 从上次激活起算,卡住的单元会让后续轮次永远不触发。
+# CLI 会拒绝大于 12m 的 node_timeout(留 3m 收尾),两处数值一起改。
 TimeoutStartSec=15min
 TimeoutStopSec=30s
 
