@@ -7,7 +7,8 @@
 **结论先行**：巡检 → 网关 → agent → 插件 → 证据 → 分类 → 邮件这条链路在真机上成立；
 「只有变化才发信」「持续不发」「恢复发一封」「节点不可达不误报恢复」四条硬要求都有
 邮件原文与状态文件佐证。逐项检出矩阵另见 `matrix/`（9 项故障清单，5 轮，3 封邮件）。
-**仍未覆盖**：镜像内安装与 timer 调度、单元 root 形态、多节点（原因见末节）。
+**仍未覆盖**：镜像内安装与 timer 调度、多节点、真实二进制在单元内运行
+（单元沙箱本身已由 `unit-smoke/` 覆盖，原因见末节）。
 
 ## 1. 靶场拓扑
 
@@ -31,6 +32,9 @@
    `StateDirectory=`、`LoadCredential=`、`ProtectSystem=strict` 这些单元侧行为
    **没有被这条证据覆盖**，只覆盖了 `daedalus-patrol` 二进制本身。单元文件的解析级校验由
    CI 的 `systemd-units` 门禁承担。
+   → 单元沙箱本身后来补上了，见 `unit-smoke/README.md`：在同一个 guest 上用 root 起真实
+   单元的影子单元（只换 `ExecStart` 为探针），覆盖 `StateDirectory=` / `UMask=` /
+   `ExecStartPre` 链 / `BindReadOnlyPaths=` / `LoadCredential=`。
 
 ## 3. 节点侧配置
 
@@ -89,7 +93,9 @@ A7 是本次返工的核心回归点：修复前，节点不可达的一轮会�
 - 镜像内安装：单元随镜像落位、`daedalus-patrol.timer` 的调度、`ProtectSystem=strict`
   沙箱下 opencode（Bun）能否启动 —— 这些要等镜像构建（CI），本机 CPU 缺 x86-64-v3
   跑不了镜像。
-- systemd 单元的 root 形态（`StateDirectory=`、`LoadCredential=`、`HOME` 只读挂载）。
+- systemd 单元的 root 形态：`StateDirectory=`、`LoadCredential=`、`HOME` 只读挂载这些
+  已由 `unit-smoke/` 覆盖；但**真实二进制在单元里跑**（`ExecStart=daedalus-patrol run`）
+  仍未覆盖 —— 影子单元只换掉了 `ExecStart`。
 - 多节点：只跑了 `lab-a` 一台。
 
 > 逐项检出矩阵后来补上了：见 `matrix/README.md`（9 项故障清单，全故障 / 复跑 / 清故障 /

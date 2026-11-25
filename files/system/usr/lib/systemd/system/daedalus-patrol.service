@@ -53,7 +53,7 @@ BindReadOnlyPaths=-/root/.config/opencode:/var/lib/daedalus-patrol/home/.config/
 # 凭据(auth.json)在宿主的数据目录里。整目录不能只读挂(见上),所以把凭据文件
 # 复制进单元自己的可写数据目录。源文件不存在不算错(用内联 provider 凭据的部署
 # 没有它);但源在而复制失败要报错 —— 那种情况必须被看见,不能降级成匿名投递。
-ExecStartPre=/bin/sh -c 'if [ -f /root/.local/share/opencode/auth.json ]; then /bin/cp -f /root/.local/share/opencode/auth.json /var/lib/daedalus-patrol/home/.local/share/opencode/auth.json || exit 1; /bin/chmod 600 /var/lib/daedalus-patrol/home/.local/share/opencode/auth.json; fi' 
+ExecStartPre=/bin/sh -c 'if [ -f /root/.local/share/opencode/auth.json ]; then /bin/cp -f /root/.local/share/opencode/auth.json /var/lib/daedalus-patrol/home/.local/share/opencode/auth.json || exit 1; /bin/chmod 600 /var/lib/daedalus-patrol/home/.local/share/opencode/auth.json; fi'
 
 # SMTP 凭据经凭据目录传递,内容可以为空(免密投递)。文件缺失时本单元拒绝启动 ——
 # 凭据缺失要被看见,而不是悄悄换成匿名投递。

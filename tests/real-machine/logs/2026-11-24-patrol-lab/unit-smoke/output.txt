@@ -1,0 +1,103 @@
+########## A: host has NO /root/.config/opencode (bind source missing) ##########
+start_exit=0
+Result=success
+ExecMainStatus=0
+UMask=0077
+ProtectHome=read-only
+ProtectSystem=strict
+StateDirectory=daedalus daedalus-patrol
+BindReadOnlyPaths=-/root/.config/opencode:/var/lib/daedalus-patrol/home/.config/opencode:rbind
+Starting patrol-unit-smoke.service - patrol unit smoke (mirror of daedalus-patrol.service sandbox)...
+uid=0 umask=0077 HOME=/var/lib/daedalus-patrol/home
+--- credentials ---
+total 8
+-r--------. 1 root root 10 Nov 25 02:48 smtp-password
+-r--------. 1 root root 10 Nov 25 02:48 smtp-username
+--- modes ---
+755 root:root /var/lib/daedalus-patrol
+700 root:root /var/lib/daedalus-patrol/home
+700 root:root /var/lib/daedalus-patrol/home/.local/share/opencode
+700 root:root /var/lib/daedalus-patrol/home/.local/share/opencode/log
+600 root:root /var/lib/daedalus-patrol/home/.local/share/opencode/log/2026-11-25.log
+600 root:root /var/lib/daedalus-patrol/home/.local/share/opencode/storage.db
+auth.json=absent
+--- host config mounted read-only ---
+stat: cannot statx '/var/lib/daedalus-patrol/home/.config/opencode/opencode.json': No such file or directory
+cat: /var/lib/daedalus-patrol/home/.config/opencode/opencode.json: No such file or directory
+--- state dir writable (fleet sentinel) ---
+state_rw=yes
+--- host config NOT writable from sandbox ---
+host_cfg_rw=no
+--- stale marker from previous round ---
+cat: /var/lib/daedalus-patrol/home/.local/share/opencode/log/stale.log: No such file or directory
+probe done
+patrol-unit-smoke.service: Deactivated successfully.
+Finished patrol-unit-smoke.service - patrol unit smoke (mirror of daedalus-patrol.service sandbox).
+
+########## B: host HAS config + auth.json, data dir has leftovers ##########
+start_exit=0
+Result=success
+ExecMainStatus=0
+UMask=0077
+ProtectHome=read-only
+ProtectSystem=strict
+StateDirectory=daedalus daedalus-patrol
+BindReadOnlyPaths=-/root/.config/opencode:/var/lib/daedalus-patrol/home/.config/opencode:rbind
+Starting patrol-unit-smoke.service - patrol unit smoke (mirror of daedalus-patrol.service sandbox)...
+uid=0 umask=0077 HOME=/var/lib/daedalus-patrol/home
+--- credentials ---
+total 8
+-r--------. 1 root root 10 Nov 25 02:48 smtp-password
+-r--------. 1 root root 10 Nov 25 02:48 smtp-username
+--- modes ---
+755 root:root /var/lib/daedalus-patrol
+700 root:root /var/lib/daedalus-patrol/home
+700 root:root /var/lib/daedalus-patrol/home/.local/share/opencode
+700 root:root /var/lib/daedalus-patrol/home/.local/share/opencode/log
+600 root:root /var/lib/daedalus-patrol/home/.local/share/opencode/log/2026-11-25.log
+600 root:root /var/lib/daedalus-patrol/home/.local/share/opencode/storage.db
+auth.json=absent
+--- host config mounted read-only ---
+stat: cannot statx '/var/lib/daedalus-patrol/home/.config/opencode/opencode.json': No such file or directory
+cat: /var/lib/daedalus-patrol/home/.config/opencode/opencode.json: No such file or directory
+--- state dir writable (fleet sentinel) ---
+state_rw=yes
+--- host config NOT writable from sandbox ---
+host_cfg_rw=no
+--- stale marker from previous round ---
+cat: /var/lib/daedalus-patrol/home/.local/share/opencode/log/stale.log: No such file or directory
+probe done
+patrol-unit-smoke.service: Deactivated successfully.
+Finished patrol-unit-smoke.service - patrol unit smoke (mirror of daedalus-patrol.service sandbox).
+Starting patrol-unit-smoke.service - patrol unit smoke (mirror of daedalus-patrol.service sandbox)...
+uid=0 umask=0077 HOME=/var/lib/daedalus-patrol/home
+--- credentials ---
+total 8
+-r--------. 1 root root 10 Nov 25 02:48 smtp-password
+-r--------. 1 root root 10 Nov 25 02:48 smtp-username
+--- modes ---
+755 root:root /var/lib/daedalus-patrol
+700 root:root /var/lib/daedalus-patrol/home
+700 root:root /var/lib/daedalus-patrol/home/.local/share/opencode
+700 root:root /var/lib/daedalus-patrol/home/.local/share/opencode/log
+600 root:root /var/lib/daedalus-patrol/home/.local/share/opencode/log/2026-11-25.log
+600 root:root /var/lib/daedalus-patrol/home/.local/share/opencode/storage.db
+600 /var/lib/daedalus-patrol/home/.local/share/opencode/auth.json
+--- host config mounted read-only ---
+644 root:root /var/lib/daedalus-patrol/home/.config/opencode/opencode.json
+{"marker":"host-config"}
+--- state dir writable (fleet sentinel) ---
+state_rw=yes
+--- host config NOT writable from sandbox ---
+host_cfg_rw=no
+--- stale marker from previous round ---
+cat: /var/lib/daedalus-patrol/home/.local/share/opencode/log/stale.log: No such file or directory
+probe done
+patrol-unit-smoke.service: Deactivated successfully.
+Finished patrol-unit-smoke.service - patrol unit smoke (mirror of daedalus-patrol.service sandbox).
+
+########## C: auth.json copy failure must fail the unit ##########
+cp_failure_exit=1  (期望非 0:复制失败要让单元失败)
+cp_source_missing_exit=0  (期望 0)
+
+=== cleanup done ===
