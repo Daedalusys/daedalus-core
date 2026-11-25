@@ -6,6 +6,7 @@
 package patrol
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -136,17 +137,20 @@ func (r *Runner) Run(ctx context.Context) (Changes, error) {
 	findings, toolCalls, failure := r.inspect(ctx, dir, items)
 	if failure == nil {
 		// 成功轮也要核对覆盖:少报一项会被四分类当成「恢复」,那是假恢复。
+		// 缺项与「一次都没调」可以同时成立,两条都要说 —— 只报缺项会把
+		// 「本轮没有任何观测」这个更关键的事实盖掉。
+		var reasons []string
+		var causes []error
 		if missing := missingItems(items, findings); len(missing) > 0 {
-			failure = &roundFailure{
-				summary: fmt.Sprintf("AI 客户端没交齐全清单项(缺:%s)", strings.Join(missing, ", ")),
-				cause:   errIncompleteRound,
-			}
-		} else if toolCalls == 0 {
-			// 项都报了、一次工具都没调:那些 ok 不是查出来的,是本轮没有观测。
-			failure = &roundFailure{
-				summary: "AI 客户端一次节点工具都没调,本轮没有任何观测",
-				cause:   errNoToolCalls,
-			}
+			reasons = append(reasons, fmt.Sprintf("AI 客户端没交齐全清单项(缺:%s)", strings.Join(missing, ", ")))
+			causes = append(causes, errIncompleteRound)
+		}
+		if toolCalls == 0 {
+			reasons = append(reasons, "AI 客户端一次节点工具都没成功调用,本轮没有任何观测")
+			causes = append(causes, errNoToolCalls)
+		}
+		if len(reasons) > 0 {
+			failure = &roundFailure{summary: strings.Join(reasons, "; "), cause: errors.Join(causes...)}
 		}
 	}
 	if failure == nil {
@@ -552,10 +556,37 @@ func pruneRoundDirs(root, nodeID string, keep int) {
 	if len(names) <= keep {
 		return
 	}
-	slices.Sort(names)
+	sortRoundDirs(names)
 	for _, name := range names[:len(names)-keep] {
 		_ = os.RemoveAll(filepath.Join(root, name))
 	}
+}
+
+// sortRoundDirs 按 (时间戳, 序号) 排序。纯字典序会把同秒的 -10 排到 -2 前面,
+// 清理时先删掉的就不是最旧的那批。
+func sortRoundDirs(names []string) {
+	slices.SortFunc(names, func(a, b string) int {
+		ta, sa := roundDirKey(a)
+		tb, sb := roundDirKey(b)
+		if c := strings.Compare(ta, tb); c != 0 {
+			return c
+		}
+		return cmp.Compare(sa, sb)
+	})
+}
+
+// roundDirKey 从已通过 isRoundDirName 的目录名里取 (时间戳, 序号)。
+func roundDirKey(name string) (string, int) {
+	rest, seq := name, 1
+	if i := strings.LastIndexByte(rest, '-'); i >= 0 {
+		if n, err := strconv.Atoi(rest[i+1:]); err == nil {
+			seq, rest = n, rest[:i]
+		}
+	}
+	if len(rest) < len("20060102T150405Z") {
+		return rest, seq
+	}
+	return rest[len(rest)-len("20060102T150405Z"):], seq
 }
 
 // isRoundDirName 核对 name 是否真是本节点的轮次目录:<node>-<UTC 时间戳>[-<序号>]。
@@ -582,7 +613,7 @@ func isRoundDirName(name, nodeID string) bool {
 		return false
 	}
 	n, err := strconv.Atoi(seq)
-	return err == nil && n >= 2 && n < roundDirAttempts
+	return err == nil && n >= 2 && n <= roundDirAttempts
 }
 
 func (r *Runner) now() time.Time {

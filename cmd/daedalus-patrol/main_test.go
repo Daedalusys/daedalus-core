@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	sdkversion "github.com/Daedalusys/daedalus-sdk/version"
 
@@ -173,5 +174,61 @@ func TestRun_UnregisteredNodeFailsButRecordsFinding(t *testing.T) {
 	}
 	if !strings.Contains(string(data), patrol.SelfCheckItemID) {
 		t.Errorf("发现文件里必须有巡检级发现:\n%s", data)
+	}
+}
+
+// node_timeout 的上限是硬边界:超过它 systemd 会在收尾前把整轮杀掉。
+func TestNodeTimeout_Bounds(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{"", defaultNodeTimeout, false},
+		{"10m", 10 * time.Minute, false},
+		{"12m", 12 * time.Minute, false},
+		{"12m1s", 0, true},
+		{"20m", 0, true},
+		{"0s", 0, true},
+		{"-5m", 0, true},
+		{"abc", 0, true},
+	}
+	for _, c := range cases {
+		got, err := nodeTimeout(c.in)
+		if (err != nil) != c.wantErr {
+			t.Fatalf("nodeTimeout(%q) err=%v, wantErr=%v", c.in, err, c.wantErr)
+		}
+		if !c.wantErr && got != c.want {
+			t.Fatalf("nodeTimeout(%q) = %s, want %s", c.in, got, c.want)
+		}
+	}
+}
+
+// 单元里的 TimeoutStartSec 与 CLI 的 unitStartTimeout 是两处手抄的数值:
+// 漂了之后现场表现是「正常轮次被 systemd 杀掉」,而不是配置错误。
+func TestUnitTimeoutMatchesNodeTimeoutCap(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "files", "system", "usr", "lib", "systemd", "system", "daedalus-patrol.service"))
+	if err != nil {
+		t.Fatalf("读单元文件失败: %v", err)
+	}
+	var unitRaw string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "TimeoutStartSec="); ok {
+			unitRaw = v
+		}
+	}
+	if unitRaw == "" {
+		t.Fatal("单元文件里找不到 TimeoutStartSec=")
+	}
+	// systemd 的时间单位写成 min;time.ParseDuration 认 m。
+	unit, err := time.ParseDuration(strings.ReplaceAll(unitRaw, "min", "m"))
+	if err != nil {
+		t.Fatalf("解析单元 TimeoutStartSec=%q 失败: %v", unitRaw, err)
+	}
+	if unit != unitStartTimeout {
+		t.Fatalf("单元 TimeoutStartSec=%s 与 CLI unitStartTimeout=%s 不一致", unit, unitStartTimeout)
+	}
+	if _, err := nodeTimeout((unitStartTimeout - 3*time.Minute).String()); err != nil {
+		t.Fatalf("留 3 分钟收尾余量的 node_timeout 必须被接受: %v", err)
 	}
 }

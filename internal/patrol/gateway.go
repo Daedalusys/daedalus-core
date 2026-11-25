@@ -95,6 +95,10 @@ type Gateway struct {
 type callRecord struct {
 	tool   string
 	output string
+	// ok 表示这次调用真的拿到了节点返回。失败的调用照样进证据池(模型可以引用
+	// 「工具失败」当 problem 的证据),但不能算「本轮有观测」—— 一次都没成功,
+	// 那些 ok 结论同样是编出来的。
+	ok bool
 }
 
 // NewGateway 用本轮清单装配网关:清单只判 item_id 是否合法,不构成工具白名单。
@@ -116,16 +120,33 @@ func NewGateway(nodeID string, items []Item, fleet Fleet, sink FindingSink) *Gat
 // 只应出现在测试或单机演练里 —— 生产监听面由巡检二进制决定。
 func (g *Gateway) SetToken(token string) { g.token = token }
 
-// CallCount 返回本轮已记录的节点工具调用次数。一轮一次都没调,说明没有任何观测:
-// 那些「ok」结论不是查出来的,是编出来的。
+// CallCount 返回本轮**成功**的节点工具调用次数。一次都没成功,说明没有任何观测:
+// 那些「ok」结论不是查出来的,是编出来的。失败的调用不算 —— 工具全坏或全被
+// 白名单拒绝时,「调用过」不等于「看到过」。
 func (g *Gateway) CallCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return len(g.records)
+	n := 0
+	for _, r := range g.records {
+		if r.ok {
+			n++
+		}
+	}
+	return n
 }
 
 // RecordCall 记一次工具返回供证据校验:记的必须是客户端看到的那份原文。
 func (g *Gateway) RecordCall(tool, output string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return
+	}
+	g.records = append(g.records, callRecord{tool: tool, output: output, ok: true})
+}
+
+// RecordFailure 记一次失败的节点调用:文案进证据池,但不计入成功调用数。
+func (g *Gateway) RecordFailure(tool, output string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
@@ -381,7 +402,7 @@ func (g *Gateway) nodeToolHandler(exposed string, d *agentv1.ToolDescriptor) mcp
 		resp, err := g.fleet.CallTool(ctx, g.nodeID, d.PluginId, d.ToolName, args)
 
 		fail := func(text string) (*mcp.CallToolResult, error) {
-			g.RecordCall(exposed, text)
+			g.RecordFailure(exposed, text)
 			return errorResult(text), nil
 		}
 		switch {

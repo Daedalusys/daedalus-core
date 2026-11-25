@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -783,14 +784,52 @@ func slicesContains(haystack []string, needle string) bool {
 // 那正是「静默的空轮次让人以为机器健康」。
 func TestGateway_PrepareFailsWhenNodeExposesNoTools(t *testing.T) {
 	g := newGateway(t, testItems, &fakeFleet{}, &memSink{})
-	if err := g.Prepare(); err == nil {
-		t.Fatal("零工具节点必须让本轮失败,不能以全绿收尾")
+	if err := g.Prepare(); !errors.Is(err, patrol.ErrNoRemoteTools) {
+		t.Fatalf("零工具节点必须以 ErrNoRemoteTools 失败,实际 err=%v", err)
 	}
 }
 
 // 只读是节点侧的判定;这里只做传输契约自检 —— agent 哪天漏放行一个写工具,
 // core 不该替它背书。
 func TestGateway_DoesNotExposeNonReadOnlyTools(t *testing.T) {
+	f := &fakeFleet{tools: []agentv1.ToolDescriptor{
+		{
+			PluginId:        "daedalus.shell",
+			ToolName:        "write_file",
+			InputSchemaJson: `{"type":"object"}`,
+			ReadOnly:        false,
+		},
+		{
+			PluginId:        "daedalus.shell",
+			ToolName:        "read_file",
+			InputSchemaJson: `{"type":"object"}`,
+			ReadOnly:        true,
+		},
+	}}
+	g := newGateway(t, testItems, f, &memSink{})
+	if err := g.Prepare(); err != nil {
+		t.Fatalf("有只读工具时本轮应当能起,实际 err=%v", err)
+	}
+	s := connect(t, g.Handler())
+	listed, err := s.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("列工具失败: %v", err)
+	}
+	var names []string
+	for _, tool := range listed.Tools {
+		names = append(names, tool.Name)
+	}
+	// 工具面 = 那一个只读工具 + 网关自己的 report_finding。
+	if len(names) != 2 || !slices.Contains(names, "lab_a_read_file") {
+		t.Fatalf("只该暴露那一个只读工具,实际 %v", names)
+	}
+	if slices.Contains(names, "lab_a_write_file") {
+		t.Fatalf("非只读工具不该暴露给模型: %v", names)
+	}
+}
+
+// 只剩写工具时等价于零工具面:模型没有可观测的面,本轮必须失败。
+func TestGateway_PrepareFailsWhenOnlyNonReadOnlyTools(t *testing.T) {
 	f := &fakeFleet{tools: []agentv1.ToolDescriptor{{
 		PluginId:        "daedalus.shell",
 		ToolName:        "write_file",
@@ -798,17 +837,37 @@ func TestGateway_DoesNotExposeNonReadOnlyTools(t *testing.T) {
 		ReadOnly:        false,
 	}}}
 	g := newGateway(t, testItems, f, &memSink{})
-	if err := g.Prepare(); err == nil {
-		t.Fatal("唯一工具是写工具时应按零工具失败")
+	if err := g.Prepare(); !errors.Is(err, patrol.ErrNoRemoteTools) {
+		t.Fatalf("只剩写工具时必须以 ErrNoRemoteTools 失败,实际 err=%v", err)
+	}
+}
+
+// 失败的调用不算「有观测」:工具全坏或全被白名单拒绝时,模型对着错误文案报 ok
+// 仍然是没查过。失败文案本身仍留在证据池里 —— 节点超时也是可以上报的观测。
+func TestGateway_CallCountOnlyCountsSuccessfulCalls(t *testing.T) {
+	f := &fakeFleet{tools: []agentv1.ToolDescriptor{{
+		PluginId:        "daedalus.service",
+		ToolName:        "service_list",
+		InputSchemaJson: `{"type":"object"}`,
+		ReadOnly:        true,
+	}}, callErr: errors.New("节点超时")}
+	g := newGateway(t, testItems, f, &memSink{})
+	if err := g.Prepare(); err != nil {
+		t.Fatalf("有只读工具时不该在 Prepare 失败: %v", err)
 	}
 	s := connect(t, g.Handler())
-	listed, err := s.ListTools(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("列工具失败: %v", err)
+
+	res := callTool(t, s, "lab_a_service_list", map[string]any{})
+	if !res.IsError {
+		t.Fatalf("节点调用失败必须如实回 IsError: %s", resultText(t, res))
 	}
-	for _, tool := range listed.Tools {
-		if tool.Name == "lab_a_write_file" {
-			t.Fatalf("非只读工具不该暴露给模型: %+v", listed.Tools)
-		}
+	if got := g.CallCount(); got != 0 {
+		t.Fatalf("失败调用不能算成功观测,CallCount=%d", got)
+	}
+
+	res = callTool(t, s, "report_finding",
+		reportArgsForTool("lab_a_service_list", "disk-health", patrol.SeverityWarning, "节点超时"))
+	if res.IsError {
+		t.Fatalf("失败文案应当可以作证据,实际被拒:%s", resultText(t, res))
 	}
 }

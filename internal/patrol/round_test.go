@@ -1142,11 +1142,52 @@ func TestRunner_RoundWithoutToolCallsFails(t *testing.T) {
 	})
 
 	changes, err := r.Run(context.Background())
-	if err == nil {
-		t.Fatal("零工具调用的轮次必须失败:ok 不能无观测地得出")
+	if !errors.Is(err, errNoToolCalls) {
+		t.Fatalf("零工具调用的轮次必须以 errNoToolCalls 失败,实际 err=%v", err)
 	}
 	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
 		t.Fatalf("失败轮应只报一条 self-check: %+v", changes)
+	}
+	if !strings.Contains(changes.Added[0].Summary, "一次节点工具都没成功调用") {
+		t.Fatalf("self-check 摘要必须说清「没有观测」,实际:%q", changes.Added[0].Summary)
+	}
+	if got := mail.count(); got != 1 {
+		t.Fatalf("失败也要发信,实际 %d 封", got)
+	}
+}
+
+// 缺项与「一次都没调」同时成立时两条都要说:只报缺项会把「本轮没有任何观测」盖掉。
+func TestRunner_MissingItemsAndNoToolCallsBothReported(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	root := t.TempDir()
+	r := &Runner{
+		Config: RunConfig{
+			ChecklistPath: writeChecklist(t, twoItemChecklist),
+			StatePath:     filepath.Join(root, "state", roundTestNode+".json"),
+			RoundRoot:     filepath.Join(root, "round"),
+			NodeID:        roundTestNode,
+			AICommand:     []string{"opencode", "run"},
+			NodeTimeout:   30 * time.Second,
+		},
+		Fleet: &roundFleet{tools: []agentv1.ToolDescriptor{serviceTool()}, output: "nginx.service failed\n"},
+		Mail:  &mailSpy{},
+	}
+	// 只报一项、且一次工具都不调。
+	r.runAI = newFakeAIClientNoTools(t, roundTestNode, []aiReport{
+		{itemID: "disk-health", status: StatusOK, severity: SeverityWarning, summary: "没查"},
+	})
+
+	changes, err := r.Run(context.Background())
+	if !errors.Is(err, errIncompleteRound) || !errors.Is(err, errNoToolCalls) {
+		t.Fatalf("两条原因都要在错误链里,实际 err=%v", err)
+	}
+	if len(changes.Added) != 1 || changes.Added[0].ItemID != SelfCheckItemID {
+		t.Fatalf("失败轮应只报一条 self-check: %+v", changes)
+	}
+	summary := changes.Added[0].Summary
+	if !strings.Contains(summary, "log-health") || !strings.Contains(summary, "没有任何观测") {
+		t.Fatalf("摘要要同时点名缺项与「没有观测」,实际:%q", summary)
 	}
 }
 
@@ -1192,6 +1233,32 @@ func TestPruneRoundDirsKeepsNewestAndIgnoresOtherNodes(t *testing.T) {
 	}
 }
 
-// 节点可达但没有可远程调用的只读工具(白名单为空):本轮必须失败。
-// 否则模型只剩 report_finding,每项都能报无证据的 ok,轮次以「全绿」收尾 ——
-// 那正是「静默的空轮次让人以为机器健康」。
+// 同秒冲突时目录名会带 -2…-10:纯字典序会把 -10 当成最旧,先删掉的就不是最旧的。
+func TestPruneRoundDirsOrdersSameSecondSequenceNumerically(t *testing.T) {
+	root := t.TempDir()
+	base := roundTestNode + "-20261125T090000Z"
+	for _, name := range []string{base, base + "-2", base + "-3", base + "-10"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+			t.Fatalf("建目录 %s 失败: %v", name, err)
+		}
+	}
+	if !isRoundDirName(base+"-10", roundTestNode) {
+		t.Fatalf("第 10 次尝试的目录名 %q 也必须是本节点的轮次目录", base+"-10")
+	}
+
+	pruneRoundDirs(root, roundTestNode, 2)
+
+	left, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("读目录失败: %v", err)
+	}
+	var got []string
+	for _, e := range left {
+		got = append(got, e.Name())
+	}
+	sort.Strings(got)
+	want := []string{base + "-10", base + "-3"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("保留结果 = %v, want %v", got, want)
+	}
+}
