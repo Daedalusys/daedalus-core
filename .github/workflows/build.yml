@@ -92,6 +92,16 @@ jobs:
           echo "plugins_version=$PLUGINS_VERSION" >> "$GITHUB_OUTPUT"
           echo "SDK=v$SDK_VERSION plugins=v$PLUGINS_VERSION"
 
+      - name: Secret scan gate (no gateway keys in tree)
+        # 树里不允许出现模型网关的 sk-gw- key,靶场证据里的 AI 客户端配置只允许留
+        # 脱敏值。2026-11-24 那批证据曾把 10 份 opencode.json 的 apiKey 与每轮
+        # Bearer 令牌连同提交进公开仓库;当前树已脱敏,但「脱敏靠人记得」不可靠。
+        # 放在 pins 解析之后、兄弟仓检出之前:这类泄漏是该秒级失败的,不该排到
+        # 十几分钟的 go / 实机腿后面才红。只扫已跟踪文件(历史与本地备忘不归它管)。
+        shell: bash
+        working-directory: daedalus-core
+        run: bash tests/ci/secret-scan.sh
+
       - name: Checkout daedalus-sdk (sibling, pinned tag)
         # SDK 必须检出到 workspace 下的 daedalus-sdk 子目录,
         # 与主仓 daedalus-core 子目录平级,使 go.mod 的 `replace => ../daedalus-sdk`
@@ -322,6 +332,9 @@ jobs:
           bash tests/build/image-lint.sh --selftest
           bash tests/ci/credential-surface-check.sh --selftest
           bash tests/ci/cross-repo-pin.sh --selftest
+          # 凭据门禁的判定逻辑:key 正则、脱敏值白名单、「只挑证据目录的客户端配置」
+          # 三条任一条退化,门禁就会在真泄漏面前假绿。
+          bash tests/ci/secret-scan.sh --selftest
           bash tests/ci/release-asset-name-test.sh
           bash tests/ci/release-promote-test.sh
           # Release 保留脚本会真删东西:它的四条安全边界(读不出列表不删、
